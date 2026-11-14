@@ -224,7 +224,7 @@ jobs:
           else
             git worktree add --detach feed
             git -C feed checkout --orphan versions
-            git -C feed rm -rq .
+            git -C feed rm -rqf .
             printf '# Arkestra update feed\n\nWritten by the Build workflow (scripts/update-feed.sh); read by the app.\n' > feed/README.md
           fi
           bash scripts/update-feed.sh assets feed
