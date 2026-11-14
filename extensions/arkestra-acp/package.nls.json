@@ -1,0 +1,12 @@
+{
+  "displayName": "Arkestra · ACP",
+  "description": "Any agent that speaks the Agent Client Protocol in Arkestra rooms: Gemini CLI, goose, OpenCode, the Claude and Codex adapters and more.",
+  "agents": "Agents started in ACP mode. Each one can be invited into any room. `machine` is a connection from Arkestra · Connections; without it the agent runs on this machine. `env` applies on this machine only. Add one from the ACP Registry with **Arkestra: Add an ACP agent**.",
+  "agent.id": "Stable id: letters, digits and hyphens.",
+  "agent.name": "Name shown in the rooms.",
+  "agent.command": "Command that starts the agent.",
+  "agent.args": "Arguments, for example [\"--acp\"].",
+  "agent.env": "Extra environment variables (this machine only).",
+  "agent.machine": "Connection id of the SSH machine it runs on. Empty: this machine.",
+  "add": "Add an ACP agent"
+}
