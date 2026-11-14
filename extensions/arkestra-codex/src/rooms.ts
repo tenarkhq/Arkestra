@@ -13,6 +13,7 @@ export interface Readiness {
 	readonly ready: boolean;
 	readonly reason?: string;
 	readonly fix?: 'install' | 'signIn' | 'quota' | 'retry';
+	readonly actions?: readonly { readonly title: string; run(): Thenable<unknown> | Promise<unknown> }[];
 }
 
 export type AgentEvent =

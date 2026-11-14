@@ -12,6 +12,13 @@ export interface Readiness {
 	/** Shown in the invite list when the agent is not ready. */
 	readonly reason?: string;
 	readonly fix?: ReadinessFix;
+	/** What the user can do about it right there: sign in, set a key, open the install guide. */
+	readonly actions?: readonly ReadinessAction[];
+}
+
+export interface ReadinessAction {
+	readonly title: string;
+	run(): Thenable<unknown> | Promise<unknown>;
 }
 
 export type AgentEvent =

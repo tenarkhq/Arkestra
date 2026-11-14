@@ -9,7 +9,7 @@ import { chmod, mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { newMachineId, readMachines, sshConfigHosts } from '../machines';
-import { envLine, probe, remotePath, remoteSpawn, shQuote, type Machine } from '../ssh';
+import { envLine, probe, remotePath, remoteSpawn, shQuote, sshTerminalArgs, type Machine } from '../ssh';
 
 // ssh [options] host command: run the command with sh like sshd would; exit 255 for host "down".
 const FAKE_SSH = `#!/bin/sh
@@ -97,6 +97,11 @@ test('probe lists the agent CLIs on the machine, or says why it cannot connect',
 	const { ssh } = await setup();
 	assert.deepEqual(await probe({ id: 'dev', name: 'dev', host: 'dev' }, { ssh }), { reachable: true, clis: ['claude', 'codex'] });
 	assert.deepEqual(await probe({ id: 'x', name: 'x', host: 'down' }, { ssh }), { reachable: false, clis: [], error: 'ssh: connect to host down port 22: Connection refused' });
+});
+
+test('a sign-in terminal runs the command in the machine folder with a TTY', () => {
+	assert.deepEqual(sshTerminalArgs({ id: 'dev', name: 'dev', host: 'dev@srv', port: 2222, folder: '~/app' }, 'codex', ['login', '--device-auth']),
+		['-t', '-p', '2222', 'dev@srv', `sh -lc 'cd "$HOME"/app || exit 98\nexec codex login --device-auth'`]);
 });
 
 test('quoting, remote paths and the environment line', () => {

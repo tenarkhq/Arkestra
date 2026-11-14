@@ -5,9 +5,27 @@
 import * as vscode from 'vscode';
 import { ClaudeCodeAgent, type ClaudeCodeOptions } from './claudeCode';
 import type { ArkestraConnectionsApi } from './connections';
-import type { ArkestraRoomsApi } from './rooms';
+import type { Agent, ArkestraRoomsApi, Readiness } from './rooms';
 
 const KEY = 'arkestra.claude.apiKey';
+const INSTALL_GUIDE = 'https://docs.claude.com/en/docs/claude-code/setup';
+
+type Action = { readonly title: string; run(): Thenable<unknown> };
+
+/** The agent with what fixes an unmet condition attached to its readiness. */
+function withActions<T extends Agent>(agent: T, actionsFor: (readiness: Readiness) => Action[]): Agent {
+	return {
+		get id() { return agent.id; },
+		get name() { return agent.name; },
+		get detail() { return agent.detail; },
+		readiness: async () => {
+			const readiness = await agent.readiness();
+			return readiness.ready ? readiness : { ...readiness, actions: actionsFor(readiness) };
+		},
+		turn: (input, onEvent, signal) => agent.turn(input, onEvent, signal),
+	};
+}
+
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	const rooms = vscode.extensions.getExtension<ArkestraRoomsApi>('vscode.arkestra-rooms');
@@ -31,6 +49,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		},
 	};
 	const agent = new ClaudeCodeAgent(base);
+	const actions = (machineId: string) => (readiness: Readiness): Action[] => {
+		switch (readiness.fix) {
+			case 'install':
+				return [{ title: vscode.l10n.t('Installation guide'), run: () => vscode.env.openExternal(vscode.Uri.parse(INSTALL_GUIDE)) }];
+			case 'signIn':
+				return [
+					{ title: vscode.l10n.t('Sign in'), run: () => vscode.commands.executeCommand('arkestra.connections.runInTerminal', machineId, base.command, ['auth', 'login'], vscode.l10n.t('Claude sign-in')) },
+					{ title: vscode.l10n.t('Use an API key'), run: () => vscode.commands.executeCommand('arkestra.claude.setApiKey') },
+				];
+			default:
+				return [];
+		}
+	};
 
 	// One more Claude per SSH machine, running that machine's Claude Code CLI.
 	const connections = await vscode.extensions.getExtension<ArkestraConnectionsApi>('vscode.arkestra-connections')?.activate();
@@ -47,7 +78,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				cwd: { value: () => undefined },
 				identity: { value: { id: `claude@${machine.id}`, name: `Claude · ${machine.name}`, where: machine.name } },
 			});
-			return [api.registerAgent(new ClaudeCodeAgent(options))];
+			return [api.registerAgent(withActions(new ClaudeCodeAgent(options), actions(machine.id)))];
 		});
 	};
 	syncRemote();
@@ -56,7 +87,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	}
 
 	context.subscriptions.push(
-		api.registerAgent(agent),
+		api.registerAgent(withActions(agent, actions('local'))),
 		vscode.commands.registerCommand('arkestra.claude.setApiKey', async () => {
 			const key = await vscode.window.showInputBox({ prompt: vscode.l10n.t('Anthropic API key for Claude'), password: true, ignoreFocusOut: true });
 			if (key) {

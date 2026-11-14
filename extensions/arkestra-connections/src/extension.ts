@@ -9,7 +9,7 @@ import { homedir } from 'node:os';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { newMachineId, readMachines, sshConfigHosts } from './machines';
-import { probe, probeLocal, remoteSpawn, type Machine, type ProbeResult, type SpawnFn } from './ssh';
+import { probe, probeLocal, remoteSpawn, sshTerminalArgs, type Machine, type ProbeResult, type SpawnFn } from './ssh';
 
 /** What the agent adapters receive. */
 export interface ArkestraConnectionsApi {
@@ -124,6 +124,17 @@ export function activate(context: vscode.ExtensionContext): ArkestraConnectionsA
 		changed,
 		vscode.commands.registerCommand('arkestra.connections.show', show),
 		vscode.commands.registerCommand('arkestra.connections.add', add),
+		// For sign-in flows: an interactive terminal running a command on a machine ('local' or an SSH machine).
+		vscode.commands.registerCommand('arkestra.connections.runInTerminal', (machineId: string, command: string, args: string[] = [], title?: string) => {
+			const machine = machines().find(m => m.id === machineId);
+			if (machineId !== 'local' && !machine) {
+				return;
+			}
+			const terminal = machine
+				? vscode.window.createTerminal({ name: title ?? `${command} · ${machine.name}`, shellPath: ssh().ssh, shellArgs: sshTerminalArgs(machine, command, args) })
+				: vscode.window.createTerminal({ name: title ?? command, shellPath: command, shellArgs: args, cwd: vscode.workspace.workspaceFolders?.[0]?.uri });
+			terminal.show();
+		}),
 		vscode.workspace.onDidChangeConfiguration(e => {
 			if (e.affectsConfiguration(`${SETTING}.machines`)) {
 				changed.fire();

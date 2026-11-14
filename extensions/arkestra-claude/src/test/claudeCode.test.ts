@@ -14,6 +14,7 @@ const FAKE = `#!/usr/bin/env node
 const fs = require('fs');
 const args = process.argv.slice(2);
 if (args[0] === '--version') { console.log('2.1.300 (Claude Code)'); process.exit(0); }
+if (args[0] === 'auth') { console.log(JSON.stringify({ loggedIn: !process.env.FAKE_SIGNED_OUT })); process.exit(process.env.FAKE_SIGNED_OUT ? 1 : 0); }
 fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ args, key: process.env.ANTHROPIC_API_KEY ?? null }) + '\\n');
 const prompt = args[args.indexOf('-p') + 1];
 if (prompt.includes('FAIL')) {
@@ -85,8 +86,12 @@ test('cancelling a turn stops the CLI', async () => {
 	await turn;
 });
 
-test('readiness: found CLI is ready, a missing one says install', async () => {
+test('readiness: found CLI is ready, a missing one says install, a signed-out one says sign in unless a key is set', async () => {
 	assert.deepEqual(await (await setup()).agent.readiness(), { ready: true });
+	process.env.FAKE_SIGNED_OUT = '1';
+	assert.deepEqual(await (await setup()).agent.readiness(), { ready: false, reason: 'Claude Code is not signed in', fix: 'signIn' });
+	assert.deepEqual(await (await setup('sk-ant-test')).agent.readiness(), { ready: true });
+	delete process.env.FAKE_SIGNED_OUT;
 	const missing = new ClaudeCodeAgent({ command: '/nonexistent/claude', permissionMode: 'default', cwd: () => undefined, apiKey: async () => undefined });
 	assert.deepEqual(await missing.readiness(), { ready: false, reason: 'Claude Code CLI not found', fix: 'install' });
 });
