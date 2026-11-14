@@ -6,8 +6,12 @@
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import * as path from 'node:path';
 import type { Agent, AgentChoices, AgentEvent, ExistingSession, Message, PermissionRequest, Readiness, SessionEntry, TurnInput, Usage, WorkUpdate } from './rooms';
 import { RpcClient, type Notification } from './rpc';
+import { followLocal, followRemote } from './follow';
+import { checkThreadId, codexPiece, localRollout, locateRolloutScript } from './codexFollow';
 
 export type CodexAuth = { readonly mode: 'subscription' } | { readonly mode: 'apiKey'; readonly key: string | undefined };
 
@@ -61,6 +65,8 @@ interface RoomThread {
 	override?: { model?: string; effort?: string };
 	/** An adopted thread's folder (AR39): it goes on where it worked. */
 	cwd?: string;
+	/** An adopted thread (AR39): it is never swapped for a new one, the room shows that session. */
+	adopted?: boolean;
 }
 
 /** A first message Arkestra wrote (`[Author]` and the text): that thread is already a room. */
@@ -84,17 +90,19 @@ export function codexHistory(thread: unknown, limit = 300): SessionEntry[] {
 	const entries: SessionEntry[] = [];
 	for (const turn of Array.isArray((thread as any)?.turns) ? (thread as any).turns : []) {
 		for (const item of Array.isArray(turn?.items) ? turn.items : []) {
+			// The item ids are the rollout's own: the live follow (AR39) knows the same entries by them.
+			const id = typeof item?.id === 'string' ? { id: item.id } : {};
 			if (item?.type === 'userMessage') {
 				const text = (Array.isArray(item.content) ? item.content : []).filter((c: any) => c?.type === 'text' && typeof c.text === 'string').map((c: any) => c.text).join('\n').trim();
 				if (text) {
-					entries.push({ role: 'user', text });
+					entries.push({ role: 'user', text, ...id });
 				}
 			} else if (item?.type === 'agentMessage' && typeof item.text === 'string' && item.text.trim()) {
 				const last = entries.at(-1);
 				if (last?.role === 'agent') {
-					entries[entries.length - 1] = { role: 'agent', text: `${last.text}\n\n${item.text.trim()}` };
+					entries[entries.length - 1] = { ...last, text: `${last.text}\n\n${item.text.trim()}` };
 				} else {
-					entries.push({ role: 'agent', text: item.text.trim() });
+					entries.push({ role: 'agent', text: item.text.trim(), ...id });
 				}
 			}
 		}
@@ -280,9 +288,43 @@ export class CodexAgent implements Agent {
 	}
 
 	adoptSession(roomId: string, session: { readonly id: string; readonly cwd?: string }, seen: readonly string[]): void {
-		if (!this.threads.has(roomId)) {
+		const known = this.threads.get(roomId);
+		if (!known) {
 			// No server yet: the next turn resumes the thread first.
-			this.threads.set(roomId, { threadId: session.id, seen: new Set(seen), ...(session.cwd ? { cwd: session.cwd } : {}) });
+			this.threads.set(roomId, { threadId: session.id, seen: new Set(seen), adopted: true, ...(session.cwd ? { cwd: session.cwd } : {}) });
+		} else if (known.threadId === session.id) {
+			seen.forEach(id => known.seen.add(id)); // what came in live from the thread is in it already
+		}
+	}
+
+	/** Follows a thread's rollout file live (AR39): here through the file system, on an SSH machine through `tail -F`. */
+	watchSession(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string) => void, cursor?: string): { dispose(): void } {
+		checkThreadId(sessionId);
+		const options = { classify: codexPiece, onEntries, ...(cursor !== undefined ? { cursor } : {}) };
+		let known: Promise<string | undefined> | undefined;
+		if (!this.options.spawn) {
+			const homes = [process.env.CODEX_HOME || path.join(homedir(), '.codex'), this.options.apiKeyHome];
+			return followLocal(async () => await (known ??= this.rolloutPath(sessionId)) ?? localRollout(homes, sessionId), options);
+		}
+		const spawn = this.options.spawn;
+		let inner: { dispose(): void } | undefined;
+		let disposed = false;
+		void this.rolloutPath(sessionId).then(file => {
+			if (!disposed) {
+				inner = followRemote(spawn, locateRolloutScript(sessionId, file, ['~/.codex', this.options.apiKeyHome]), options);
+			}
+		});
+		return { dispose: () => { disposed = true; inner?.dispose(); } };
+	}
+
+	/** Where Codex keeps the thread, as its server says (the path is on the agent's machine). */
+	private async rolloutPath(threadId: string): Promise<string | undefined> {
+		try {
+			const client = await this.ensureServer(await this.options.auth());
+			const read = await client.request<{ thread?: { path?: unknown } }>('thread/read', { threadId, includeTurns: false });
+			return typeof read?.thread?.path === 'string' && read.thread.path ? read.thread.path : undefined;
+		} catch {
+			return undefined;
 		}
 	}
 
@@ -295,7 +337,13 @@ export class CodexAgent implements Agent {
 			// The app-server restarted (crash, auth change): load the room's thread again.
 			await client.request('thread/resume', { threadId: room.threadId, ...threadParams, excludeTurns: true })
 				.then(() => { room.server = client; })
-				.catch(() => { room.threadId = undefined; room.seen = new Set(); room.sharedVersion = undefined; });
+				.catch(error => {
+					if (room.adopted) {
+						// A thread continued from the machine goes on as that thread or not at all (AR39).
+						throw new Error(`Could not resume the Codex session ${room.threadId}: ${error instanceof Error ? error.message : String(error)}`);
+					}
+					room.threadId = undefined; room.seen = new Set(); room.sharedVersion = undefined;
+				});
 		}
 		const freshThread = !room.threadId;
 		if (freshThread) {

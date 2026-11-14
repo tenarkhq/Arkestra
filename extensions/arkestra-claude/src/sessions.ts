@@ -7,6 +7,7 @@
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import type { ExistingSession, SessionEntry } from './rooms';
+import { assemble, type Piece } from './follow';
 
 const MARK = '\u001eFILE ';
 /** How many sessions a machine lists, newest first. */
@@ -67,20 +68,37 @@ export async function localListing(home: string): Promise<string> {
 	return parts.join('\n');
 }
 
-/** The session file on this machine. */
-export async function localSessionFile(home: string, id: string): Promise<string> {
+/** Where a session file is on this machine, if anywhere. */
+export async function localSessionPath(home: string, id: string): Promise<string | undefined> {
 	if (!SESSION_ID.test(id)) {
 		throw new Error(`not a Claude session id: ${id}`);
 	}
 	const root = path.join(home, '.claude', 'projects');
 	for (const dir of await fs.readdir(root).catch(() => [] as string[])) {
 		const file = path.join(root, dir, `${id}.jsonl`);
-		const text = await fs.readFile(file, 'utf8').catch(() => undefined);
-		if (text !== undefined) {
-			return text;
+		if ((await fs.stat(file).catch(() => undefined))?.isFile()) {
+			return file;
 		}
 	}
-	throw new Error('the session file is gone');
+	return undefined;
+}
+
+/** The session file on this machine. */
+export async function localSessionFile(home: string, id: string): Promise<string> {
+	const file = await localSessionPath(home, id);
+	const text = file ? await fs.readFile(file, 'utf8').catch(() => undefined) : undefined;
+	if (text === undefined) {
+		throw new Error('the session file is gone');
+	}
+	return text;
+}
+
+/** The shell line that finds a session file on a POSIX machine (`f`, empty when there is none). */
+export function locateScript(id: string): string {
+	if (!SESSION_ID.test(id)) {
+		throw new Error(`not a Claude session id: ${id}`);
+	}
+	return `f=$(ls "$HOME"/.claude/projects/*/${id}.jsonl 2>/dev/null | head -n 1)`;
 }
 
 /** A JSON line, or what can be read from a line cut short (a long first message). */
@@ -162,40 +180,49 @@ export function parseListing(out: string): ExistingSession[] {
 	return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
-/** A session file as thread messages: what the user wrote and Claude's answers (its tool steps left out). */
-export function parseHistory(text: string, limit = 300): SessionEntry[] {
-	const entries: { role: 'user' | 'agent'; text: string; at?: string }[] = [];
-	for (const line of text.split('\n')) {
-		if (!line.trim()) {
-			continue;
-		}
-		let data: any;
-		try {
-			data = JSON.parse(line);
-		} catch {
-			continue;
-		}
-		if (data?.isSidechain || data?.isMeta) {
-			continue;
-		}
-		const at = typeof data.timestamp === 'string' ? data.timestamp : undefined;
-		if (data.type === 'user') {
-			const t = userText(data.message?.content);
-			if (t) {
-				entries.push({ role: 'user', text: t, ...(at ? { at } : {}) });
-			}
-		} else if (data.type === 'assistant' && Array.isArray(data.message?.content)) {
-			const t = data.message.content.filter((b: any) => b?.type === 'text' && typeof b.text === 'string' && b.text.trim()).map((b: any) => b.text.trim()).join('\n\n');
-			if (!t) {
-				continue;
-			}
-			const last = entries.at(-1);
-			if (last?.role === 'agent') {
-				last.text += `\n\n${t}`; // one answer per user message, its steps' texts together
-			} else {
-				entries.push({ role: 'agent', text: t, ...(at ? { at } : {}) });
-			}
-		}
+/** A background task's report to Claude (`<task-notification>`): its summaries, for a short room line. */
+export function taskNotice(text: string): string | undefined {
+	if (!text.startsWith('<task-notification>')) {
+		return undefined;
 	}
-	return entries.slice(-limit);
+	const summaries = [...text.matchAll(/<summary>([\s\S]*?)<\/summary>/g)].map(m => m[1].trim()).filter(Boolean);
+	return summaries.join(' · ') || 'Background task finished';
+}
+
+/** One line of a session file as the thread sees it: what the user wrote, Claude's text, a task report. */
+export function claudePiece(line: string): Piece {
+	let data: any;
+	try {
+		data = JSON.parse(line);
+	} catch {
+		return undefined;
+	}
+	if (!data || data.isSidechain || data.isMeta || data.isCompactSummary) {
+		return undefined;
+	}
+	const base = { ...(typeof data.uuid === 'string' ? { id: data.uuid } : {}), ...(typeof data.timestamp === 'string' ? { at: data.timestamp } : {}) };
+	if (data.type === 'user') {
+		const content = data.message?.content;
+		const raw = typeof content === 'string' ? content
+			: Array.isArray(content) && !content.some(b => b?.type === 'tool_result') ? content.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') : '';
+		const notice = taskNotice(raw.trim());
+		if (notice) {
+			return { kind: 'notice', text: notice, ...base };
+		}
+		const text = userText(content);
+		return text ? { kind: 'user', text, ...base } : undefined;
+	}
+	if (data.type === 'assistant' && Array.isArray(data.message?.content)) {
+		const text = data.message.content.filter((b: any) => b?.type === 'text' && typeof b.text === 'string' && b.text.trim()).map((b: any) => b.text.trim()).join('\n\n');
+		return text ? { kind: 'agent', text, ...base } : undefined;
+	}
+	return undefined;
+}
+
+/**
+ * A session file as thread messages: what the user wrote and Claude's answers, one answer per
+ * request (its tool steps left out), under the id of the line each began with.
+ */
+export function parseHistory(text: string, limit = 300): SessionEntry[] {
+	return assemble(text, claudePiece, limit);
 }

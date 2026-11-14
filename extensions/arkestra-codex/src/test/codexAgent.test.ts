@@ -36,7 +36,10 @@ function handle(m) {
     case 'account/read': return reply({ account, requiresOpenaiAuth: true });
     case 'account/login/start': account = { type: 'apiKey' }; return reply({ type: 'apiKey' });
     case 'thread/start': return reply({ thread: { id: 'th1' } });
-    case 'thread/resume': return reply({ thread: { id: m.params.threadId } });
+    case 'thread/resume':
+      if (m.params.threadId === 'gone') return out({ id: m.id, error: { code: -32600, message: 'no rollout found' } });
+      return reply({ thread: { id: m.params.threadId } });
+    case 'thread/read': return reply({ thread: { id: m.params.threadId, path: process.env.FAKE_ROLLOUT || null } });
     case 'turn/interrupt':
       reply({});
       return out({ method: 'turn/completed', params: { threadId: 'th1', turn: { id: 'tu' + n, status: 'interrupted', error: null } } });
@@ -280,4 +283,56 @@ test('existing threads (AR39): the list as sessions, newest first, rooms\' own t
 	assert.deepEqual(codexHistory(thread), [
 		{ role: 'user', text: 'refactor' }, { role: 'agent', text: 'Plan:\n\nDone.' }, { role: 'user', text: 'tests?' }, { role: 'agent', text: 'Added.' },
 	]);
+	// With the items' ids, an answer keeps the id of its first item.
+	const withIds = { turns: [{ items: [{ type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'go' }] }, { type: 'agentMessage', id: 'm1', text: 'One.' }, { type: 'agentMessage', id: 'm2', text: 'Two.' }] }] };
+	assert.deepEqual(codexHistory(withIds), [{ role: 'user', text: 'go', id: 'u1' }, { role: 'agent', text: 'One.\n\nTwo.', id: 'm1' }]);
+});
+
+test('an adopted thread goes on as that thread in its folder; when it cannot be resumed the turn fails, no new thread', async () => {
+	const { agent, requests } = await setup();
+	const old = [msg('user', 'user', 'refactor'), msg('agent', 'codex', 'Done.')];
+	agent.adoptSession('r', { id: 'th1', cwd: '/srv/tenark' }, old.map(m => m.id));
+	const live = msg('user', 'user', 'typed in the terminal');
+	agent.adoptSession('r', { id: 'th1' }, [...old, live].map(m => m.id)); // what came in live counts as seen
+	await agent.turn({ roomId: 'r', transcript: [...old, live, msg('user', 'user', 'now the tests')] }, () => { }, never());
+	const [resume] = await requests('thread/resume');
+	assert.deepEqual([resume.params.threadId, resume.params.cwd], ['th1', '/srv/tenark']);
+	assert.equal((await requests('thread/start')).length, 0);
+	assert.equal((await requests('turn/start'))[0].params.input[0].text, '[You]\nnow the tests');
+
+	agent.adoptSession('q', { id: 'gone' }, []);
+	await assert.rejects(agent.turn({ roomId: 'q', transcript: [msg('user', 'user', 'hi')] }, () => { }, never()), /Could not resume the Codex session gone/);
+	assert.equal((await requests('thread/start')).length, 0);
+	agent.dispose();
+});
+
+test('following a thread here: the rollout file its server names, appended items as entries, Arkestra\'s own turn left out', async () => {
+	const { agent, dir } = await setup();
+	const file = path.join(dir, 'rollout-2026-11-14T10-00-00-th1.jsonl');
+	await writeFile(file, '');
+	process.env.FAKE_ROLLOUT = file;
+	const item = (type: string, id: string, text: string) => JSON.stringify({ timestamp: '2026-11-14T10:00:00Z', type: 'event_msg', payload: { type: 'item_completed', item: { type, id, content: [{ type: type === 'UserMessage' ? 'text' : 'Text', text }] } } });
+	const got: { id?: string; text: string }[] = [];
+	let calls = 0;
+	const until = async (check: () => boolean) => {
+		const end = Date.now() + 5000;
+		while (!check()) {
+			if (Date.now() > end) {
+				throw new Error('timed out');
+			}
+			await new Promise(r => setTimeout(r, 20));
+		}
+	};
+	const follow = agent.watchSession('th1', entries => { calls++; got.push(...entries); });
+	try {
+		await until(() => calls === 1);
+		await writeFile(file, [item('UserMessage', 'u1', '[You]\nfrom Arkestra'), item('AgentMessage', 'm1', 'Sure.'), item('UserMessage', 'u2', 'from the terminal'), item('AgentMessage', 'm2', 'Plan:'), item('AgentMessage', 'm3', 'Done.')].join('\n') + '\n');
+		await until(() => got.some(e => e.text === 'Plan:\n\nDone.'));
+		assert.deepEqual([...new Set(got.map(e => e.id))], ['u2', 'm2']);
+	} finally {
+		follow.dispose();
+		delete process.env.FAKE_ROLLOUT;
+		agent.dispose();
+	}
+	assert.throws(() => agent.watchSession('x; rm -rf ~', () => { }), /not a Codex thread id/);
 });
