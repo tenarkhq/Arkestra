@@ -19,6 +19,7 @@ import { References } from './referencesUi';
 import { Permissions, type PermissionsApi } from './permissionsUi';
 import { SharedContext } from './sharedUi';
 import { extractMemories } from './shared';
+import { BestOfN } from './bestUi';
 import { GitTemplateIO, createWorkTrees } from './templates/gitio';
 import { TemplateRun } from './templates/run';
 import type { Role } from './templates/signals';
@@ -180,6 +181,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		stream.button({ command: 'arkestra.rooms.invite', arguments: [room.id], title: vscode.l10n.t('Invite an agent') });
 
 	context.subscriptions.push(new InlineEdits(context, registry));
+	const best = new BestOfN(registry, id => open(id), room => store.save(room.state));
+	context.subscriptions.push(best);
 	const references = new References(async () => (await store.list()).map(state => loaded.get(state.id)?.state ?? state));
 	context.subscriptions.push(references);
 	changesUi = new ChangesUi(context.globalStorageUri.fsPath, async () => (await currentRoom())?.id);
@@ -330,11 +333,20 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}
 
 		if (room.state.template) {
+			if (request.command === 'best' || request.command === 'compare') {
+				stream.markdown(vscode.l10n.t('Best-of-N runs in a plain room, not in a template room.'));
+				return result;
+			}
 			if (request.command === 'plan' || request.command === 'execute') {
 				stream.markdown(vscode.l10n.t('A template room has its own plan step: the slice plan waits for /approve when the room was set up so.'));
 				return result;
 			}
 			await templateTurn(room, request, await expand(), stream, token);
+			return result;
+		}
+
+		if (request.command === 'best') {
+			await best.run(room, await expand(), stream, token);
 			return result;
 		}
 
@@ -350,6 +362,13 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 				stream.markdown(vscode.l10n.t('Plan mode is on: the agents may read the code but change nothing. Write the task; when the plan is right, /execute runs it.'));
 				return result;
 			}
+		} else if (request.command === 'compare') {
+			const compare = await best.comparePrompt(room);
+			if (!compare) {
+				stream.markdown(vscode.l10n.t('There is no finished Best-of-N run to compare in this room. Start one with /best.'));
+				return result;
+			}
+			fallback = request.prompt.trim() ? `${compare}\n\nA felhasználó kiegészítése: ${await expand()}` : compare;
 		} else if (request.command === 'execute') {
 			if (room.state.mode !== 'plan') {
 				stream.markdown(vscode.l10n.t('This room is not in Plan mode. Start one with /plan.'));
@@ -372,7 +391,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		const abort = new AbortController();
 		const cancel = token.onCancellationRequested(() => abort.abort());
 		activity.queue(room.id, room.roster);
-		const prompt = !request.prompt.trim() && fallback ? fallback : await expand();
+		const prompt = fallback !== undefined && (request.command === 'compare' || !request.prompt.trim()) ? fallback : await expand();
 		await changesUi?.take(room.id, vscode.l10n.t('Before: {0}', titleFrom(request.prompt, vscode.l10n.t('Room'))));
 		try {
 			await room.say(prompt, (agent, event) => {
@@ -390,6 +409,11 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}
 		if (room.state.mode === 'plan') {
 			stream.markdown(`\n\n_${vscode.l10n.t('Plan mode: nothing was changed. Refine the plan, or run it with /execute.')}_`);
+		}
+		const compared = request.command === 'compare' ? best.openRun(room) : undefined;
+		if (compared) {
+			stream.markdown('\n\n');
+			best.showResult(room, compared, stream); // the choice stays the user's
 		}
 		return result;
 	};

@@ -151,7 +151,7 @@ export class ClaudeCodeAgent implements Agent {
 			delete env.ANTHROPIC_API_KEY; // subscription: the CLI's own login
 		}
 
-		const child = (this.options.spawn ?? nodeSpawn)(this.options.command, args, { cwd: this.options.cwd(), env, stdio: ['ignore', 'pipe', 'pipe'] });
+		const child = (this.options.spawn ?? nodeSpawn)(this.options.command, args, { cwd: input.cwd ?? this.options.cwd(), env, stdio: ['ignore', 'pipe', 'pipe'] });
 		const kill = () => child.kill('SIGTERM');
 		signal.addEventListener('abort', kill);
 

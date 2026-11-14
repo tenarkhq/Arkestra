@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { TemplateState } from './templates/types';
+import type { BestRun } from './best';
 import type { Agent, AgentEvent, AgentRegistry, Readiness } from './agent';
 
 export type AuthorKind = 'user' | 'agent' | 'system';
@@ -38,6 +39,8 @@ export interface RoomState {
 	template?: TemplateState;
 	/** Plan mode: the agents read and plan, nothing is changed until the user executes the plan. */
 	mode?: 'plan';
+	/** Best-of-N runs of this room (AR24). */
+	best?: BestRun[];
 }
 
 export class AgentNotReadyError extends Error {

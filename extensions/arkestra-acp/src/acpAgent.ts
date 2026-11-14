@@ -141,7 +141,7 @@ export class AcpAgent implements Agent {
 	async turn(input: TurnInput, onEvent: (event: AgentEvent) => void, signal: AbortSignal): Promise<void> {
 		const { peer, info } = await this.connect();
 		const room = this.sessions.get(input.roomId) ?? { seen: new Set<string>() };
-		const cwd = await this.options.cwd();
+		const cwd = input.cwd ?? await this.options.cwd();
 
 		if (room.sessionId && room.peer !== peer) {
 			// The agent restarted: load the room's session if it can, otherwise start over.

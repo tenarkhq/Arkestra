@@ -30,6 +30,8 @@ export interface TurnInput {
 	readonly mode?: 'plan';
 	/** The shared rules and memory (AR23): sent when a session has not seen this version yet. */
 	readonly shared?: { readonly text: string; readonly version: string };
+	/** The folder this turn works in, when not the project (a Best-of-N attempt's work tree). Local agents only. */
+	readonly cwd?: string;
 }
 
 export interface Agent {
