@@ -1,0 +1,16 @@
+{
+  "displayName": "Arkestra · Codex",
+  "description": "Codex in Arkestra rooms through your own Codex CLI, by ChatGPT login or API key.",
+  "auth": "How Codex signs in.",
+  "auth.auto": "The stored API key if there is one, otherwise the Codex CLI's ChatGPT login (subscription).",
+  "auth.subscription": "Always the Codex CLI's ChatGPT login (subscription).",
+  "auth.apiKey": "Always the stored API key. It is kept apart from your own Codex login.",
+  "command": "The Codex CLI command.",
+  "model": "Model for Codex's turns. Empty: the CLI's default.",
+  "sandbox": "What Codex's commands may touch during turns in a room.",
+  "sandbox.readOnly": "Read files only.",
+  "sandbox.workspaceWrite": "Read anything, write inside the workspace.",
+  "sandbox.full": "No sandbox.",
+  "setApiKey": "Set the Codex API key",
+  "clearApiKey": "Remove the Codex API key"
+}
