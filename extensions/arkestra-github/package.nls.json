@@ -1,10 +1,14 @@
 {
   "displayName": "Arkestra · GitHub",
-  "description": "The Arkestra GitHub App's events live in the IDE, through the webhook relay: CI, pull requests, reviews, issues and the project board.",
+  "description": "The Arkestra GitHub App's events live in the IDE, through the webhook relay, and the workspace's GitHub Project kept in sync both ways: CI, pull requests, reviews, issues, project fields and dependencies.",
   "relayUrl": "The webhook relay's address on the edge server, for example `https://edge.example.com/arkestra`. The client token is stored with **Arkestra: Connect to the GitHub relay**.",
   "appSlug": "The Arkestra GitHub App's slug (from its page on GitHub), for the install link.",
   "connect": "Connect to the GitHub relay…",
   "disconnect": "Disconnect from the GitHub relay",
   "install": "Install the Arkestra GitHub App on a repository…",
-  "log": "Show the GitHub event log"
+  "log": "Show the GitHub event log",
+  "project": "The GitHub Project this workspace follows, as `owner/number` (for example `tenarkhq/3`) or the project's URL. Changes on GitHub show up within seconds; changes made in Arkestra are written to GitHub at once.",
+  "signIn": "Sign in to GitHub for the project sync",
+  "setProject": "Follow a GitHub Project in this workspace…",
+  "refreshProject": "Read the GitHub Project again"
 }
