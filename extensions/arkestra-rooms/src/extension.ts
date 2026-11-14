@@ -34,6 +34,10 @@ import { TemplateRun } from './templates/run';
 import type { Role } from './templates/signals';
 import type { CodeState, ReviewState, TemplateState } from './templates/types';
 import { ROOM_ID_KEY, ROOM_SCHEME, archivedThreads, groupThreads, historyTurns, projectName, roomIdFromHistory, roomIdFromSessionPath, summarize, titleFrom, type ProjectThreads, type ThreadSummary } from './threads';
+import { ThreadViews } from './threadView';
+import { DetailsView } from './detailsView';
+import { LiveTurns } from './threadModel';
+import type { TurnSink } from './room';
 
 /** What adapter extensions (Claude Code, Codex, OpenAI, ACP) receive. */
 export interface ArkestraRoomsApi {
@@ -81,6 +85,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	/** The room of the thread used last; the palette commands and the Agents tile follow it. */
 	let current: Room | undefined;
 	const activity = new ActivityBoard();
+	/** The running turns, token by token, for the thread panel. */
+	const live = new LiveTurns();
 	const currentChanged = new vscode.EventEmitter<void>();
 	const threadChanged = new vscode.EventEmitter<string>();
 	context.subscriptions.push(threadChanged, activity.onDidChange(roomId => threadChanged.fire(roomId)));
@@ -233,7 +239,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			await context.globalState.update(LAST_AGENTS, [...ids]);
 		}
 		refreshThreads();
-		await vscode.commands.executeCommand('vscode.open', sessionUri(room.id));
+		await threads.open(room.id);
 	};
 
 	// Model and effort per agent and thread (AR38).
@@ -350,6 +356,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		if (!run) {
 			const io = new GitTemplateIO(() => state.code ? { repo: state.code.repo, base: state.code.base, dirs: state.code.dirs, branches: state.code.branches, coordinator: state.code.coordinator } : undefined);
 			run = new TemplateRun(room, state, io, (_role, agentId, event) => {
+				live.feed(room.id, agentId, event);
 				switch (event.kind) {
 					case 'start': activity.start(room.id, agentId); break;
 					case 'tool': activity.tool(room.id, agentId, event.text); break;
@@ -398,9 +405,25 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}
 	};
 
+	/** One message to a room, from the chat or the thread panel. */
+	type RoomRequest = { readonly prompt: string; readonly command?: string; readonly references?: readonly vscode.ChatPromptReference[] };
+	/** A plain round's events: the activity board, the thread panel's live turn, then the caller's own. */
+	const roundSink = (room: Room, extra?: TurnSink): TurnSink => (agent, event) => {
+		switch (event.kind) {
+			case 'start': activity.start(room.id, agent.id); break;
+			case 'tool': activity.tool(room.id, agent.id, event.text); break;
+			case 'error': activity.error(room.id, agent.id, event.text); break;
+			case 'usage': activity.usage(room.id, agent.id, event.usage); break;
+			case 'work': activity.work(room.id, agent.id, event.work); break;
+			case 'end': activity.end(room.id, agent.id); break;
+		}
+		live.feed(room.id, agent.id, event);
+		extra?.(agent, event);
+	};
+
 	/** The user's word in a template room goes to the template, not to a plain round. */
 	/** `prompt`: the message with its @-referenced material; addressing reads the user's own text. */
-	const templateTurn = async (room: Room, request: vscode.ChatRequest, prompt: string, stream: vscode.ChatResponseStream, token: vscode.CancellationToken) => {
+	const templateTurn = async (room: Room, request: RoomRequest, prompt: string, stream: vscode.ChatResponseStream, token: vscode.CancellationToken) => {
 		const run = ensureRun(room)!;
 		run.unpause();
 		if (request.command === 'continue') {
@@ -430,18 +453,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		await streamRun(run, stream, token, true);
 	};
 
-	const handler: vscode.ChatRequestHandler = async (request, chatContext, stream, token): Promise<vscode.ChatResult> => {
-		// This thread's room: a native Arkestra session carries it in its URI, an @room chat in
-		// its history; a thread without one (a new chat) gets a new room.
-		const session = chatContext.chatSessionContext?.chatSessionItem.resource;
-		const sessionRoomId = session ? roomIdFromSessionPath(session.path) ?? untitledSessions.get(session.toString()) : undefined;
-		const room = request.command === 'new'
-			? await createRoom(titleFrom(request.prompt, vscode.l10n.t('Room')))
-			: await use(await open(sessionRoomId ?? roomIdFromHistory(chatContext.history)) ?? await createRoom(titleFrom(request.prompt, vscode.l10n.t('Room'))));
-		if (session && !roomIdFromSessionPath(session.path)) {
-			untitledSessions.set(session.toString(), room.id);
-		}
-		const result: vscode.ChatResult = { metadata: { [ROOM_ID_KEY]: room.id } };
+	/** One message to a room (slash commands, template rooms, Best-of-N, Plan mode, a plain round); the chat and the thread panel both send through here. */
+	const sendToRoom = async (room: Room, request: RoomRequest, stream: vscode.ChatResponseStream, token: vscode.CancellationToken): Promise<void> => {
 		// The message with its @-referenced material, resolved only when it goes to agents.
 		const expand = async () => {
 			const expanded = await references.expand(request.prompt, request.references, room.id);
@@ -451,25 +464,19 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			return expanded.text;
 		};
 
-		if (request.command === 'new') {
-			stream.markdown(vscode.l10n.t('New room: **{0}**. Invite agents with /invite.', room.state.title));
-			inviteButton(stream, room);
-			return result;
-		}
-
 		if (request.command === 'agents' || request.command === 'invite') {
 			const entries = await registry.inviteList(room.roster);
 			if (request.command === 'invite' && request.prompt.trim()) {
 				const target = findAgent(request.prompt, entries);
 				stream.markdown(target ? await invite(room, target.agent.id) : vscode.l10n.t('No agent named "{0}".', request.prompt.trim()));
-				return result;
+				return;
 			}
 			if (request.command === 'invite') {
 				const message = await pickAndInvite(room);
 				if (message) {
 					stream.markdown(message);
 				}
-				return result;
+				return;
 			}
 			const inRoom = room.roster.map(id => registry.get(id)?.name ?? id).join(', ') || vscode.l10n.t('nobody yet');
 			stream.markdown(vscode.l10n.t('In this room: {0}', inRoom) + '\n\n');
@@ -477,30 +484,30 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 				stream.markdown(`- **${entry.agent.name}** · ${entry.agent.detail} · ${describe(entry)}\n`);
 			}
 			inviteButton(stream, room);
-			return result;
+			return;
 		}
 
 		if (request.command === 'template') {
 			await vscode.commands.executeCommand('arkestra.rooms.newTemplateRoom');
-			return result;
+			return;
 		}
 
 		if (room.state.template) {
 			if (request.command === 'best' || request.command === 'compare') {
 				stream.markdown(vscode.l10n.t('Best-of-N runs in a plain room, not in a template room.'));
-				return result;
+				return;
 			}
 			if (request.command === 'plan' || request.command === 'execute') {
 				stream.markdown(vscode.l10n.t('A template room has its own plan step: the slice plan waits for /approve when the room was set up so.'));
-				return result;
+				return;
 			}
 			await templateTurn(room, request, await expand(), stream, token);
-			return result;
+			return;
 		}
 
 		if (request.command === 'best') {
 			await best.run(room, await expand(), stream, token);
-			return result;
+			return;
 		}
 
 		// Plan mode: the agents read and plan; nothing changes until /execute.
@@ -513,19 +520,19 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			}
 			if (!request.prompt.trim()) {
 				stream.markdown(vscode.l10n.t('Plan mode is on: the agents may read the code but change nothing. Write the task; when the plan is right, /execute runs it.'));
-				return result;
+				return;
 			}
 		} else if (request.command === 'compare') {
 			const compare = await best.comparePrompt(room);
 			if (!compare) {
 				stream.markdown(vscode.l10n.t('There is no finished Best-of-N run to compare in this room. Start one with /best.'));
-				return result;
+				return;
 			}
 			fallback = request.prompt.trim() ? `${compare}\n\nA felhasználó kiegészítése: ${await expand()}` : compare;
 		} else if (request.command === 'execute') {
 			if (room.state.mode !== 'plan') {
 				stream.markdown(vscode.l10n.t('This room is not in Plan mode. Start one with /plan.'));
-				return result;
+				return;
 			}
 			room.state.mode = undefined;
 			room.post(PLAN_OFF);
@@ -536,7 +543,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		if (!room.roster.length) {
 			stream.markdown(vscode.l10n.t('There is no agent in this room yet. Invite one with /invite.'));
 			inviteButton(stream, room);
-			return result;
+			return;
 		}
 
 		// Clickable while the round runs: whoever joins answers in this round too.
@@ -547,17 +554,14 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		const prompt = fallback !== undefined && (request.command === 'compare' || !request.prompt.trim()) ? fallback : await expand();
 		await changesUi?.take(room.id, vscode.l10n.t('Before: {0}', titleFrom(request.prompt, vscode.l10n.t('Room'))));
 		try {
-			await room.say(prompt, (agent, event) => {
+			await room.say(prompt, roundSink(room, (agent, event) => {
 				switch (event.kind) {
-					case 'start': activity.start(room.id, agent.id); stream.markdown(`\n\n**${agent.name}**\n\n`); break;
+					case 'start': stream.markdown(`\n\n**${agent.name}**\n\n`); break;
 					case 'text': stream.markdown(event.text); break;
-					case 'tool': activity.tool(room.id, agent.id, event.text); stream.progress(`${agent.name}: ${event.text}`); break;
-					case 'error': activity.error(room.id, agent.id, event.text); stream.markdown(`\n\n> ${agent.name}: ${event.text}\n`); break;
-					case 'usage': activity.usage(room.id, agent.id, event.usage); break;
-					case 'work': activity.work(room.id, agent.id, event.work); break;
-					case 'end': activity.end(room.id, agent.id); break;
+					case 'tool': stream.progress(`${agent.name}: ${event.text}`); break;
+					case 'error': stream.markdown(`\n\n> ${agent.name}: ${event.text}\n`); break;
 				}
-			}, abort.signal);
+			}), abort.signal);
 		} finally {
 			activity.settle(room.id);
 			cancel.dispose();
@@ -570,6 +574,26 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			stream.markdown('\n\n');
 			best.showResult(room, compared, stream); // the choice stays the user's
 		}
+	};
+
+	const handler: vscode.ChatRequestHandler = async (request, chatContext, stream, token): Promise<vscode.ChatResult> => {
+		// This thread's room: a native Arkestra session carries it in its URI, an @room chat in
+		// its history; a thread without one (a new chat) gets a new room.
+		const session = chatContext.chatSessionContext?.chatSessionItem.resource;
+		const sessionRoomId = session ? roomIdFromSessionPath(session.path) ?? untitledSessions.get(session.toString()) : undefined;
+		const room = request.command === 'new'
+			? await createRoom(titleFrom(request.prompt, vscode.l10n.t('Room')))
+			: await use(await open(sessionRoomId ?? roomIdFromHistory(chatContext.history)) ?? await createRoom(titleFrom(request.prompt, vscode.l10n.t('Room'))));
+		if (session && !roomIdFromSessionPath(session.path)) {
+			untitledSessions.set(session.toString(), room.id);
+		}
+		const result: vscode.ChatResult = { metadata: { [ROOM_ID_KEY]: room.id } };
+		if (request.command === 'new') {
+			stream.markdown(vscode.l10n.t('New room: **{0}**. Invite agents with /invite.', room.state.title));
+			inviteButton(stream, room);
+			return result;
+		}
+		await sendToRoom(room, request, stream, token);
 		return result;
 	};
 
@@ -701,6 +725,29 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	participant.iconPath = new vscode.ThemeIcon('organization');
 	participant.participantVariableProvider = references.completionProvider();
 
+	// Threads open in Arkestra's own panel; the right panel follows the one used last.
+	const threads = new ThreadViews(context, {
+		registry, activity, live, onDidChangeThread: threadChanged.event, open, use,
+		createRoom: async (agentIds, title, project) => {
+			const room = await createRoom(title, project);
+			for (const id of agentIds) {
+				await invite(room, id);
+			}
+			if (agentIds.length) {
+				await context.globalState.update(LAST_AGENTS, [...agentIds]);
+			}
+			refreshThreads();
+			return room;
+		},
+		send: sendToRoom,
+		stop: roomId => remoteStop(roomId),
+		modelLabel: async (room, agentId) => choiceLabel(room.state.choices?.[agentId], await agentChoices(agentId)),
+	});
+	context.subscriptions.push(threads, new DetailsView({
+		registry, activity, onDidChangeThread: threadChanged.event, threads, open,
+		changes: async roomId => await changesUi?.checkpoints()?.changes(roomId) ?? [],
+	}));
+
 	// ---- Threads as native chat sessions: history, session list, the left column ----------
 	const sessionUri = (roomId: string) => vscode.Uri.from({ scheme: ROOM_SCHEME, path: `/room/${roomId}` });
 	const sessionParticipant = vscode.chat.createChatParticipant(ROOM_SCHEME, handler);
@@ -711,7 +758,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 
 	// The artifact gallery: every agent's output of every thread (AR26).
 	const gallery = new ArtifactGallery(context, async () => (await store.list()).map(state => loaded.get(state.id)?.state ?? state), async roomId => {
-		await vscode.commands.executeCommand('vscode.open', sessionUri(roomId));
+		await threads.open(roomId);
 	});
 	context.subscriptions.push(gallery, currentChanged.event(() => gallery.refresh()));
 
@@ -1081,7 +1128,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		vscode.commands.registerCommand('arkestra.rooms.openThread', async (arg: unknown, column?: unknown) => {
 			const id = threadId(arg) ?? (await currentRoom())?.id;
 			if (id) {
-				await vscode.commands.executeCommand('vscode.open', sessionUri(id), typeof column === 'number' ? { viewColumn: column } : undefined);
+				await threads.open(id, typeof column === 'number' ? column : undefined);
 			}
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.newTemplateRoom', async (arg?: unknown) => {
@@ -1129,7 +1176,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 				await store.save(room.state);
 				ensureRun(room)!.engine.start();
 				refreshThreads();
-				await vscode.commands.executeCommand('vscode.open', sessionUri(room.id));
+				await threads.open(room.id);
 			} catch (error) {
 				void vscode.window.showErrorMessage(vscode.l10n.t('The template room could not start: {0}', error instanceof Error ? error.message : String(error)));
 			}
@@ -1137,7 +1184,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		vscode.commands.registerCommand('arkestra.rooms.newThread', async (arg?: unknown) => {
 			// From a project's row: a thread of that project.
 			const project = (arg as { kind?: string; group?: ProjectThreads } | undefined)?.group?.project;
-			await startThread(undefined, project);
+			threads.openNew(project ? { project } : {});
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.newThreadWith', async (arg?: unknown) => {
 			const id = typeof arg === 'string' ? arg : (arg as { entry?: InviteEntry } | undefined)?.entry?.agent.id;
@@ -1176,6 +1223,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			if (tabs.length) {
 				await vscode.window.tabGroups.close(tabs);
 			}
+			threads.close(room.id);
 			runs.delete(room.id);
 			loaded.delete(room.id);
 			follow.detach(room.id);
@@ -1288,16 +1336,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		await changesUi?.take(room.id, vscode.l10n.t('Before: {0}', titleFrom(text, vscode.l10n.t('Room'))));
 		void (async () => {
 			try {
-				await room.say(text, (agent, event) => {
-					switch (event.kind) {
-						case 'start': activity.start(room.id, agent.id); break;
-						case 'tool': activity.tool(room.id, agent.id, event.text); break;
-						case 'error': activity.error(room.id, agent.id, event.text); break;
-						case 'usage': activity.usage(room.id, agent.id, event.usage); break;
-						case 'work': activity.work(room.id, agent.id, event.work); break;
-						case 'end': activity.end(room.id, agent.id); break;
-					}
-				}, abort.signal);
+				await room.say(text, roundSink(room), abort.signal);
 			} finally {
 				activity.settle(room.id);
 				remoteRounds.delete(roomId);

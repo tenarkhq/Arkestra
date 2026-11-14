@@ -1,0 +1,555 @@
+/*---------------------------------------------------------------------------------------------
+ *  Arkestra. A thread in Arkestra's own panel: the room's messages, its running turns token by
+ *  token, the composer; and the new-chat page where the agents are chosen. One panel per thread.
+ *--------------------------------------------------------------------------------------------*/
+
+import * as vscode from 'vscode';
+import { randomBytes } from 'node:crypto';
+import type { ActivityBoard } from './activity';
+import type { AgentRegistry, InviteEntry } from './agent';
+import type { Room } from './room';
+import { ICONS, escapeHtml, liveHtml, renderMarkdown, rowHtml, threadPage, type ThreadStrings } from './threadHtml';
+import { agentTitle, machineOf, parseSlash, providerOf, threadRows, type LiveTurns, type Row } from './threadModel';
+import { projectName, titleFrom } from './threads';
+import { turnState } from './work';
+
+export const THREAD_VIEW_TYPE = 'arkestra.thread';
+/** The room's slash commands; the panel hands them to the same path as the chat. */
+export const SLASH_COMMANDS: readonly string[] = ['invite', 'agents', 'new', 'template', 'continue', 'approve', 'plan', 'execute', 'best', 'compare'];
+/** Who worked in the last new thread (shared with the agent pick of the palette). */
+const LAST_AGENTS = 'arkestra.rooms.lastAgents';
+
+/** What the panel needs from the rooms. */
+export interface ThreadHost {
+	readonly registry: AgentRegistry;
+	readonly activity: ActivityBoard;
+	readonly live: LiveTurns;
+	/** A message, an agent's state or work, a model choice changed. */
+	readonly onDidChangeThread: vscode.Event<string>;
+	open(roomId: string): Promise<Room | undefined>;
+	/** Makes the room the current one (palette commands, Changes view). */
+	use(room: Room): Promise<unknown>;
+	/** A new room with these agents in a project (default: this window's). */
+	createRoom(agentIds: readonly string[], title: string, project?: string): Promise<Room>;
+	/** The chat's own path for one message: slash commands, template rooms, a plain round. */
+	send(room: Room, request: { readonly prompt: string; readonly command?: string }, stream: vscode.ChatResponseStream, token: vscode.CancellationToken): Promise<void>;
+	/** Stops what runs in the room (a round started elsewhere, a template room). */
+	stop(roomId: string): Promise<void>;
+	/** The agent's model and effort in this thread, as a label; empty: its default. */
+	modelLabel(room: Room, agentId: string): Promise<string>;
+}
+
+interface View {
+	readonly panel: vscode.WebviewPanel;
+	/** Undefined: the new-chat page. */
+	roomId?: string;
+	/** The new-chat page's project and preselected agents. */
+	project?: string;
+	preselect?: readonly string[];
+	sending?: vscode.CancellationTokenSource;
+	/** A turn started during this send: its output shows as rows, not as a notice. */
+	roundSeen: boolean;
+	notice: string;
+	buttons: vscode.Command[];
+	scroll: boolean;
+	timer?: ReturnType<typeof setTimeout>;
+	/** The message just sent, shown at once until the room has it (references and a checkpoint come first). */
+	pending?: { readonly text: string; readonly after: number };
+	/** The page's ticked agents follow `preselect` again (the page was asked for with other agents). */
+	reset?: boolean;
+	/** Text for the composer that waits until the page has loaded. */
+	insert?: string;
+}
+
+export class ThreadViews implements vscode.Disposable {
+	private readonly views = new Set<View>();
+	private readonly disposables: vscode.Disposable[] = [];
+	private readonly rowCache = new Map<string, string>();
+	/** Model labels per room, agent and choice; reading an agent's models can be slow (SSH), so never awaited in an update. */
+	private readonly labels = new Map<string, string | Promise<void>>();
+	private active: View | undefined;
+	private readonly activeChanged = new vscode.EventEmitter<string | undefined>();
+	/** The thread of the panel used last; the right panel follows it. */
+	readonly onDidChangeActive = this.activeChanged.event;
+
+	constructor(private readonly context: vscode.ExtensionContext, private readonly host: ThreadHost) {
+		this.disposables.push(
+			this.activeChanged,
+			vscode.window.registerWebviewPanelSerializer(THREAD_VIEW_TYPE, {
+				deserializeWebviewPanel: async (panel, state: { roomId?: unknown } | undefined) => {
+					this.adopt(panel, typeof state?.roomId === 'string' ? state.roomId : undefined);
+				},
+			}),
+			// Puts text (an @-reference) into the composer of the thread used last, or of a new chat.
+			vscode.commands.registerCommand('arkestra.rooms.insertInThread', (text: unknown) => {
+				if (typeof text !== 'string' || !text) {
+					return;
+				}
+				let view: View | undefined = this.active ?? [...this.views][0];
+				if (!view) {
+					this.openNew();
+					view = [...this.views].find(v => !v.roomId);
+				}
+				if (view) {
+					view.panel.reveal();
+					view.insert = `${view.insert ? `${view.insert} ` : ''}${text}`;
+					void view.panel.webview.postMessage({ type: 'insert', text: view.insert }).then(delivered => { if (delivered) { view!.insert = undefined; } });
+				}
+			}),
+			vscode.commands.registerCommand('arkestra.rooms.newChat', (arg?: unknown) => {
+				const opts = arg && typeof arg === 'object' ? arg as { project?: unknown; agents?: unknown } : {};
+				this.openNew({
+					...(typeof opts.project === 'string' ? { project: opts.project } : {}),
+					...(Array.isArray(opts.agents) ? { agents: opts.agents.filter((a): a is string => typeof a === 'string') } : {}),
+				});
+			}),
+			host.onDidChangeThread(roomId => this.refreshRoom(roomId)),
+			host.live.onDidChange(roomId => {
+				for (const view of this.views) {
+					if (view.roomId === roomId) {
+						if (view.sending && host.live.parts(roomId).length) {
+							view.roundSeen = true;
+						}
+						this.schedule(view);
+					}
+				}
+			}),
+			host.registry.onDidChange(() => { for (const view of this.views) { if (!view.roomId) { this.schedule(view); } } }),
+		);
+	}
+
+	dispose(): void {
+		for (const view of this.views) {
+			clearTimeout(view.timer);
+			view.panel.dispose();
+		}
+		this.disposables.forEach(d => d.dispose());
+	}
+
+	/** The thread of the active (or last active) thread panel. */
+	activeRoomId(): string | undefined {
+		return this.active?.roomId;
+	}
+
+	/** Opens the thread's panel, or shows it when it is open. */
+	async open(roomId: string, column?: vscode.ViewColumn): Promise<void> {
+		const existing = [...this.views].find(v => v.roomId === roomId);
+		if (existing) {
+			existing.panel.reveal(column ?? existing.panel.viewColumn);
+			this.activate(existing);
+			return;
+		}
+		this.activate(this.adopt(this.createPanel(column), roomId));
+	}
+
+	/** The new-chat page (one at a time): who works in the thread, then its first message. */
+	openNew(opts: { project?: string; agents?: readonly string[] } = {}): void {
+		const existing = [...this.views].find(v => !v.roomId);
+		if (existing) {
+			existing.project = opts.project;
+			existing.preselect = opts.agents;
+			existing.reset = !!opts.agents;
+			existing.panel.reveal();
+			this.schedule(existing);
+			return;
+		}
+		const view = this.adopt(this.createPanel(), undefined);
+		view.project = opts.project;
+		view.preselect = opts.agents;
+	}
+
+	/** Closes the thread's panel (the thread was deleted). */
+	close(roomId: string): void {
+		for (const view of [...this.views]) {
+			if (view.roomId === roomId) {
+				view.panel.dispose();
+			}
+		}
+	}
+
+	private createPanel(column?: vscode.ViewColumn): vscode.WebviewPanel {
+		return vscode.window.createWebviewPanel(THREAD_VIEW_TYPE, vscode.l10n.t('New chat'), column ?? vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true, enableFindWidget: true, localResourceRoots: [] });
+	}
+
+	private adopt(panel: vscode.WebviewPanel, roomId: string | undefined): View {
+		const view: View = { panel, ...(roomId ? { roomId } : {}), roundSeen: false, notice: '', buttons: [], scroll: true };
+		this.views.add(view);
+		panel.iconPath = new vscode.ThemeIcon(roomId ? 'comment-discussion' : 'add');
+		panel.webview.options = { enableScripts: true, localResourceRoots: [] };
+		const nonce = randomBytes(16).toString('base64');
+		panel.webview.html = threadPage({
+			nonce,
+			cspSource: panel.webview.cspSource,
+			mode: roomId ? 'thread' : 'new',
+			...(roomId ? { roomId } : {}),
+			placeholder: roomId ? vscode.l10n.t('Write to the agents of this thread…') : vscode.l10n.t('What should they do?'),
+			heading: vscode.l10n.t('Who do you work with?'),
+		});
+		panel.onDidDispose(() => {
+			// A running round goes on; the thread shows it again when reopened.
+			clearTimeout(view.timer);
+			this.views.delete(view);
+			if (this.active === view) {
+				this.active = undefined;
+				this.activeChanged.fire(undefined);
+			}
+		});
+		panel.onDidChangeViewState(e => { if (e.webviewPanel.active) { this.activate(view); } });
+		panel.webview.onDidReceiveMessage(message => this.receive(view, message));
+		if (panel.active) {
+			this.activate(view);
+		}
+		return view;
+	}
+
+	private activate(view: View): void {
+		const changed = this.active !== view;
+		this.active = view;
+		if (view.roomId) {
+			void this.host.open(view.roomId).then(room => room && this.host.use(room));
+		}
+		if (changed) {
+			this.activeChanged.fire(view.roomId);
+		}
+	}
+
+	private refreshRoom(roomId: string): void {
+		for (const view of this.views) {
+			if (view.roomId === roomId) {
+				this.schedule(view);
+			}
+		}
+	}
+
+	private post(view: View, message: object): void {
+		if (this.views.has(view)) {
+			view.panel.webview.postMessage(message).then(undefined, () => undefined);
+		}
+	}
+
+	/** Coalesces updates: a stream of tokens becomes a few posts a second. */
+	private schedule(view: View, delay = 40): void {
+		if (view.timer) {
+			return;
+		}
+		view.timer = setTimeout(() => {
+			view.timer = undefined;
+			if (this.views.has(view)) {
+				void this.push(view);
+			}
+		}, delay);
+	}
+
+	private strings(): ThreadStrings {
+		return {
+			local: vscode.l10n.t('this machine'),
+			attached: n => vscode.l10n.t('+{0} attached', n),
+			tasksDone: n => n === 1 ? vscode.l10n.t('1 background task finished') : vscode.l10n.t('{0} background tasks finished', n),
+			tasks: n => n === 1 ? vscode.l10n.t('1 background task') : vscode.l10n.t('{0} background tasks', n),
+			other: n => n === 1 ? vscode.l10n.t('1 system message') : vscode.l10n.t('{0} system messages', n),
+			working: vscode.l10n.t('working…'),
+			copy: vscode.l10n.t('Copy'),
+		};
+	}
+
+	private clientStrings() {
+		return { send: vscode.l10n.t('Send'), stop: vscode.l10n.t('Stop'), noAgents: vscode.l10n.t('No agent is known yet. Add a machine or sign in to an agent first.') };
+	}
+
+	private async push(view: View): Promise<void> {
+		if (view.roomId) {
+			await this.pushThread(view, view.roomId);
+		} else {
+			await this.pushNew(view);
+		}
+	}
+
+	private rowHtml(row: Row, s: ThreadStrings): string {
+		const key = `${row.id}:${row.type === 'fold' ? row.items.length : row.text.length}`;
+		let html = this.rowCache.get(key);
+		if (html === undefined) {
+			const time = row.type === 'agent' && row.at ? new Date(row.at).toLocaleTimeString(vscode.env.language, { hour: '2-digit', minute: '2-digit' }) : '';
+			html = rowHtml(row, s, renderMarkdown, time);
+			if (this.rowCache.size > 4000) {
+				this.rowCache.clear();
+			}
+			this.rowCache.set(key, html);
+		}
+		return html;
+	}
+
+	private async pushThread(view: View, roomId: string): Promise<void> {
+		const room = await this.host.open(roomId);
+		const s = this.strings();
+		if (!room) {
+			this.post(view, { type: 'thread', rows: [], live: [], notice: `<div class="notice">${escapeHtml(vscode.l10n.t('This thread no longer exists.'))}</div>`, chips: [], right: [], busy: false, strings: this.clientStrings() });
+			return;
+		}
+		view.panel.title = room.state.title;
+		view.panel.iconPath = new vscode.ThemeIcon('comment-discussion');
+		const rows = threadRows(room.messages).map(row => ({ key: row.id, html: this.rowHtml(row, s) }));
+		if (view.pending && room.messages.slice(view.pending.after).some(m => m.author.kind === 'user')) {
+			view.pending = undefined;
+		}
+		if (view.pending) {
+			rows.push({ key: 'pending', html: rowHtml({ type: 'user', id: 'pending', at: '', text: view.pending.text, attached: 0 }, s) });
+		}
+		const parts = this.host.live.parts(room.id);
+		const live = parts.map(p => ({ key: `live:${p.agentId}`, html: liveHtml(p, this.host.registry.get(p.agentId)?.name ?? p.agentId, s) }));
+		const turns = room.roster.map(id => { const a = this.host.activity.get(room.id, id); return turnState(a.state, a.work, a.error, !!a.ran); });
+		const busy = !!view.sending || parts.length > 0 || turns.some(t => t === 'working' || t === 'waiting' || t === 'queued');
+		const chips: object[] = room.roster.map((id, i) => {
+			const agent = this.host.registry.get(id);
+			const turn = turns[i];
+			return {
+				label: agent?.name ?? id,
+				dot: turn === 'working' || turn === 'queued' ? 'working' : turn === 'waiting' ? 'waiting' : agent ? '' : 'warn',
+				title: agent ? `${agent.detail}` : vscode.l10n.t('not available now'),
+				action: { type: 'model', agentId: id },
+			};
+		});
+		chips.push({ label: vscode.l10n.t('+ agent'), cls: 'add', action: { type: 'invite' } });
+		const right: object[] = [];
+		if (room.state.mode === 'plan') {
+			right.push({ label: vscode.l10n.t('Plan mode'), cls: 'ghost' });
+		}
+		if (room.roster.length === 1) {
+			const id = room.roster[0];
+			if (this.host.registry.get(id)?.choices) {
+				right.push({ label: this.modelLabel(view, room, id) || vscode.l10n.t('Default model'), cls: 'ghost', action: { type: 'model', agentId: id } });
+			}
+		} else if (room.roster.some(id => this.host.registry.get(id)?.choices)) {
+			right.push({ label: vscode.l10n.t('Models'), cls: 'ghost', action: { type: 'model' } });
+		}
+		const buttons = view.buttons.map((b, i) => `<button class="chip" data-button="${i}">${escapeHtml(b.title)}</button>`).join('');
+		const notice = view.notice.trim() || buttons ? `<div class="notice">${view.notice.trim() ? `<div class="md">${renderMarkdown(view.notice.trim())}</div>` : ''}${buttons ? `<div class="nbtns">${buttons}</div>` : ''}</div>` : '';
+		const scroll = view.scroll;
+		view.scroll = false;
+		this.post(view, {
+			type: 'thread', roomId: room.id, rows, live, notice, chips, right, busy, scroll,
+			placeholder: room.roster.length ? vscode.l10n.t('Write to the agents of this thread…') : vscode.l10n.t('Invite an agent with + agent first'),
+			strings: this.clientStrings(),
+		});
+	}
+
+	/** The cached label; a missing one is read in the background and the panel updated when it arrives. */
+	private modelLabel(view: View, room: Room, agentId: string): string {
+		const key = `${room.id}:${agentId}:${JSON.stringify(room.state.choices?.[agentId] ?? {})}`;
+		const known = this.labels.get(key);
+		if (typeof known === 'string') {
+			return known;
+		}
+		if (!known) {
+			this.labels.set(key, this.host.modelLabel(room, agentId).then(label => { this.labels.set(key, label); }, () => { this.labels.set(key, ''); }).finally(() => this.schedule(view)));
+		}
+		return '';
+	}
+
+	private cardHtml(entry: InviteEntry): string {
+		const { agent, readiness } = entry;
+		const machine = machineOf(agent.id);
+		const where = machine ? `${agent.name.split(' · ')[1] ?? machine} · SSH` : vscode.l10n.t('this machine');
+		const fix = readiness.actions?.[0]?.title;
+		const state = readiness.ready
+			? `<span class="g"></span>${escapeHtml(vscode.l10n.t('ready'))}`
+			: `<span class="w"></span>${escapeHtml(readiness.reason ?? vscode.l10n.t('not ready'))}${fix ? ` · <span class="fix" data-fix="1">${escapeHtml(fix)}</span>` : ''}`;
+		const title = agentTitle(agent.name);
+		return `<div class="top"><i class="av ${providerOf(agent.id)}">${escapeHtml((title[0] ?? '?').toUpperCase())}</i>${escapeHtml(title)}<span class="chk">${ICONS.check}</span></div>`
+			+ `<div class="sub2">${escapeHtml(where)}</div><div class="st">${state}</div>`;
+	}
+
+	private async pushNew(view: View): Promise<void> {
+		view.panel.title = vscode.l10n.t('New chat');
+		const entries = await this.host.registry.inviteList([]);
+		const last = this.context.globalState.get<string[]>(LAST_AGENTS) ?? [];
+		const project = view.project ?? vscode.workspace.workspaceFolders?.[0]?.uri.toString();
+		const reset = view.reset;
+		view.reset = false;
+		const bold = (line: string, word: string) => escapeHtml(line).replace('\u0000', `<b>${escapeHtml(word)}</b>`);
+		const hint = [
+			bold(vscode.l10n.t('{0} = that agent only.', '\u0000'), vscode.l10n.t('One selected')),
+			bold(vscode.l10n.t('{0} = a room for both.', '\u0000'), vscode.l10n.t('Two selected')),
+			escapeHtml(vscode.l10n.t('The last choice is kept.')),
+		].map(h => `<span>${h}</span>`).join('');
+		this.post(view, {
+			type: 'new',
+			cards: entries.map(e => ({ id: e.agent.id, label: e.agent.name, ready: e.readiness.ready, html: this.cardHtml(e) })),
+			selected: view.preselect ?? last,
+			reset: !!reset,
+			right: project ? [{ label: projectName(project), cls: 'ghost', title: project }] : [],
+			hint,
+			placeholder: vscode.l10n.t('What should they do?'),
+			strings: this.clientStrings(),
+		});
+	}
+
+	private async receive(view: View, message: { type?: string; text?: unknown; agents?: unknown; agentId?: unknown; id?: unknown; index?: unknown }): Promise<void> {
+		switch (message.type) {
+			case 'ready':
+				view.scroll = true;
+				this.schedule(view, 0);
+				if (view.insert) {
+					void view.panel.webview.postMessage({ type: 'insert', text: view.insert });
+					view.insert = undefined;
+				}
+				break;
+			case 'send':
+				if (typeof message.text === 'string') {
+					await this.send(view, message.text);
+				}
+				break;
+			case 'start':
+				if (typeof message.text === 'string' && Array.isArray(message.agents)) {
+					await this.start(view, message.text, message.agents.filter((a): a is string => typeof a === 'string'));
+				}
+				break;
+			case 'stop':
+				view.sending?.cancel();
+				if (view.roomId) {
+					await this.host.stop(view.roomId);
+				}
+				break;
+			case 'invite':
+				if (view.roomId) {
+					await vscode.commands.executeCommand('arkestra.rooms.invite', view.roomId);
+					this.schedule(view);
+				}
+				break;
+			case 'model':
+				if (view.roomId) {
+					await vscode.commands.executeCommand('arkestra.rooms.chooseModel', view.roomId, typeof message.agentId === 'string' ? message.agentId : undefined);
+					this.schedule(view);
+				}
+				break;
+			case 'fix':
+				if (typeof message.agentId === 'string') {
+					const entry = (await this.host.registry.inviteList([])).find(e => e.agent.id === message.agentId);
+					if (entry) {
+						await vscode.commands.executeCommand('arkestra.rooms.fixAgent', { entry });
+					}
+					this.schedule(view);
+				}
+				break;
+			case 'attach':
+				await this.attach(view);
+				break;
+			case 'copy':
+				if (view.roomId && typeof message.id === 'string') {
+					const text = (await this.host.open(view.roomId))?.messages.find(m => m.id === message.id)?.text;
+					if (text !== undefined) {
+						await vscode.env.clipboard.writeText(text);
+					}
+				}
+				break;
+			case 'button': {
+				const button = typeof message.index === 'number' ? view.buttons[message.index] : undefined;
+				if (button) {
+					await vscode.commands.executeCommand(button.command, ...(button.arguments ?? []));
+				}
+				break;
+			}
+		}
+	}
+
+	/** The first message of a new chat: the room is made with the chosen agents, then the page becomes its thread. */
+	private async start(view: View, text: string, agentIds: readonly string[]): Promise<void> {
+		if (!agentIds.length || !text.trim()) {
+			return;
+		}
+		try {
+			const room = await this.host.createRoom(agentIds, titleFrom(parseSlash(text, SLASH_COMMANDS).prompt || text, vscode.l10n.t('Room')), view.project);
+			view.roomId = room.id;
+			view.preselect = undefined;
+			view.scroll = true;
+			this.activate(view);
+			this.activeChanged.fire(room.id);
+			await this.send(view, text);
+		} catch (error) {
+			void vscode.window.showErrorMessage(vscode.l10n.t('The thread could not start: {0}', error instanceof Error ? error.message : String(error)));
+		}
+	}
+
+	/** One message through the chat's own path; its replies arrive as the room's rows. */
+	private async send(view: View, text: string): Promise<void> {
+		const room = view.roomId ? await this.host.open(view.roomId) : undefined;
+		if (!room || view.sending || !text.trim()) {
+			return;
+		}
+		const { command, prompt } = parseSlash(text, SLASH_COMMANDS);
+		if (command === 'new') {
+			this.openNew(room.state.project ? { project: room.state.project } : {});
+			return;
+		}
+		const cts = new vscode.CancellationTokenSource();
+		view.sending = cts;
+		view.roundSeen = false;
+		view.notice = '';
+		view.buttons = [];
+		view.scroll = true;
+		if (!command) {
+			view.pending = { text, after: room.messages.length };
+		}
+		await this.host.use(room);
+		this.schedule(view);
+		try {
+			await this.host.send(room, command ? { prompt, command } : { prompt: text }, this.stream(view), cts.token);
+		} catch (error) {
+			view.notice += `\n\n${vscode.l10n.t('Could not send: {0}', error instanceof Error ? error.message : String(error))}`;
+		} finally {
+			if (view.sending === cts) {
+				view.sending = undefined;
+			}
+			view.pending = undefined;
+			cts.dispose();
+			this.schedule(view);
+		}
+	}
+
+	/**
+	 * The chat path writes to a response stream; here what it writes before any turn starts (a
+	 * command's answer, the attached files) is a notice, and the turns themselves are rows.
+	 */
+	private stream(view: View): vscode.ChatResponseStream {
+		const target = {
+			markdown: (value: string | vscode.MarkdownString) => {
+				if (!view.roundSeen) {
+					view.notice += typeof value === 'string' ? value : value.value;
+					this.schedule(view);
+				}
+			},
+			button: (command: vscode.Command) => {
+				if (!view.roundSeen && command.command !== 'arkestra.rooms.invite') {
+					view.buttons.push(command);
+					this.schedule(view);
+				}
+			},
+		};
+		const noop = () => undefined;
+		return new Proxy(target, { get: (t, key) => Reflect.get(t, key) ?? noop }) as unknown as vscode.ChatResponseStream;
+	}
+
+	/** + in the composer: a file, the working tree's diff or the last terminal command as an @-reference. */
+	private async attach(view: View): Promise<void> {
+		type Item = vscode.QuickPickItem & { ref: 'file' | 'diff' | 'terminal' };
+		const pick = await vscode.window.showQuickPick<Item>([
+			{ label: `$(file) ${vscode.l10n.t('File…')}`, ref: 'file' },
+			{ label: `$(diff) ${vscode.l10n.t('Changes in the working tree')}`, description: '@diff', ref: 'diff' },
+			{ label: `$(terminal) ${vscode.l10n.t('Last terminal command')}`, description: '@terminal', ref: 'terminal' },
+		], { title: vscode.l10n.t('Attach to the message') });
+		if (!pick) {
+			return;
+		}
+		let text = `@${pick.ref}`;
+		if (pick.ref === 'file') {
+			const files = await vscode.window.showOpenDialog({ canSelectMany: true, ...(vscode.workspace.workspaceFolders?.[0] ? { defaultUri: vscode.workspace.workspaceFolders[0].uri } : {}) });
+			if (!files?.length) {
+				return;
+			}
+			text = files.map(f => {
+				const rel = vscode.workspace.asRelativePath(f, false);
+				return `@file:${/\s/.test(rel) ? `"${rel}"` : rel}`;
+			}).join(' ');
+		}
+		void view.panel.webview.postMessage({ type: 'insert', text });
+	}
+}
