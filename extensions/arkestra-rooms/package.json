@@ -66,6 +66,14 @@
           {
             "name": "execute",
             "description": "%command.execute%"
+          },
+          {
+            "name": "best",
+            "description": "%command.best%"
+          },
+          {
+            "name": "compare",
+            "description": "%command.compare%"
           }
         ]
       }
@@ -284,6 +292,14 @@
           {
             "name": "execute",
             "description": "%command.execute%"
+          },
+          {
+            "name": "best",
+            "description": "%command.best%"
+          },
+          {
+            "name": "compare",
+            "description": "%command.compare%"
           }
         ]
       }
@@ -559,6 +575,12 @@
             }
           },
           "additionalProperties": false
+        },
+        "arkestra.bestOfN.testCommand": {
+          "type": "string",
+          "scope": "resource",
+          "default": "",
+          "markdownDescription": "%bestOfN.testCommand%"
         }
       }
     }

@@ -138,7 +138,7 @@ export class CodexAgent implements Agent {
 	async turn(input: TurnInput, onEvent: (event: AgentEvent) => void, signal: AbortSignal): Promise<void> {
 		const client = await this.ensureServer(await this.options.auth());
 		const room = this.threads.get(input.roomId) ?? { seen: new Set<string>() };
-		const threadParams = { cwd: this.options.cwd() ?? null, sandbox: this.options.sandbox, approvalPolicy: 'never', model: this.options.model ?? null };
+		const threadParams = { cwd: input.cwd ?? this.options.cwd() ?? null, sandbox: this.options.sandbox, approvalPolicy: 'never', model: this.options.model ?? null };
 
 		if (room.threadId && room.server !== client) {
 			// The app-server restarted (crash, auth change): load the room's thread again.
