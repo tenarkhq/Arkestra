@@ -1,0 +1,93 @@
+{
+  "name": "arkestra-codex",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "0.1.0",
+  "publisher": "vscode",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "AI"
+  ],
+  "extensionDependencies": [
+    "vscode.arkestra-rooms"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension",
+  "capabilities": {
+    "virtualWorkspaces": false,
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Arkestra · Codex",
+      "properties": {
+        "arkestra.codex.auth": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "subscription",
+            "apiKey"
+          ],
+          "enumDescriptions": [
+            "%auth.auto%",
+            "%auth.subscription%",
+            "%auth.apiKey%"
+          ],
+          "default": "auto",
+          "description": "%auth%"
+        },
+        "arkestra.codex.command": {
+          "type": "string",
+          "default": "codex",
+          "description": "%command%"
+        },
+        "arkestra.codex.model": {
+          "type": "string",
+          "default": "",
+          "description": "%model%"
+        },
+        "arkestra.codex.sandbox": {
+          "type": "string",
+          "enum": [
+            "read-only",
+            "workspace-write",
+            "danger-full-access"
+          ],
+          "enumDescriptions": [
+            "%sandbox.readOnly%",
+            "%sandbox.workspaceWrite%",
+            "%sandbox.full%"
+          ],
+          "default": "workspace-write",
+          "description": "%sandbox%"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "arkestra.codex.setApiKey",
+        "title": "%setApiKey%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.codex.clearApiKey",
+        "title": "%clearApiKey%",
+        "category": "Arkestra"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "gulp compile-extension:arkestra-codex",
+    "watch": "gulp watch-extension:arkestra-codex"
+  },
+  "devDependencies": {
+    "@types/node": "24.x"
+  }
+}
