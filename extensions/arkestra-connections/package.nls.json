@@ -1,0 +1,13 @@
+{
+  "displayName": "Arkestra · Connections",
+  "description": "Where agents run: this machine or other machines over SSH.",
+  "machines": "Machines that agents can run on over SSH. Keys come from your SSH agent and ~/.ssh/config; passwords are not asked.",
+  "machine.id": "Stable id: letters, digits and hyphens.",
+  "machine.name": "Name shown next to the machine's agents.",
+  "machine.host": "SSH destination: an alias from ~/.ssh/config or user@host.",
+  "machine.port": "SSH port, if not the default or the one in ~/.ssh/config.",
+  "machine.folder": "Project folder on the machine; ~/… is the remote home. Empty: the home folder.",
+  "sshCommand": "The OpenSSH client command.",
+  "show": "Connections",
+  "add": "New SSH connection"
+}

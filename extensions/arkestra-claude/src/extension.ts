@@ -3,7 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { ClaudeCodeAgent } from './claudeCode';
+import { ClaudeCodeAgent, type ClaudeCodeOptions } from './claudeCode';
+import type { ArkestraConnectionsApi } from './connections';
 import type { ArkestraRoomsApi } from './rooms';
 
 const KEY = 'arkestra.claude.apiKey';
@@ -16,7 +17,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const api = await rooms.activate();
 	const config = () => vscode.workspace.getConfiguration('arkestra.claude');
 
-	const agent = new ClaudeCodeAgent({
+	const base: ClaudeCodeOptions = {
 		get command() { return config().get<string>('command') || 'claude'; },
 		get model() { return config().get<string>('model') || undefined; },
 		get permissionMode() { return config().get<string>('permissionMode') || 'acceptEdits'; },
@@ -28,7 +29,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			}
 			return context.secrets.get(KEY);
 		},
-	});
+	};
+	const agent = new ClaudeCodeAgent(base);
+
+	// One more Claude per SSH machine, running that machine's Claude Code CLI.
+	const connections = await vscode.extensions.getExtension<ArkestraConnectionsApi>('vscode.arkestra-connections')?.activate();
+	let remote: vscode.Disposable[] = [];
+	const syncRemote = () => {
+		remote.forEach(d => d.dispose());
+		remote = (connections?.machines() ?? []).flatMap(machine => {
+			const spawn = connections?.spawnFor(machine.id);
+			if (!spawn) {
+				return [];
+			}
+			const options: ClaudeCodeOptions = Object.create(base, {
+				spawn: { value: spawn },
+				cwd: { value: () => undefined },
+				identity: { value: { id: `claude@${machine.id}`, name: `Claude · ${machine.name}`, where: machine.name } },
+			});
+			return [api.registerAgent(new ClaudeCodeAgent(options))];
+		});
+	};
+	syncRemote();
+	if (connections) {
+		context.subscriptions.push(connections.onDidChangeMachines(syncRemote), { dispose: () => remote.forEach(d => d.dispose()) });
+	}
 
 	context.subscriptions.push(
 		api.registerAgent(agent),

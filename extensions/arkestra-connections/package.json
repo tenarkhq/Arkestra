@@ -1,0 +1,88 @@
+{
+  "name": "arkestra-connections",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "0.1.0",
+  "publisher": "vscode",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "AI"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension",
+  "capabilities": {
+    "virtualWorkspaces": false,
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Arkestra · Connections",
+      "properties": {
+        "arkestra.connections.machines": {
+          "type": "array",
+          "default": [],
+          "description": "%machines%",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "host"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9-]+$",
+                "description": "%machine.id%"
+              },
+              "name": {
+                "type": "string",
+                "description": "%machine.name%"
+              },
+              "host": {
+                "type": "string",
+                "description": "%machine.host%"
+              },
+              "port": {
+                "type": "number",
+                "description": "%machine.port%"
+              },
+              "folder": {
+                "type": "string",
+                "description": "%machine.folder%"
+              }
+            }
+          }
+        },
+        "arkestra.connections.sshCommand": {
+          "type": "string",
+          "default": "ssh",
+          "description": "%sshCommand%"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "arkestra.connections.show",
+        "title": "%show%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.connections.add",
+        "title": "%add%",
+        "category": "Arkestra"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "gulp compile-extension:arkestra-connections",
+    "watch": "gulp watch-extension:arkestra-connections"
+  },
+  "devDependencies": {
+    "@types/node": "24.x"
+  }
+}
