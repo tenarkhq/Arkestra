@@ -60,6 +60,11 @@ test('the first turn sends the preamble and the whole thread, the next resumes t
 	const p2 = second.args[second.args.indexOf('-p') + 1];
 	assert.equal(p2, '[You]\nnow the test');
 	assert.deepEqual(second.args.slice(second.args.indexOf('--resume'), second.args.indexOf('--resume') + 2), ['--resume', 's1']);
+	const mode = (c: { args: string[] }) => c.args[c.args.indexOf('--permission-mode') + 1];
+	assert.equal(mode(first), 'acceptEdits');
+
+	await agent.turn({ roomId: 'r', transcript: [...t2, msg('user', 'user', 'plan it')], mode: 'plan' }, () => { }, new AbortController().signal);
+	assert.equal(mode((await calls())[2]), 'plan', 'a Plan mode turn runs in Claude Code\'s own plan mode');
 });
 
 test('subscription leaves the API key out; a stored key is passed to the CLI', async () => {

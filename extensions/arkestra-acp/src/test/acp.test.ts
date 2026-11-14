@@ -35,9 +35,9 @@ async function setup(env: Record<string, string> = {}, askPermission: AcpOptions
 	return { agent, dir, file, log };
 }
 
-async function turn(agent: AcpAgent, roomId: string, transcript: Message[], signal = new AbortController().signal) {
+async function turn(agent: AcpAgent, roomId: string, transcript: Message[], signal = new AbortController().signal, mode?: 'plan') {
 	const events: AgentEvent[] = [];
-	await agent.turn({ roomId, transcript }, e => events.push(e), signal);
+	await agent.turn({ roomId, transcript, ...(mode ? { mode } : {}) }, e => events.push(e), signal);
 	return events;
 }
 
@@ -183,6 +183,23 @@ test('by id, not by count: a message written during the turn comes next time; an
 		await turn(agent, 'r1', [m1, during, own, forCodex, forMe]);
 		const last = (await log()).filter(l => l.startsWith('prompt')).at(-1)!;
 		assert.ok(last.endsWith(': "[codex (agent)]\\nmeanwhile\\n\\n[room] only for fake"'), last);
+	} finally {
+		agent.dispose();
+	}
+});
+
+test('Plan mode: the agent\'s own plan mode for the turn, then back; writes, terminals and permissions are refused', async () => {
+	const asked: string[] = [];
+	const { agent, file, log } = await setup({ FAKE_MODES: '1' }, async (_n, title) => { asked.push(title); return 'yes'; });
+	try {
+		const events = await turn(agent, 'r1', [msg(1, 'user', 'me', 'PLAN it')], undefined, 'plan');
+		assert.deepEqual(events, [{ kind: 'text', text: 'write=refused term=refused permission=no' }]);
+		assert.deepEqual(asked, [], 'the user is not asked in Plan mode: the change is declined');
+		await assert.rejects(readFile(`${file}.plan`, 'utf8'));
+		assert.deepEqual((await log()).filter(l => l.startsWith('mode')), ['mode plan', 'mode default']);
+		const normal = await turn(agent, 'r1', [msg(1, 'user', 'me', 'PLAN it'), msg(2, 'user', 'me', 'PLAN again, normal turn')]);
+		assert.deepEqual(normal, [{ kind: 'text', text: 'write=ok term=ok permission=yes' }], 'after Plan mode changes work again');
+		assert.deepEqual((await log()).filter(l => l.startsWith('mode')), ['mode plan', 'mode default'], 'a normal turn does not switch modes');
 	} finally {
 		agent.dispose();
 	}

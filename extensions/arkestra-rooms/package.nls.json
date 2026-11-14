@@ -44,5 +44,7 @@
   "inline.reject": "Reject the in-place proposal",
   "inline.followUp": "Follow up on the in-place proposal",
   "inline.diff": "Show the in-place proposal as a diff",
-  "inline.agent": "Choose the agent for in-place edits"
+  "inline.agent": "Choose the agent for in-place edits",
+  "command.plan": "Plan mode: the agents read and plan, nothing is changed",
+  "command.execute": "Leave Plan mode and run the plan"
 }

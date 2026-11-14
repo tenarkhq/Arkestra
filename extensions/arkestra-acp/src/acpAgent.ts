@@ -53,6 +53,8 @@ interface RoomSession {
 	 * template room other agents write while this one works.
 	 */
 	seen: Set<string>;
+	/** The agent's own session modes (ACP), when it has them: Plan mode uses its 'plan' mode. */
+	modes?: { current: string; available: string[] };
 }
 
 interface Connection {
@@ -92,6 +94,8 @@ export class AcpAgent implements Agent {
 	private readonly terminals: Terminals;
 	/** Abort signals of the running turns per session, for permission prompts. */
 	private readonly running = new Map<string, AbortSignal>();
+	/** Sessions whose running turn is a Plan mode turn: writes, terminals and permissions are refused. */
+	private readonly planning = new Set<string>();
 
 	constructor(private readonly options: AcpOptions) {
 		this.files = options.files ?? localFiles;
@@ -136,8 +140,8 @@ export class AcpAgent implements Agent {
 			// The agent restarted: load the room's session if it can, otherwise start over.
 			if (info.loadSession) {
 				// The history it replays is already in the room; no turn listens to it.
-				await peer.request('session/load', { sessionId: room.sessionId, cwd, mcpServers: [] })
-					.then(() => { room.peer = peer; })
+				await peer.request<{ modes?: AcpModes }>('session/load', { sessionId: room.sessionId, cwd, mcpServers: [] })
+					.then(loaded => { room.peer = peer; room.modes = readModes(loaded?.modes); })
 					.catch(() => { room.sessionId = undefined; room.seen = new Set(); });
 			} else {
 				room.sessionId = undefined;
@@ -147,10 +151,11 @@ export class AcpAgent implements Agent {
 		const fresh = !room.sessionId;
 		if (fresh) {
 			try {
-				const created = await peer.request<{ sessionId: string }>('session/new', { cwd, mcpServers: [] });
+				const created = await peer.request<{ sessionId: string; modes?: AcpModes }>('session/new', { cwd, mcpServers: [] });
 				room.sessionId = created.sessionId;
 				room.peer = peer;
 				room.seen = new Set();
+				room.modes = readModes(created.modes);
 			} catch (e) {
 				if (e instanceof RpcError && e.code === AUTH_REQUIRED) {
 					this.needsSignIn = true;
@@ -203,6 +208,15 @@ export class AcpAgent implements Agent {
 		const cancel = () => peer.notify('session/cancel', { sessionId });
 		signal.addEventListener('abort', cancel);
 		this.running.set(sessionId, signal);
+		// Plan mode: the agent's own plan mode when it has one; the client side refuses changes either way.
+		const plan = input.mode === 'plan';
+		const restoreMode = plan && room.modes?.available.includes('plan') && room.modes.current !== 'plan' ? room.modes.current : undefined;
+		if (plan) {
+			this.planning.add(sessionId);
+			if (restoreMode) {
+				await peer.request('session/set_mode', { sessionId, modeId: 'plan' }).catch(() => undefined);
+			}
+		}
 		try {
 			const result = await peer.request<{ stopReason: string }>('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
 			flush();
@@ -223,6 +237,12 @@ export class AcpAgent implements Agent {
 			}
 			throw e;
 		} finally {
+			if (plan) {
+				this.planning.delete(sessionId);
+				if (restoreMode) {
+					await peer.request('session/set_mode', { sessionId, modeId: restoreMode }).catch(() => undefined);
+				}
+			}
 			signal.removeEventListener('abort', cancel);
 			this.running.delete(sessionId);
 			subscription.dispose();
@@ -278,8 +298,19 @@ export class AcpAgent implements Agent {
 	/** The client side of ACP: files, terminals and permission. */
 	private serveClient(peer: JsonRpcPeer): void {
 		peer.serve('fs/read_text_file', async p => ({ content: sliceLines(await this.files.read(p.path), p.line, p.limit) }));
-		peer.serve('fs/write_text_file', async p => { await this.files.write(p.path, p.content); return null; });
-		peer.serve('terminal/create', p => this.terminals.create(p));
+		peer.serve('fs/write_text_file', async p => {
+			if (this.planning.has(p.sessionId)) {
+				throw new RpcError(-32603, PLAN_REFUSAL);
+			}
+			await this.files.write(p.path, p.content);
+			return null;
+		});
+		peer.serve('terminal/create', async p => {
+			if (this.planning.has(p.sessionId)) {
+				throw new RpcError(-32603, PLAN_REFUSAL);
+			}
+			return this.terminals.create(p);
+		});
 		peer.serve('terminal/output', p => this.terminals.output(p.terminalId));
 		peer.serve('terminal/wait_for_exit', p => this.terminals.waitForExit(p.terminalId));
 		peer.serve('terminal/kill', p => { this.terminals.kill(p.terminalId); return null; });
@@ -290,8 +321,23 @@ export class AcpAgent implements Agent {
 				return { outcome: { outcome: 'cancelled' } };
 			}
 			const options: PermissionOption[] = Array.isArray(p.options) ? p.options : [];
+			if (this.planning.has(p.sessionId)) {
+				const reject = options.find(o => o.kind === 'reject_once') ?? options.find(o => o.kind === 'reject_always');
+				return reject ? { outcome: { outcome: 'selected', optionId: reject.optionId } } : { outcome: { outcome: 'cancelled' } };
+			}
 			const chosen = await this.options.askPermission(this.name, describeToolCall(p.toolCall ?? {}), options, signal);
 			return chosen && !signal.aborted ? { outcome: { outcome: 'selected', optionId: chosen } } : { outcome: { outcome: 'cancelled' } };
 		});
 	}
+}
+
+const PLAN_REFUSAL = 'Plan mode: nothing may be changed in this turn. Write the plan instead.';
+
+interface AcpModes {
+	currentModeId?: string;
+	availableModes?: { id: string }[];
+}
+
+function readModes(modes: AcpModes | undefined): RoomSession['modes'] {
+	return modes?.currentModeId && Array.isArray(modes.availableModes) ? { current: modes.currentModeId, available: modes.availableModes.map(m => m.id) } : undefined;
 }

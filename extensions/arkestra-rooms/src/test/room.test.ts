@@ -89,3 +89,16 @@ test('a room survives a save and load', async () => {
 	assert.deepEqual(loaded, room.state);
 	assert.deepEqual((await store.list()).map(r => r.id), [room.id]);
 });
+
+test('Plan mode reaches every agent\'s turn while it is on, and stops when it is off', async () => {
+	const registry = new AgentRegistry();
+	const modes: (string | undefined)[] = [];
+	registry.register({ id: 'a', name: 'A', detail: 'test', readiness: async () => ({ ready: true }), turn: async input => { modes.push(input.mode); } });
+	const room = new Room(newRoomState('t'), registry);
+	await room.invite('a');
+	room.state.mode = 'plan';
+	await room.say('plan it', () => { }, new AbortController().signal);
+	room.state.mode = undefined;
+	await room.say('go', () => { }, new AbortController().signal);
+	assert.deepEqual(modes, ['plan', undefined]);
+});

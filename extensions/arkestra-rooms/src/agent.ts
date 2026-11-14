@@ -30,6 +30,8 @@ export interface TurnInput {
 	readonly roomId: string;
 	/** The whole thread from its first message, every author included. */
 	readonly transcript: readonly Message[];
+	/** 'plan': the room is in Plan mode; the agent may read but must not change anything. */
+	readonly mode?: 'plan';
 }
 
 export interface Agent {
