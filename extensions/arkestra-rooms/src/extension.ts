@@ -20,6 +20,7 @@ import { Permissions, type PermissionsApi } from './permissionsUi';
 import { SharedContext } from './sharedUi';
 import { extractMemories } from './shared';
 import { BestOfN } from './bestUi';
+import { ArtifactGallery } from './artifactsUi';
 import { contextPercent, ringSvg, statusText, tightestLimit, usageLine, formatTokens } from './usage';
 import { GitTemplateIO, createWorkTrees } from './templates/gitio';
 import { TemplateRun } from './templates/run';
@@ -551,6 +552,12 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	// ChatRequestTurn's constructor is internal in the typings; the runtime class takes these arguments.
 	const RequestTurn = vscode.ChatRequestTurn as unknown as new (prompt: string, command: string | undefined, references: [], participant: string, toolReferences: []) => vscode.ChatRequestTurn;
 
+	// The artifact gallery: every agent's output of every thread (AR26).
+	const gallery = new ArtifactGallery(context, async () => (await store.list()).map(state => loaded.get(state.id)?.state ?? state), async roomId => {
+		await vscode.commands.executeCommand('vscode.open', sessionUri(roomId));
+	});
+	context.subscriptions.push(gallery, currentChanged.event(() => gallery.refresh()));
+
 	const allThreads = async (): Promise<ThreadSummary[]> => (await store.list()).map(state => summarize(loaded.get(state.id)?.state ?? state));
 	const busy = (roomId: string) => (loaded.get(roomId)?.roster ?? []).some(id => activity.get(roomId, id).state !== 'idle');
 
@@ -647,6 +654,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		refreshTimer = setTimeout(() => {
 			changedThreads.fire();
 			void controller.refreshHandler(new vscode.CancellationTokenSource().token);
+			gallery.refresh();
 		}, 300);
 	};
 	refreshThreadsLater = refreshThreads;

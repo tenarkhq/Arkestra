@@ -55,5 +55,6 @@
   "shared.remember": "Remember for every agent…",
   "command.best": "Best-of-N: the task for every agent (or N tries), each in its own work tree",
   "command.compare": "The agents compare the latest Best-of-N attempts",
-  "bestOfN.testCommand": "Test command run in every Best-of-N attempt's work tree after it finishes (empty: none), for example `npm test`."
+  "bestOfN.testCommand": "Test command run in every Best-of-N attempt's work tree after it finishes (empty: none), for example `npm test`.",
+  "artifacts.open": "Artifacts: every agent's output in one place"
 }
