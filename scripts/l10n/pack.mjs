@@ -78,7 +78,16 @@ for (const [id, source] of Object.entries(en.extensions)) {
 }
 
 const manifestPath = path.join(packDir, 'package.json');
-const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, 'utf8')) : {
+	name: `arkestra-language-pack-${lang}`,
+	displayName: `Arkestra language pack (${lang})`,
+	version: '0.1.0',
+	publisher: 'vscode',
+	license: 'MIT',
+	engines: { vscode: '^1.100.0' },
+	categories: ['Language Packs'],
+	contributes: { localizations: [{ languageId: lang, languageName: lang, localizedLanguageName: lang, translations: [] }] },
+};
 manifest.contributes.localizations[0].translations = translations;
 writeFileSync(manifestPath, JSON.stringify(manifest, null, '\t') + '\n');
 
