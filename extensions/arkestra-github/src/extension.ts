@@ -303,8 +303,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 		onDidChange: boardChanged.event,
 		setField: (itemId, field, value) => need().setField(itemId, field, value),
 		createIssue: (repository, title, body, fields) => need().createIssue(repository, title, body, fields),
+		addDependency: (blocked, blocking) => need().addDependency(blocked, blocking),
+		removeDependency: (blocked, blocking) => need().removeDependency(blocked, blocking),
 		refresh: async () => { await need().refresh(); },
-	});
+	}, context.workspaceState);
 	context.subscriptions.push(
 		boardChanged, board,
 		projectChanged.event(() => boardChanged.fire()),

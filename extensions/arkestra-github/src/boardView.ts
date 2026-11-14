@@ -10,6 +10,7 @@ import { boardModel, type RoomInfo } from './board';
 import { boardHtml } from './boardHtml';
 import { readGitInfo } from './gitInfo';
 import { planModel, type GitInfo } from './plan';
+import { graphModel, wouldCycle, type GraphSaved } from './graph';
 import type { FieldInput, ProjectSnapshot } from './project';
 import type { JournalEntry, SyncStatus } from './sync';
 
@@ -23,6 +24,8 @@ export interface BoardSource {
 	readonly onDidChange: vscode.Event<void>;
 	setField(itemId: string, fieldId: string, value: FieldInput): Promise<void>;
 	createIssue(repository: string, title: string, body?: string, fields?: Readonly<Record<string, FieldInput>>): Promise<string>;
+	addDependency(blockedItemId: string, blockingItemId: string): Promise<void>;
+	removeDependency(blockedItemId: string, blockingItemId: string): Promise<void>;
 	refresh(): Promise<void>;
 }
 
@@ -43,7 +46,7 @@ export class ProjectBoard implements vscode.Disposable {
 	private gitTimer: ReturnType<typeof setTimeout> | undefined;
 	private gitTicker: ReturnType<typeof setInterval> | undefined;
 
-	constructor(private readonly source: BoardSource) {
+	constructor(private readonly source: BoardSource, private readonly memento: vscode.Memento) {
 		this.disposables.push(
 			vscode.commands.registerCommand('arkestra.github.openBoard', () => this.open()),
 			vscode.window.registerWebviewPanelSerializer(VIEW, { deserializeWebviewPanel: async panel => this.adopt(panel) }),
@@ -179,7 +182,8 @@ export class ProjectBoard implements vscode.Disposable {
 			journal: this.source.journal(),
 			clock,
 		});
-		void panel.webview.postMessage({ type: 'model', model: { ...model, plan } });
+		const graph = graphModel(snap, this.rooms, plan, this.saved(snap));
+		void panel.webview.postMessage({ type: 'model', model: { ...model, plan, graph } });
 	}
 
 	private async receive(m: any): Promise<void> {
@@ -208,6 +212,40 @@ export class ProjectBoard implements vscode.Disposable {
 					await this.source.createIssue(String(m.repository), String(m.title), '', statusId && m.optionId ? { [statusId]: { optionId: String(m.optionId) } } : undefined);
 					return;
 				}
+				case 'addDependency': {
+					const snap = this.source.snapshot();
+					if (!snap) {
+						return;
+					}
+					const blocking = String(m.blocking);
+					const blocked = String(m.blocked);
+					const plan = planModel({ snapshot: snap, rooms: this.rooms });
+					if (wouldCycle(graphModel(snap, this.rooms, plan).edges, blocking, blocked)) {
+						void vscode.window.showWarningMessage(vscode.l10n.t('That link would make the tasks wait for each other in a loop.'));
+						return;
+					}
+					await this.source.addDependency(blocked, blocking);
+					return;
+				}
+				case 'notice': void vscode.window.showInformationMessage(String(m.text)); return;
+				case 'removeDependency': await this.source.removeDependency(String(m.blocked), String(m.blocking)); return;
+				case 'addLoose': {
+					const pair: [string, string] = [String(m.a), String(m.b)];
+					if (pair[0] !== pair[1]) {
+						await this.updateSaved(s => ({ ...s, loose: [...(s.loose ?? []).filter(([a, b]) => !(a === pair[0] && b === pair[1]) && !(a === pair[1] && b === pair[0])), pair] }));
+					}
+					return;
+				}
+				case 'removeLoose': await this.updateSaved(s => ({ ...s, loose: (s.loose ?? []).filter(([a, b]) => !((a === m.a && b === m.b) || (a === m.b && b === m.a))) })); return;
+				case 'savePosition': {
+					const x = Math.round(Number(m.x));
+					const y = Math.round(Number(m.y));
+					if (Number.isFinite(x) && Number.isFinite(y)) {
+						await this.updateSaved(s => ({ ...s, positions: { ...(s.positions ?? {}), [String(m.id)]: [Math.max(0, x), Math.max(0, y)] as const } }));
+					}
+					return;
+				}
+				case 'autoLayout': await this.updateSaved(s => ({ ...s, positions: {} })); return;
 				case 'startRoom': {
 					const item = this.source.snapshot()?.items.find(i => i.id === m.itemId);
 					if (item) {
@@ -219,6 +257,23 @@ export class ProjectBoard implements vscode.Disposable {
 		} catch (error) {
 			void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 			this.post(); // the model already shows the value GitHub kept
+		}
+	}
+
+	/** The Graph view's own state for this project: node places and loose links. */
+	private key(snap: ProjectSnapshot): string {
+		return `arkestra.github.graph:${snap.owner.toLowerCase()}/${snap.number}`;
+	}
+
+	private saved(snap: ProjectSnapshot): GraphSaved {
+		return this.memento.get<GraphSaved>(this.key(snap)) ?? {};
+	}
+
+	private async updateSaved(change: (s: GraphSaved) => GraphSaved): Promise<void> {
+		const snap = this.source.snapshot();
+		if (snap) {
+			await this.memento.update(this.key(snap), change(this.saved(snap)));
+			this.schedule();
 		}
 	}
 

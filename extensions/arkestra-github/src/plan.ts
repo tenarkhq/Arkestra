@@ -68,7 +68,7 @@ export interface PlanModel {
 	readonly rails: readonly Rail[];
 	readonly levels: number;
 	readonly stairs: readonly { readonly lane: string; readonly percent: number; readonly cells: readonly StairCell[] }[];
-	readonly critical: readonly { readonly lane: string; readonly path: readonly string[] }[];
+	readonly critical: readonly { readonly lane: string; readonly path: readonly string[]; readonly ids: readonly string[] }[];
 }
 
 const DONE = /^(done|kész|closed|merged|shipped)$/i;
@@ -263,7 +263,7 @@ export function planModel(input: PlanInput): PlanModel {
 	// The staircase and the critical path of every lane with work left.
 	const lv = levels(items);
 	const maxLevel = Math.max(0, ...lv.values());
-	const critical: { lane: string; path: string[] }[] = [];
+	const critical: { lane: string; path: string[]; ids: string[] }[] = [];
 	const onPath = new Set<string>();
 	for (const lane of lanes) {
 		if (lane.state === 'released') {
@@ -273,7 +273,7 @@ export function planModel(input: PlanInput): PlanModel {
 		const chain = criticalPath(own, items, i => weight(i) * (1 - fill(i)));
 		if (chain.length) {
 			chain.forEach(i => onPath.add(i.id));
-			critical.push({ lane: lane.name, path: [...chain.map(label), lane.name === BACKLOG ? '' : `Release ${lane.name}`].filter(Boolean) });
+			critical.push({ lane: lane.name, path: [...chain.map(label), lane.name === BACKLOG ? '' : `Release ${lane.name}`].filter(Boolean), ids: chain.map(i => i.id) });
 		}
 	}
 	const byContent = new Map(items.filter(i => i.contentId).map(i => [i.contentId!, i]));
