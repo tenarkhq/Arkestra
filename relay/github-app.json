@@ -1,0 +1,35 @@
+{
+	"name": "Arkestra",
+	"url": "https://github.com/tenarkhq/Arkestra",
+	"description": "Arkestra agent IDE: live CI, pull requests, reviews, issues and project board events in the IDE, and changes made in the IDE written back.",
+	"public": false,
+	"hook_attributes": {
+		"url": "https://EDGE_HOST/github/webhook",
+		"active": true
+	},
+	"request_oauth_on_install": false,
+	"setup_on_update": false,
+	"default_permissions": {
+		"metadata": "read",
+		"contents": "write",
+		"issues": "write",
+		"pull_requests": "write",
+		"checks": "read",
+		"actions": "read",
+		"statuses": "read",
+		"organization_projects": "write"
+	},
+	"default_events": [
+		"issues",
+		"issue_comment",
+		"pull_request",
+		"pull_request_review",
+		"pull_request_review_comment",
+		"check_run",
+		"check_suite",
+		"workflow_run",
+		"push",
+		"status",
+		"projects_v2_item"
+	]
+}
