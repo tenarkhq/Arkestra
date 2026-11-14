@@ -7,7 +7,7 @@ import * as assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { ClaudeCodeAgent, ROOM_PREAMBLE, parseLine } from '../claudeCode';
+import { ClaudeCodeAgent, permissionArgs, ROOM_PREAMBLE, parseLine } from '../claudeCode';
 import type { AgentEvent, Message } from '../rooms';
 
 const FAKE = `#!/usr/bin/env node
@@ -104,4 +104,12 @@ test('readiness: found CLI is ready, a missing one says install, a signed-out on
 test('stream-json lines map to text and tool events', () => {
 	assert.deepEqual(parseLine('not json').events, []);
 	assert.deepEqual(parseLine(JSON.stringify({ type: 'result', is_error: false, result: 'x', session_id: 'a' })), { events: [], sessionId: 'a', result: { isError: false, text: 'x' } });
+});
+
+test('permission lists go to Claude Code as its own flags, one argument per rule', () => {
+	assert.deepEqual(permissionArgs(undefined), []);
+	assert.deepEqual(permissionArgs({ allow: [], deny: [] }), []);
+	assert.deepEqual(permissionArgs({ allow: ['Bash(npm test:*)', 'Bash(git log --format=%h,%s)', ' Read '], deny: ['Bash(rm:*)'] }),
+		['--allowedTools', 'Bash(npm test:*)', 'Bash(git log --format=%h,%s)', 'Read', '--disallowedTools', 'Bash(rm:*)']);
+	assert.deepEqual(permissionArgs({ allow: ['*'], deny: [] }).slice(0, 3), ['--allowedTools', 'Bash', 'Edit']);
 });

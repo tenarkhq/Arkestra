@@ -26,8 +26,10 @@ process.stdin.on('data', d => {
   let i;
   while ((i = buf.indexOf('\\n')) >= 0) { handle(JSON.parse(buf.slice(0, i))); buf = buf.slice(i + 1); }
 });
+const waiting = new Map();
 function handle(m) {
   log(m);
+  if (m.method === undefined) { const cb = waiting.get(m.id); waiting.delete(m.id); return cb && cb(m); }
   const reply = result => out({ id: m.id, result });
   switch (m.method) {
     case 'initialize': return reply({ userAgent: 'fake' });
@@ -43,6 +45,15 @@ function handle(m) {
       const turnId = 'tu' + (++n);
       reply({ turn: { id: turnId, status: 'inProgress' } });
       if (text.includes('HANG')) return;
+      const ask = /ASK (.+)$/.exec(text);
+      if (ask) {
+        const id = 900 + n;
+        waiting.set(id, resp => {
+          out({ method: 'item/completed', params: { threadId: 'th1', turnId, item: { type: 'agentMessage', text: 'decision=' + (resp.result ? resp.result.decision : resp.error.message) } } });
+          out({ method: 'turn/completed', params: { threadId: 'th1', turn: { id: turnId, status: 'completed', error: null } } });
+        });
+        return out({ id, method: 'item/commandExecution/requestApproval', params: { threadId: 'th1', turnId, itemId: 'i1', command: ask[1], startedAtMs: 0 } });
+      }
       if (text.endsWith('DIE')) return process.exit(3);
       if (text.includes('FAIL')) {
         out({ method: 'error', params: { threadId: 'th1', turnId, willRetry: false, error: { message: 'usage limit reached' } } });
@@ -181,4 +192,33 @@ test('thread items map to tool lines', () => {
 	assert.equal(describeItem({ type: 'mcpToolCall', server: 'github', tool: 'get_issue' }), 'github.get_issue');
 	assert.equal(describeItem({ type: 'webSearch', query: 'codex app-server' }), 'Search codex app-server');
 	assert.equal(describeItem({ type: 'reasoning' }), undefined);
+});
+
+test('permission lists: with rules Codex runs "untrusted" and the lists answer its approvals; without rules it never asks', async () => {
+	const dir = await mkdtemp(path.join(tmpdir(), 'arkestra-codex-'));
+	const cli = path.join(dir, 'codex');
+	await writeFile(cli, FAKE);
+	await chmod(cli, 0o755);
+	process.env.FAKE_LOG = path.join(dir, 'log');
+	let rules = true;
+	const asked: string[] = [];
+	const agent = new CodexAgent({
+		command: cli, sandbox: 'workspace-write', cwd: () => dir, auth: async () => ({ mode: 'subscription' }), apiKeyHome: path.join(dir, 'key-home'),
+		permissions: {
+			active: () => rules,
+			ask: async request => { asked.push(`${request.tool}:${request.command}`); return request.command?.startsWith('npm test') ? 'allow' : 'deny'; },
+		},
+	});
+	const answers: string[] = [];
+	const t1 = [msg('user', 'user', 'ASK npm test --watch')];
+	await agent.turn({ roomId: 'r', transcript: t1 }, e => { if (e.kind === 'text') { answers.push(e.text); } }, never());
+	const t2 = [...t1, msg('user', 'user', 'ASK rm -rf build')];
+	await agent.turn({ roomId: 'r', transcript: t2 }, e => { if (e.kind === 'text') { answers.push(e.text); } }, never());
+	rules = false;
+	await agent.turn({ roomId: 'r', transcript: [...t2, msg('user', 'user', 'plain')] }, () => { }, never());
+	assert.deepEqual(answers, ['decision=accept', 'decision=decline']);
+	assert.deepEqual(asked, ['Bash:npm test --watch', 'Bash:rm -rf build']);
+	const turns = (await readFile(process.env.FAKE_LOG!, 'utf8')).trim().split('\n').map(l => JSON.parse(l)).filter(m => m.method === 'turn/start');
+	assert.deepEqual(turns.map(t => t.params.approvalPolicy), ['untrusted', 'untrusted', 'never']);
+	agent.dispose();
 });

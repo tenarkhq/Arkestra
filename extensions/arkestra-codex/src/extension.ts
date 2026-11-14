@@ -45,12 +45,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	}
 	const api = await rooms.activate();
 	const config = () => vscode.workspace.getConfiguration('arkestra.codex');
+	// The permission lists of the machine Codex runs on, joined with the project's (AR22).
+	const permissionsFor = (machine: string, name: string): CodexOptions['permissions'] => {
+		const permissions = api.permissions;
+		return permissions && {
+			active: () => { const r = permissions.rules(machine); return r.allow.length + r.deny.length > 0; },
+			ask: (request, signal) => permissions.ask(name, machine, request, signal),
+		};
+	};
 
 	const base: CodexOptions = {
 		get command() { return config().get<string>('command') || 'codex'; },
 		get model() { return config().get<string>('model') || undefined; },
 		get sandbox() { return config().get<CodexOptions['sandbox']>('sandbox') || 'workspace-write'; },
 		cwd: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+		permissions: permissionsFor('local', 'Codex'),
 		auth: async () => {
 			const auth = config().get<string>('auth') || 'auto';
 			if (auth === 'subscription') {
@@ -93,6 +102,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				cwd: { value: () => undefined },
 				apiKeyHome: { value: '~/.arkestra/codex-home' },
 				identity: { value: { id: `codex@${machine.id}`, name: `Codex · ${machine.name}`, where: machine.name } },
+				permissions: { value: permissionsFor(machine.id, `Codex · ${machine.name}`) },
 			});
 			const remoteAgent = new CodexAgent(options);
 			return [api.registerAgent(withActions(remoteAgent, actions(machine.id))), { dispose: () => remoteAgent.dispose() }];

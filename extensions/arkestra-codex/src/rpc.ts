@@ -22,6 +22,7 @@ export class RpcClient {
 	private readonly pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
 	private readonly listeners = new Set<(n: Notification) => void>();
 	private readonly closeListeners = new Set<(error: Error) => void>();
+	private requestHandler?: (method: string, params: any) => Promise<unknown> | undefined;
 	private closedWith: Error | undefined;
 	stderr = '';
 
@@ -77,6 +78,11 @@ export class RpcClient {
 		return { dispose: () => this.listeners.delete(listener) };
 	}
 
+	/** Answers the server's requests (approvals); one that returns undefined is refused. */
+	onRequest(handler: (method: string, params: any) => Promise<unknown> | undefined): void {
+		this.requestHandler = handler;
+	}
+
 	/** Called once when the process ends, with its last stderr line or exit code. */
 	onClose(listener: (error: Error) => void): { dispose(): void } {
 		this.closeListeners.add(listener);
@@ -107,9 +113,16 @@ export class RpcClient {
 				p?.resolve(message.result);
 			}
 		} else if (message.id !== undefined) {
-			// A server request (approval, user input). Rooms run with approval policy "never"
-			// until the approval UI exists, so anything that still asks is declined, never left hanging.
-			this.write({ id: message.id, error: { code: -32601, message: 'Arkestra does not handle this request yet' } });
+			// A server request (approval, user input): answered by the handler, or refused, never left hanging.
+			const answer = this.requestHandler?.(message.method, message.params);
+			if (!answer) {
+				this.write({ id: message.id, error: { code: -32601, message: 'Arkestra does not handle this request' } });
+				return;
+			}
+			answer.then(
+				result => this.write({ id: message.id, result }),
+				error => this.write({ id: message.id, error: { code: -32603, message: error instanceof Error ? error.message : String(error) } }),
+			);
 		} else if (typeof message.method === 'string') {
 			for (const listener of [...this.listeners]) {
 				listener({ method: message.method, params: message.params });

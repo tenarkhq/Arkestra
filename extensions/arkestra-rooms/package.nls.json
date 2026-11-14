@@ -46,5 +46,8 @@
   "inline.diff": "Show the in-place proposal as a diff",
   "inline.agent": "Choose the agent for in-place edits",
   "command.plan": "Plan mode: the agents read and plan, nothing is changed",
-  "command.execute": "Leave Plan mode and run the plan"
+  "command.execute": "Leave Plan mode and run the plan",
+  "permissions.machines": "What agents may do without asking (`allow`) and may never do (`deny`) on each machine: `local` or an SSH machine's id. Rules: `Bash(npm test:*)`, `Bash(git status)`, `Edit(src/**)`, `Read`, `WebFetch(domain:github.com)`, an MCP tool's name, `*`. Deny wins; anything else is asked. Applies to Claude Code, Codex and ACP agents.",
+  "permissions.project": "This project's permission rules, joined with the machine's (`allow`, `deny`; same syntax). Kept in the workspace settings, so they can be shared with the project.",
+  "permissions.open": "Permission lists"
 }

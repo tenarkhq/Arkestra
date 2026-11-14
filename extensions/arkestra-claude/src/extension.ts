@@ -49,6 +49,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		get model() { return config().get<string>('model') || undefined; },
 		get permissionMode() { return config().get<string>('permissionMode') || 'acceptEdits'; },
 		cwd: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+		permissionRules: () => api.permissions?.rules('local') ?? { allow: [], deny: [] },
 		apiKey: async () => {
 			const auth = config().get<string>('auth') || 'auto';
 			if (auth === 'subscription') {
@@ -86,6 +87,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				spawn: { value: spawn },
 				cwd: { value: () => undefined },
 				identity: { value: { id: `claude@${machine.id}`, name: `Claude · ${machine.name}`, where: machine.name } },
+				permissionRules: { value: () => api.permissions?.rules(machine.id) ?? { allow: [], deny: [] } },
 			});
 			return [api.registerAgent(withActions(new ClaudeCodeAgent(options), actions(machine.id)))];
 		});

@@ -5,7 +5,7 @@
 
 import { homedir } from 'node:os';
 import * as vscode from 'vscode';
-import { AcpAgent, type PermissionOption } from './acpAgent';
+import { AcpAgent, type AcpOptions, type PermissionOption } from './acpAgent';
 import { readAgents, registryId, splitCommandLine, type AcpAgentConfig } from './config';
 import type { ArkestraConnectionsApi } from './connections';
 import { remoteFiles, type SpawnFn } from './host';
@@ -111,6 +111,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 			.catch(e => { throw e instanceof Error ? new Error(localize(e.message)) : e; }),
 	});
 
+	// The permission lists of the agent's machine and the project (AR22): they answer first, the user after.
+	const permissionsFor = (machine: string): Pick<AcpOptions, 'askPermission' | 'refuses'> => {
+		const permissions = api.permissions;
+		if (!permissions) {
+			return { askPermission };
+		}
+		return {
+			askPermission: async (agentName, _title, options, signal, toolCall) => {
+				const decision = await permissions.ask(agentName, machine, permissions.requestFromAcp(toolCall), signal);
+				const kinds = decision === 'allow' ? ['allow_once', 'allow_always'] : decision === 'deny' ? ['reject_once', 'reject_always'] : [];
+				return kinds.map(k => options.find(o => o.kind === k)).find(Boolean)?.optionId;
+			},
+			refuses: request => permissions.decide(machine, request) === 'deny',
+		};
+	};
+
 	let registered: { agent: AcpAgent; registration: { dispose(): void } }[] = [];
 	const sync = () => {
 		for (const r of registered) {
@@ -133,7 +149,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				where: machineName(entry.machine),
 				cwd: cwdFor(entry.machine, spawn),
 				...(spawn ? { spawn, remote: true, files: remoteFiles(spawn) } : {}),
-				askPermission,
+				...permissionsFor(entry.machine),
 			});
 			try {
 				registered.push({ agent, registration: api.registerAgent(wrap(agent, entry)) });

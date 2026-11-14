@@ -19,7 +19,7 @@ const FAKE = path.join(__dirname, 'fakeAgent.js');
 const msg = (n: number, kind: 'user' | 'agent' | 'system', id: string, text: string): Message =>
 	({ id: `m${n}`, at: '2026-11-14T15:00:00Z', author: { kind, id, name: id === 'me' ? 'Roland' : id }, text });
 
-async function setup(env: Record<string, string> = {}, askPermission: AcpOptions['askPermission'] = async () => 'yes') {
+async function setup(env: Record<string, string> = {}, askPermission: AcpOptions['askPermission'] = async () => 'yes', extra: Partial<AcpOptions> = {}) {
 	const dir = await mkdtemp(path.join(tmpdir(), 'arkestra-acp-'));
 	const file = path.join(dir, 'notes.txt');
 	await writeFile(file, 'one\ntwo\nthree');
@@ -30,6 +30,7 @@ async function setup(env: Record<string, string> = {}, askPermission: AcpOptions
 		env: { FAKE_LOG: logFile, FAKE_FILE: file, ...env },
 		cwd: async () => dir,
 		askPermission,
+		...extra,
 	});
 	const log = async () => (await readFile(logFile, 'utf8')).trim().split('\n').filter(Boolean);
 	return { agent, dir, file, log };
@@ -200,6 +201,30 @@ test('Plan mode: the agent\'s own plan mode for the turn, then back; writes, ter
 		const normal = await turn(agent, 'r1', [msg(1, 'user', 'me', 'PLAN it'), msg(2, 'user', 'me', 'PLAN again, normal turn')]);
 		assert.deepEqual(normal, [{ kind: 'text', text: 'write=ok term=ok permission=yes' }], 'after Plan mode changes work again');
 		assert.deepEqual((await log()).filter(l => l.startsWith('mode')), ['mode plan', 'mode default'], 'a normal turn does not switch modes');
+	} finally {
+		agent.dispose();
+	}
+});
+
+test('permission lists: the question carries the tool call; a denied write or command is refused even unasked', async () => {
+	const calls: unknown[] = [];
+	const refused: string[] = [];
+	const { agent, file } = await setup({}, async (_n, _t, _o, _s, toolCall) => { calls.push(toolCall); return 'no'; }, {
+		refuses: request => {
+			const deny = request.tool === 'Edit' && !!request.path?.endsWith('new.txt');
+			if (deny) {
+				refused.push(request.title);
+			}
+			return deny;
+		},
+	});
+	try {
+		const events = await turn(agent, 'r1', [msg(1, 'user', 'me', 'go')]);
+		assert.equal(events.at(-1)?.kind === 'text' && events.at(-1)!.kind, 'text');
+		assert.match((events.at(-1) as { text: string }).text, /permission=no$/);
+		assert.deepEqual(calls, [{ toolCallId: 't2', title: 'Edit state.py' }]);
+		assert.equal(refused.length, 1);
+		await assert.rejects(readFile(`${file}.out/new.txt`, 'utf8'), 'the denied write did not happen');
 	} finally {
 		agent.dispose();
 	}

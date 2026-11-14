@@ -40,4 +40,25 @@ export interface Agent {
 
 export interface ArkestraRoomsApi {
 	registerAgent(agent: Agent): { dispose(): void };
+	/** Absent in an older rooms extension. */
+	readonly permissions?: PermissionsApi;
 }
+
+/** What an agent wants to do, in the permission rules' terms (`Bash`, `Edit`, `Read`, `WebFetch`, a tool name). */
+export interface PermissionRequest {
+	readonly tool: string;
+	readonly command?: string;
+	readonly path?: string;
+	readonly url?: string;
+	readonly title: string;
+}
+
+/** The rooms' permission lists per machine and project (AR22). */
+export interface PermissionsApi {
+	rules(machine: string): { readonly allow: readonly string[]; readonly deny: readonly string[] };
+	decide(machine: string, request: PermissionRequest): 'allow' | 'deny' | undefined;
+	ask(agentName: string, machine: string, request: PermissionRequest, signal: AbortSignal): Promise<'allow' | 'deny' | undefined>;
+	requestFromAcp(toolCall: unknown): PermissionRequest;
+	readonly onDidChange: (listener: () => void) => { dispose(): void };
+}
+
