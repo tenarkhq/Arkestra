@@ -83,6 +83,7 @@ export interface ThreadSummary {
 	readonly project?: string;
 	readonly category?: string;
 	readonly pinned: boolean;
+	readonly archived: boolean;
 	/** ISO time of the last message, or empty. */
 	readonly lastAt: string;
 	readonly agents: number;
@@ -95,6 +96,7 @@ export function summarize(state: RoomState): ThreadSummary {
 		...(state.project ? { project: state.project } : {}),
 		...(state.category ? { category: state.category } : {}),
 		pinned: !!state.pinned,
+		archived: !!state.archived,
 		lastAt: state.messages.at(-1)?.at ?? '',
 		agents: state.roster.length,
 	};
@@ -113,7 +115,7 @@ const newestFirst = (a: ThreadSummary, b: ThreadSummary) => b.lastAt.localeCompa
 
 export function groupThreads(threads: readonly ThreadSummary[], currentProject: string | undefined): { current: ProjectThreads; others: ProjectThreads[] } {
 	const byProject = new Map<string | undefined, ThreadSummary[]>();
-	for (const t of threads) {
+	for (const t of threads.filter(t => !t.archived)) {
 		byProject.set(t.project, [...(byProject.get(t.project) ?? []), t]);
 	}
 	const group = (project: string | undefined, list: readonly ThreadSummary[]): ProjectThreads => {
@@ -134,6 +136,11 @@ export function groupThreads(threads: readonly ThreadSummary[], currentProject: 
 		.map(([project, list]) => group(project, list))
 		.sort((a, b) => (a.project === undefined ? 1 : b.project === undefined ? -1 : projectName(a.project).localeCompare(projectName(b.project))));
 	return { current, others };
+}
+
+/** The archived threads, newest first. */
+export function archivedThreads(threads: readonly ThreadSummary[]): ThreadSummary[] {
+	return threads.filter(t => t.archived).sort(newestFirst);
 }
 
 /** The display name of a project (workspace folder URI): its last path segment. */

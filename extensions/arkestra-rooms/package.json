@@ -112,6 +112,24 @@
         "category": "Arkestra"
       },
       {
+        "command": "arkestra.rooms.archive",
+        "title": "%command.archive%",
+        "category": "Arkestra",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "arkestra.rooms.unarchive",
+        "title": "%command.unarchive%",
+        "category": "Arkestra",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "arkestra.rooms.delete",
+        "title": "%command.delete%",
+        "category": "Arkestra",
+        "icon": "$(trash)"
+      },
+      {
         "command": "arkestra.rooms.pin",
         "title": "%command.pin%",
         "category": "Arkestra",
@@ -409,6 +427,36 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "arkestra.rooms.archive",
+          "when": "view == arkestra.threads && viewItem =~ /^thread(\\.pinned)?$/",
+          "group": "inline@8"
+        },
+        {
+          "command": "arkestra.rooms.unarchive",
+          "when": "view == arkestra.threads && viewItem == thread.archived",
+          "group": "inline@8"
+        },
+        {
+          "command": "arkestra.rooms.delete",
+          "when": "view == arkestra.threads && viewItem =~ /^thread/",
+          "group": "inline@9"
+        },
+        {
+          "command": "arkestra.rooms.archive",
+          "when": "view == arkestra.threads && viewItem =~ /^thread(\\.pinned)?$/",
+          "group": "8_archive@1"
+        },
+        {
+          "command": "arkestra.rooms.unarchive",
+          "when": "view == arkestra.threads && viewItem == thread.archived",
+          "group": "8_archive@1"
+        },
+        {
+          "command": "arkestra.rooms.delete",
+          "when": "view == arkestra.threads && viewItem =~ /^thread/",
+          "group": "8_archive@2"
+        },
         {
           "command": "arkestra.rooms.pin",
           "when": "view == arkestra.threads && viewItem == thread",

@@ -35,6 +35,8 @@ export interface RoomState {
 	category?: string;
 	/** Pinned threads come first in their project. */
 	pinned?: boolean;
+	/** Archived threads leave the lists; the Archived group keeps them until restored or deleted. */
+	archived?: boolean;
 	/** A 2ARK template room's state (review, coding, audit), when the room runs one. */
 	template?: TemplateState;
 	/** Plan mode: the agents read and plan, nothing is changed until the user executes the plan. */

@@ -32,7 +32,7 @@ import { GitTemplateIO, createWorkTrees } from './templates/gitio';
 import { TemplateRun } from './templates/run';
 import type { Role } from './templates/signals';
 import type { CodeState, ReviewState, TemplateState } from './templates/types';
-import { ROOM_ID_KEY, ROOM_SCHEME, groupThreads, historyTurns, projectName, roomIdFromHistory, roomIdFromSessionPath, summarize, titleFrom, type ProjectThreads, type ThreadSummary } from './threads';
+import { ROOM_ID_KEY, ROOM_SCHEME, archivedThreads, groupThreads, historyTurns, projectName, roomIdFromHistory, roomIdFromSessionPath, summarize, titleFrom, type ProjectThreads, type ThreadSummary } from './threads';
 
 /** What adapter extensions (Claude Code, Codex, OpenAI, ACP) receive. */
 export interface ArkestraRoomsApi {
@@ -711,7 +711,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	// The left column: threads of this project, then of the others.
 	const changedThreads = new vscode.EventEmitter<void>();
 	type Node = { kind: 'project'; label: string; group: ProjectThreads; current: boolean } | { kind: 'category'; name: string; threads: readonly ThreadSummary[] } | { kind: 'thread'; thread: ThreadSummary }
-		| { kind: 'machines' } | { kind: 'sessionAgent'; agentId: string; name: string } | { kind: 'session'; agentId: string; session: ExistingSession } | { kind: 'note'; text: string };
+		| { kind: 'archived'; threads: readonly ThreadSummary[] } | { kind: 'machines' } | { kind: 'sessionAgent'; agentId: string; name: string } | { kind: 'session'; agentId: string; session: ExistingSession } | { kind: 'note'; text: string };
 	// AR39 · The sessions the agents' CLIs already have on their machines; an SSH listing is slow, so kept for a while.
 	const sessionLists = new Map<string, { at: number; sessions: readonly ExistingSession[] }>();
 	const sessionAgents = () => registry.all().filter(a => a.existingSessions && a.sessionHistory && a.adoptSession).sort((a, b) => a.name.localeCompare(b.name));
@@ -735,12 +735,15 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		onDidChangeTreeData: changedThreads.event,
 		getChildren: async node => {
 			if (!node) {
-				const { current, others } = groupThreads(await allThreads(), currentProject());
+				const all = await allThreads();
+				const { current, others } = groupThreads(all, currentProject());
+				const archived = archivedThreads(all);
 				const here = projectName(current.project) || vscode.l10n.t('No project');
 				return [
 					{ kind: 'project', label: vscode.l10n.t('Threads · {0}', here), group: current, current: true },
 					...others.map(group => ({ kind: 'project' as const, label: projectName(group.project) || vscode.l10n.t('No project'), group, current: false })),
 					...(sessionAgents().length ? [{ kind: 'machines' as const }] : []),
+					...(archived.length ? [{ kind: 'archived' as const, threads: archived }] : []),
 				];
 			}
 			if (node.kind === 'machines') {
@@ -758,11 +761,21 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 					return [{ kind: 'note', text: vscode.l10n.t('Could not read the sessions: {0}', error instanceof Error ? error.message : String(error)) }];
 				}
 			}
+			if (node.kind === 'archived') {
+				return node.threads.map(thread => ({ kind: 'thread' as const, thread }));
+			}
 			return node.kind === 'project' ? threadsOf(node.group)
 				: node.kind === 'category' ? node.threads.map(thread => ({ kind: 'thread' as const, thread }))
 					: [];
 		},
 		getTreeItem: node => {
+			if (node.kind === 'archived') {
+				const item = new vscode.TreeItem(vscode.l10n.t('Archived'), vscode.TreeItemCollapsibleState.Collapsed);
+				item.id = 'archived';
+				item.iconPath = new vscode.ThemeIcon('archive');
+				item.description = String(node.threads.length);
+				return item;
+			}
 			if (node.kind === 'machines') {
 				const item = new vscode.TreeItem(vscode.l10n.t('Sessions on the machines'), vscode.TreeItemCollapsibleState.Collapsed);
 				item.iconPath = new vscode.ThemeIcon('history');
@@ -808,10 +821,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			const t = node.thread;
 			const item = new vscode.TreeItem(t.title, vscode.TreeItemCollapsibleState.None);
 			item.id = t.id;
-			item.iconPath = new vscode.ThemeIcon(busy(t.id) ? 'loading~spin' : t.pinned ? 'pinned' : 'comment-discussion');
+			item.iconPath = new vscode.ThemeIcon(busy(t.id) ? 'loading~spin' : t.archived ? 'archive' : t.pinned ? 'pinned' : 'comment-discussion');
 			item.description = t.lastAt ? new Date(t.lastAt).toLocaleString(vscode.env.language, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : undefined;
 			item.tooltip = vscode.l10n.t('{0} agents', t.agents);
-			item.contextValue = t.pinned ? 'thread.pinned' : 'thread';
+			item.contextValue = t.archived ? 'thread.archived' : t.pinned ? 'thread.pinned' : 'thread';
 			item.command = { command: 'arkestra.rooms.openThread', title: vscode.l10n.t('Open'), arguments: [t.id] };
 			return item;
 		},
@@ -951,6 +964,33 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.pin', arg => editRoom(arg, room => { room.state.pinned = true; })),
 		vscode.commands.registerCommand('arkestra.rooms.unpin', arg => editRoom(arg, room => { delete room.state.pinned; })),
+		vscode.commands.registerCommand('arkestra.rooms.archive', arg => editRoom(arg, room => { room.state.archived = true; delete room.state.pinned; })),
+		vscode.commands.registerCommand('arkestra.rooms.unarchive', arg => editRoom(arg, room => { delete room.state.archived; })),
+		vscode.commands.registerCommand('arkestra.rooms.delete', async (arg: unknown) => {
+			const room = await open(threadId(arg));
+			if (!room) {
+				return;
+			}
+			const yes = vscode.l10n.t('Delete');
+			const answer = await vscode.window.showWarningMessage(vscode.l10n.t('Delete the thread “{0}” for good? Its messages cannot be brought back.', room.state.title), { modal: true }, yes);
+			if (answer !== yes) {
+				return;
+			}
+			const uri = sessionUri(room.id).toString();
+			const tabs = vscode.window.tabGroups.all.flatMap(g => g.tabs).filter(tab => (tab.input as { uri?: vscode.Uri } | undefined)?.uri?.toString() === uri);
+			if (tabs.length) {
+				await vscode.window.tabGroups.close(tabs);
+			}
+			runs.delete(room.id);
+			loaded.delete(room.id);
+			if (current === room) {
+				current = undefined;
+				await context.globalState.update(ACTIVE_ROOM, undefined);
+				currentChanged.fire();
+			}
+			await store.remove(room.id);
+			refreshThreads();
+		}),
 		vscode.commands.registerCommand('arkestra.rooms.rename', async (arg: unknown) => {
 			const room = await open(threadId(arg));
 			const title = room && (await vscode.window.showInputBox({ title: vscode.l10n.t('Rename thread'), value: room.state.title }))?.trim();

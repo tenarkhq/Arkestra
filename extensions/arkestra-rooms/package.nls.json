@@ -60,5 +60,8 @@
   "activity.view": "Activity",
   "chooseModel": "Choose an agent's model and effort in this thread…",
   "command.continueSession": "Continue this session here",
-  "command.refreshSessions": "Refresh the sessions"
+  "command.refreshSessions": "Refresh the sessions",
+  "command.archive": "Archive thread",
+  "command.unarchive": "Restore from the archive",
+  "command.delete": "Delete thread"
 }

@@ -26,7 +26,7 @@ test('a room is named after the first line of the thread', () => {
 	assert.equal(titleFrom('x'.repeat(60), 'Room').length, 48);
 });
 
-import { groupThreads, historyTurns, projectName, roomIdFromSessionPath, summarize } from '../threads';
+import { archivedThreads, groupThreads, historyTurns, projectName, roomIdFromSessionPath, summarize } from '../threads';
 import type { Message, RoomState } from '../room';
 
 const m = (kind: 'user' | 'agent' | 'system', name: string, text: string, at = '2026-11-14T10:00:00Z'): Message =>
@@ -75,4 +75,8 @@ test('the left column: this project first, pinned on top, then categories, newes
 	assert.deepEqual(current.categories.map(c => [c.name, c.threads.map(t => t.id)]), [['Audit', ['audit']], ['Brief', ['brief']]]);
 	assert.equal(current.count, 5);
 	assert.deepEqual(others.map(o => [projectName(o.project), o.count]), [['ArkadeOS', 1], ['', 1]]);
+	// An archived thread leaves its project and shows only in the Archived group.
+	const withArchived = [...threads, summarize(state('gone', X, { archived: true }))];
+	assert.equal(groupThreads(withArchived, X).current.count, 5);
+	assert.deepEqual(archivedThreads(withArchived).map(t => t.id), ['gone']);
 });
