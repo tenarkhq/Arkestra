@@ -5,6 +5,8 @@
 
 import * as vscode from 'vscode';
 import * as path from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { ActivityBoard, type AgentActivity } from './activity';
 import { AgentRegistry, type Agent, type InviteEntry } from './agent';
 import { AgentNotReadyError, Room, newRoomState } from './room';
 import { RoomStore } from './store';
@@ -22,12 +24,19 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	const store = new RoomStore(path.join(context.globalStorageUri.fsPath, 'rooms'));
 	// One Room object per room: a running round and a mid-run invite must share it.
 	const loaded = new Map<string, Room>();
-	/** The room of the thread used last; the palette commands act on it. */
+	/** The room of the thread used last; the palette commands and the Agents tile follow it. */
 	let current: Room | undefined;
+	const activity = new ActivityBoard();
+	const currentChanged = new vscode.EventEmitter<void>();
 
 	const track = (room: Room): Room => {
 		loaded.set(room.id, room);
-		room.onDidChange(() => { void store.save(room.state); });
+		room.onDidChange(() => {
+			void store.save(room.state);
+			if (room === current) {
+				currentChanged.fire();
+			}
+		});
 		return room;
 	};
 
@@ -44,7 +53,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	};
 
 	const use = async (room: Room): Promise<Room> => {
-		current = room;
+		if (current !== room) {
+			current = room;
+			currentChanged.fire();
+		}
 		await context.globalState.update(ACTIVE_ROOM, room.id);
 		return room;
 	};
@@ -56,8 +68,15 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		return use(room);
 	};
 
-	const currentRoom = async (): Promise<Room | undefined> =>
-		current ?? (current = await open(context.globalState.get<string>(ACTIVE_ROOM)));
+	const currentRoom = async (): Promise<Room | undefined> => {
+		if (!current) {
+			const room = await open(context.globalState.get<string>(ACTIVE_ROOM));
+			if (room) {
+				await use(room);
+			}
+		}
+		return current;
+	};
 
 	const describe = (entry: InviteEntry): string => entry.readiness.ready
 		? vscode.l10n.t('ready')
@@ -165,20 +184,64 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		inviteButton(stream, room);
 		const abort = new AbortController();
 		const cancel = token.onCancellationRequested(() => abort.abort());
+		activity.queue(room.id, room.roster);
 		try {
 			await room.say(request.prompt, (agent, event) => {
 				switch (event.kind) {
-					case 'start': stream.markdown(`\n\n**${agent.name}**\n\n`); break;
+					case 'start': activity.start(room.id, agent.id); stream.markdown(`\n\n**${agent.name}**\n\n`); break;
 					case 'text': stream.markdown(event.text); break;
-					case 'tool': stream.progress(`${agent.name}: ${event.text}`); break;
-					case 'error': stream.markdown(`\n\n> ${agent.name}: ${event.text}\n`); break;
+					case 'tool': activity.tool(room.id, agent.id, event.text); stream.progress(`${agent.name}: ${event.text}`); break;
+					case 'error': activity.error(room.id, agent.id, event.text); stream.markdown(`\n\n> ${agent.name}: ${event.text}\n`); break;
+					case 'end': activity.end(room.id, agent.id); break;
 				}
 			}, abort.signal);
 		} finally {
+			activity.settle(room.id);
 			cancel.dispose();
 		}
 		return result;
 	};
+
+	// The Agents tile: who is in the current room and what each one is doing.
+	let agentsPanel: vscode.WebviewPanel | undefined;
+	const renderAgents = async () => {
+		if (!agentsPanel) {
+			return;
+		}
+		const room = await currentRoom();
+		agentsPanel.title = room ? vscode.l10n.t('Agents · {0}', room.state.title) : vscode.l10n.t('Agents');
+		agentsPanel.webview.html = agentsHtml(room ? room.roster.map(id => {
+			const agent = registry.get(id);
+			return { name: agent?.name ?? id, detail: agent?.detail ?? vscode.l10n.t('not available now'), activity: activity.get(room.id, id) };
+		}) : undefined);
+	};
+	const adoptAgentsPanel = (panel: vscode.WebviewPanel) => {
+		agentsPanel = panel;
+		panel.iconPath = new vscode.ThemeIcon('organization');
+		panel.webview.options = { enableScripts: true };
+		panel.onDidDispose(() => { agentsPanel = undefined; });
+		panel.webview.onDidReceiveMessage(async (message: { type?: string }) => {
+			if (message.type === 'invite') {
+				await vscode.commands.executeCommand('arkestra.rooms.invite', (await currentRoom())?.id);
+			}
+		});
+		void renderAgents();
+	};
+	const showAgents = async (column?: unknown) => {
+		const viewColumn = typeof column === 'number' && column > 0 ? column : vscode.ViewColumn.Beside;
+		if (agentsPanel) {
+			agentsPanel.reveal(viewColumn, true);
+			return;
+		}
+		adoptAgentsPanel(vscode.window.createWebviewPanel('arkestra.agents', vscode.l10n.t('Agents'), { viewColumn, preserveFocus: true }, { enableScripts: true, retainContextWhenHidden: false }));
+	};
+	context.subscriptions.push(
+		currentChanged,
+		currentChanged.event(() => void renderAgents()),
+		activity.onDidChange(roomId => { if (roomId === current?.id) { void renderAgents(); } }),
+		vscode.window.registerWebviewPanelSerializer('arkestra.agents', { deserializeWebviewPanel: async panel => adoptAgentsPanel(panel) }),
+		vscode.commands.registerCommand('arkestra.rooms.showAgents', showAgents),
+	);
 
 	const participant = vscode.chat.createChatParticipant('arkestra.room', handler);
 	participant.iconPath = new vscode.ThemeIcon('organization');
@@ -220,3 +283,60 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 }
 
 export function deactivate(): void { }
+
+interface AgentRow {
+	readonly name: string;
+	readonly detail: string;
+	readonly activity: AgentActivity;
+}
+
+function escapeHtml(value: string): string {
+	return value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]!));
+}
+
+function agentsHtml(rows: readonly AgentRow[] | undefined): string {
+	const nonce = randomBytes(16).toString('base64');
+	const time = (iso: string) => iso ? new Date(iso).toLocaleTimeString(vscode.env.language, { hour: '2-digit', minute: '2-digit' }) : '';
+	const state = (a: AgentActivity) => a.state === 'answering'
+		? { cls: 'busy', text: a.tool ? vscode.l10n.t('working · {0}', a.tool) : vscode.l10n.t('working') }
+		: a.state === 'queued'
+			? { cls: 'wait', text: vscode.l10n.t('waiting for its turn') }
+			: { cls: 'idle', text: a.tool ? vscode.l10n.t('idle · last: {0}', a.tool) : vscode.l10n.t('idle') };
+	const body = !rows
+		? `<p class="mut">${escapeHtml(vscode.l10n.t('No room yet. Start one in the chat with @room.'))}</p>`
+		: !rows.length
+			? `<p class="mut">${escapeHtml(vscode.l10n.t('Nobody in this room yet.'))}</p>`
+			: rows.map(r => {
+				const s = state(r.activity);
+				return `<div class="agent">
+					<div class="top"><span class="dot ${s.cls}"></span><b>${escapeHtml(r.name)}</b><span class="mut when">${escapeHtml(time(r.activity.since))}</span></div>
+					<div class="mut">${escapeHtml(r.detail)}</div>
+					<div class="${s.cls}">${escapeHtml(s.text)}</div>
+					${r.activity.error ? `<div class="err">${escapeHtml(r.activity.error)}</div>` : ''}
+				</div>`;
+			}).join('');
+	return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+<style nonce="${nonce}">
+	body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); padding: 10px 12px; }
+	.agent { padding: 10px 0; border-bottom: 1px solid var(--vscode-panel-border); display: grid; gap: 3px; }
+	.top { display: flex; align-items: center; gap: 8px; }
+	.when { margin-left: auto; font-size: .9em; }
+	.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--vscode-descriptionForeground); flex: none; }
+	.dot.busy { background: var(--vscode-progressBar-background); }
+	.dot.wait { background: var(--vscode-editorWarning-foreground); }
+	.mut { color: var(--vscode-descriptionForeground); }
+	.busy { color: var(--vscode-foreground); }
+	.wait { color: var(--vscode-editorWarning-foreground); }
+	.err { color: var(--vscode-errorForeground); }
+	button { margin-top: 12px; font: inherit; padding: 4px 12px; border: 0; border-radius: 4px; cursor: pointer; background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+	button:hover { background: var(--vscode-button-hoverBackground); }
+</style></head><body>
+	${body}
+	<button id="invite">+ ${escapeHtml(vscode.l10n.t('Invite an agent'))}</button>
+	<script nonce="${nonce}">
+		const vscode = acquireVsCodeApi();
+		document.getElementById('invite').addEventListener('click', () => vscode.postMessage({ type: 'invite' }));
+	</script>
+</body></html>`;
+}

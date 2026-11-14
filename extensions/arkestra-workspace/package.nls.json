@@ -1,0 +1,8 @@
+{
+  "displayName": "Arkestra · Workspace",
+  "description": "Mozaik: the room, the agents, the code and the terminals as tiles you drag, split and save as layouts.",
+  "mosaic": "Mozaik layout",
+  "layout": "Switch layout…",
+  "saveLayout": "Save layout…",
+  "deleteLayout": "Delete a saved layout…"
+}

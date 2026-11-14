@@ -6,5 +6,6 @@
   "command.invite": "Invite an agent into this thread",
   "command.agents": "Agents in this room and who can join",
   "command.new": "New room",
-  "command.open": "Open a room"
+  "command.open": "Open a room",
+  "showAgents": "Show the agents of this room"
 }
