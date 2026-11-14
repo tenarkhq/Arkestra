@@ -86,6 +86,11 @@ export interface Agent {
 	 * only the messages not in `seen`. Does nothing while the room already has a session here.
 	 */
 	adoptSession?(roomId: string, session: { readonly id: string; readonly cwd?: string }, seen: readonly string[]): void;
+	/**
+	 * Follows one of those sessions live: the entries appended (or an answer grown) after
+	 * `cursor`, each with its id, and the cursor to go on from later. No cursor: from now on.
+	 */
+	watchSession?(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string) => void, cursor?: string): { dispose(): void };
 }
 
 /** What an agent can run with: its models, each with the reasoning efforts it knows (none: no effort choice). */
@@ -101,9 +106,12 @@ export interface ExistingSession {
 
 /** One message of an existing session, as the thread shows it. */
 export interface SessionEntry {
-	readonly role: 'user' | 'agent';
+	/** `system`: a short line of the session's own (a background task finished). */
+	readonly role: 'user' | 'agent' | 'system';
 	readonly text: string;
 	readonly at?: string;
+	/** Stable within the session: the same entry read again (or grown) has the same id. */
+	readonly id?: string;
 }
 
 export interface AgentChoices {

@@ -10,6 +10,7 @@ import { ActivityBoard, type AgentActivity } from './activity';
 import { AgentRegistry, type Agent, type ExistingSession, type InviteEntry } from './agent';
 import { AgentNotReadyError, Room, importedRoomState, newRoomState } from './room';
 import { RoomStore } from './store';
+import { SessionFollow } from './sessionFollow';
 import { laneAgent, laneEntries, type LaneEntry } from './lanes';
 import { copyFile, mkdir, readFile, stat } from 'node:fs/promises';
 import { progressItems, taskRooms, type TaskRoom } from './tasks';
@@ -84,6 +85,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	const threadChanged = new vscode.EventEmitter<string>();
 	context.subscriptions.push(threadChanged, activity.onDidChange(roomId => threadChanged.fire(roomId)));
 
+	// AR39 · A thread that continues a CLI session follows it live while loaded.
+	const follow = new SessionFollow(registry);
+	context.subscriptions.push(follow);
+
 	const track = (room: Room): Room => {
 		loaded.set(room.id, room);
 		room.shared = () => shared.block();
@@ -105,6 +110,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 				currentChanged.fire();
 			}
 		});
+		follow.attach(room);
 		return room;
 	};
 
@@ -1053,6 +1059,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			// A session continued here before opens its thread again.
 			const before = (await store.list()).find(s => s.adopted?.[agent.id]?.session === session.id);
 			if (before) {
+				// It catches up on what the session wrote since, then follows it live (AR39).
+				if (await open(before.id)) {
+					await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Reading the {0} session…', agent.name) }, () => follow.caughtUp(before.id));
+				}
 				await vscode.commands.executeCommand('arkestra.rooms.openThread', before.id);
 				return;
 			}
@@ -1168,6 +1178,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			}
 			runs.delete(room.id);
 			loaded.delete(room.id);
+			follow.detach(room.id);
 			if (current === room) {
 				current = undefined;
 				await context.globalState.update(ACTIVE_ROOM, undefined);

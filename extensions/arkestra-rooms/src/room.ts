@@ -21,6 +21,8 @@ export interface Message {
 	readonly text: string;
 	/** Agent ids this message is for (a template's instruction); absent: everyone. */
 	readonly to?: readonly string[];
+	/** The entry of an adopted session it came from (AR39): that agent's session holds it already. */
+	readonly source?: { readonly agent: string; readonly entry: string };
 }
 
 export interface RoomState {
@@ -46,10 +48,11 @@ export interface RoomState {
 	/** The model and effort chosen per agent in this thread (AR38). */
 	choices?: Record<string, { model?: string; effort?: string }>;
 	/**
-	 * Existing CLI sessions this thread continues (AR39), per agent: the session, its folder, and
-	 * the last message that came from it (everything up to there the session already holds).
+	 * Existing CLI sessions this thread continues (AR39), per agent: the session, its folder, the
+	 * last message imported from it (everything up to there the session already holds), and
+	 * where the live follow goes on (the agent's own cursor).
 	 */
-	adopted?: Record<string, { readonly session: string; readonly cwd?: string; readonly upTo: string }>;
+	adopted?: Record<string, { readonly session: string; readonly cwd?: string; readonly upTo: string; readonly cursor?: string }>;
 }
 
 export class AgentNotReadyError extends Error {
@@ -154,6 +157,46 @@ export class Room {
 		return this.runTurn(agent, sink, signal);
 	}
 
+	/**
+	 * What an adopted session (AR39) wrote elsewhere since (a terminal, the vendor's app): new
+	 * entries are appended, an answer that grew is updated in place, an entry the thread already
+	 * has is not added again (by its id). The cursor is kept for the next follow.
+	 */
+	followed(agentId: string, entries: readonly SessionEntry[], cursor?: string): void {
+		const adopted = this.state.adopted?.[agentId];
+		if (!adopted) {
+			return;
+		}
+		const name = this.registry.get(agentId)?.name ?? this.state.messages.find(m => m.author.kind === 'agent' && m.author.id === agentId)?.author.name ?? agentId;
+		const index = new Map<string, number>();
+		this.state.messages.forEach((m, i) => { if (m.source?.agent === agentId) { index.set(m.source.entry, i); } });
+		let changed = false;
+		for (const e of entries) {
+			const at = e.id ? index.get(e.id) : undefined;
+			if (at !== undefined) {
+				const old = this.state.messages[at];
+				if (old.text !== e.text) {
+					this.state.messages[at] = { ...old, text: e.text };
+					changed = true;
+				}
+				continue;
+			}
+			const message = sessionMessage({ id: agentId, name }, e, this.now);
+			this.state.messages.push(message);
+			if (e.id) {
+				index.set(e.id, this.state.messages.length - 1);
+			}
+			changed = true;
+		}
+		if (cursor !== undefined && cursor !== adopted.cursor) {
+			this.state.adopted = { ...this.state.adopted, [agentId]: { ...adopted, cursor } };
+			changed = true;
+		}
+		if (changed) {
+			this.touch();
+		}
+	}
+
 	/** The room saved the template state in place; listeners save the room. */
 	touch(): void {
 		for (const listener of this.listeners) {
@@ -209,7 +252,15 @@ export function newRoomState(title: string, project?: string): RoomState {
 export function seenBy(messages: readonly Message[], agentId: string, upTo: string): string[] {
 	let last = messages.findIndex(m => m.id === upTo);
 	messages.forEach((m, i) => { if (m.author.kind === 'agent' && m.author.id === agentId) { last = Math.max(last, i); } });
-	return messages.slice(0, last + 1).map(m => m.id);
+	// What came in live from the session (AR39) is in it too, wherever it stands in the thread.
+	return messages.filter((m, i) => i <= last || m.source?.agent === agentId).map(m => m.id);
+}
+
+/** One entry of an agent's session as a thread message, under its author. */
+function sessionMessage(agent: { id: string; name: string }, e: SessionEntry, now: () => Date): Message {
+	const at = e.at && !Number.isNaN(Date.parse(e.at)) ? new Date(e.at).toISOString() : now().toISOString();
+	const author: Author = e.role === 'user' ? { kind: 'user', id: 'user', name: 'You' } : e.role === 'system' ? { kind: 'system', id: 'system', name: agent.name } : { kind: 'agent', id: agent.id, name: agent.name };
+	return { id: newId(), at, author, text: e.text, ...(e.id ? { source: { agent: agent.id, entry: e.id } } : {}) };
 }
 
 /** A thread that continues an existing CLI session (AR39): its messages, then the agent goes on in it. */
@@ -219,7 +270,7 @@ export function importedRoomState(agent: { id: string; name: string }, session: 
 	state.roster.push(agent.id);
 	state.messages.push({ id: newId(), at: entries[0] ? at(entries[0]) : now().toISOString(), author: { kind: 'system', id: 'system', name: 'Arkestra' }, text: `${agent.name} session continued here${session.cwd ? ` (${session.cwd})` : ''}.` });
 	for (const e of entries) {
-		state.messages.push({ id: newId(), at: at(e), author: e.role === 'user' ? { kind: 'user', id: 'user', name: 'You' } : { kind: 'agent', id: agent.id, name: agent.name }, text: e.text });
+		state.messages.push(sessionMessage(agent, e, now));
 	}
 	state.adopted = { [agent.id]: { session: session.id, ...(session.cwd ? { cwd: session.cwd } : {}), upTo: state.messages.at(-1)!.id } };
 	return state;

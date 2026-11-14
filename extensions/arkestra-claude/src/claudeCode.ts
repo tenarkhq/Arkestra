@@ -6,7 +6,8 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { homedir } from 'node:os';
 import type { Agent, AgentChoices, AgentEvent, ExistingSession, Usage, Message, Readiness, SessionEntry, TurnInput, WorkUpdate } from './rooms';
-import { LIST_SCRIPT, localListing, localSessionFile, parseHistory, parseListing, readScript } from './sessions';
+import { LIST_SCRIPT, claudePiece, localListing, localSessionFile, localSessionPath, locateScript, parseHistory, parseListing, readScript } from './sessions';
+import { followLocal, followRemote } from './follow';
 
 export type AuthMode = 'subscription' | 'apiKey';
 
@@ -237,9 +238,20 @@ export class ClaudeCodeAgent implements Agent {
 	}
 
 	adoptSession(roomId: string, session: { readonly id: string; readonly cwd?: string }, seen: readonly string[]): void {
-		if (!this.sessions.has(roomId)) {
+		const known = this.sessions.get(roomId);
+		if (!known) {
 			this.sessions.set(roomId, { sessionId: session.id, seen: new Set(seen), ...(session.cwd ? { cwd: session.cwd } : {}) });
+		} else if (known.sessionId === session.id) {
+			seen.forEach(id => known.seen.add(id)); // what came in live from the session is in it already
 		}
+	}
+
+	/** Follows a session file live (AR39): here through the file system, on an SSH machine through `tail -F`. */
+	watchSession(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string) => void, cursor?: string): { dispose(): void } {
+		const options = { classify: claudePiece, onEntries, ...(cursor !== undefined ? { cursor } : {}) };
+		return this.options.spawn
+			? followRemote(this.options.spawn, locateScript(sessionId), options)
+			: followLocal(() => localSessionPath(homedir(), sessionId), options);
 	}
 
 	/** A POSIX script on the agent's machine (an SSH machine); resolves to its output. */

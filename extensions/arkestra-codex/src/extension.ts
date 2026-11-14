@@ -38,6 +38,7 @@ function withActions<T extends Agent>(agent: T, actionsFor: (readiness: Readines
 		...(agent.existingSessions ? { existingSessions: () => agent.existingSessions!() } : {}),
 		...(agent.sessionHistory ? { sessionHistory: (id: string) => agent.sessionHistory!(id) } : {}),
 		...(agent.adoptSession ? { adoptSession: (roomId: string, session: { readonly id: string; readonly cwd?: string }, seen: readonly string[]) => agent.adoptSession!(roomId, session, seen) } : {}),
+		...(agent.watchSession ? { watchSession: (id: string, onEntries: Parameters<NonNullable<Agent['watchSession']>>[1], cursor?: string) => agent.watchSession!(id, onEntries, cursor) } : {}),
 	};
 }
 
