@@ -88,7 +88,26 @@
       {
         "command": "arkestra.rooms.invite",
         "title": "%command.invite%",
-        "category": "Arkestra"
+        "category": "Arkestra",
+        "icon": "$(person-add)"
+      },
+      {
+        "command": "arkestra.rooms.newThreadWith",
+        "title": "%command.newThreadWith%",
+        "category": "Arkestra",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "arkestra.rooms.fixAgent",
+        "title": "%command.fixAgent%",
+        "category": "Arkestra",
+        "icon": "$(sign-in)"
+      },
+      {
+        "command": "arkestra.rooms.refreshAgents",
+        "title": "%command.refreshAgents%",
+        "category": "Arkestra",
+        "icon": "$(refresh)"
       },
       {
         "command": "arkestra.rooms.open",
@@ -378,6 +397,11 @@
           "icon": "media/threads.svg"
         },
         {
+          "id": "arkestra.agentList",
+          "name": "%agentList.view%",
+          "icon": "media/threads.svg"
+        },
+        {
           "id": "arkestra.activity",
           "name": "%activity.view%",
           "icon": "media/threads.svg"
@@ -415,6 +439,11 @@
     "menus": {
       "view/title": [
         {
+          "command": "arkestra.rooms.refreshAgents",
+          "when": "view == arkestra.agentList",
+          "group": "navigation"
+        },
+        {
           "command": "arkestra.rooms.newThread",
           "when": "view == arkestra.threads || view == arkestra.projects",
           "group": "navigation"
@@ -451,6 +480,31 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "arkestra.rooms.invite",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem =~ /^thread(\\.pinned)?$/",
+          "group": "inline@7"
+        },
+        {
+          "command": "arkestra.rooms.invite",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem =~ /^thread(\\.pinned)?$/",
+          "group": "2_agents@0"
+        },
+        {
+          "command": "arkestra.rooms.newThread",
+          "when": "view == arkestra.projects && viewItem == project",
+          "group": "inline@1"
+        },
+        {
+          "command": "arkestra.rooms.newThreadWith",
+          "when": "view == arkestra.agentList && viewItem == agent.ready",
+          "group": "inline@1"
+        },
+        {
+          "command": "arkestra.rooms.fixAgent",
+          "when": "view == arkestra.agentList && viewItem == agent.fix",
+          "group": "inline@1"
+        },
         {
           "command": "arkestra.rooms.archive",
           "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem =~ /^thread(\\.pinned)?$/",
@@ -553,6 +607,10 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "arkestra.rooms.fixAgent",
+          "when": "false"
+        },
         {
           "command": "arkestra.rooms.openThread",
           "when": "false"

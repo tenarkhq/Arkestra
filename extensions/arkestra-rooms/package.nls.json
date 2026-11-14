@@ -67,5 +67,9 @@
   "pinned.view": "Pinned",
   "projects.view": "Projects",
   "boards.view": "Boards",
-  "pinned.empty": "Nothing pinned yet. Pin a thread, a board or an artifact and it waits here."
+  "pinned.empty": "Nothing pinned yet. Pin a thread, a board or an artifact and it waits here.",
+  "agentList.view": "Agents",
+  "command.newThreadWith": "New thread with this agent",
+  "command.fixAgent": "Sign in or set up",
+  "command.refreshAgents": "Check the agents again"
 }
