@@ -36,34 +36,92 @@ interface RoomsApi {
 
 const VIEW = 'arkestra.project';
 
-export class ProjectBoard implements vscode.Disposable {
-	private panel: vscode.WebviewPanel | undefined;
-	private readonly disposables: vscode.Disposable[] = [];
-	private rooms: RoomInfo[] = [];
-	private roomsApi: RoomsApi | undefined;
-	private timer: ReturnType<typeof setTimeout> | undefined;
-	private git: GitInfo | undefined;
-	private gitTimer: ReturnType<typeof setTimeout> | undefined;
-	private gitTicker: ReturnType<typeof setInterval> | undefined;
+/** A board's source while its panel is open; released when the panel closes. */
+export interface BoardLease {
+	readonly source: BoardSource;
+	release(): void;
+}
 
-	constructor(private readonly source: BoardSource, private readonly memento: vscode.Memento) {
+export interface BoardHost {
+	/** The source of a board: the workspace's project when ref is undefined, another project otherwise ("owner/number"). */
+	acquire(ref: string | undefined): BoardLease;
+	/** Which board to open: undefined = cancelled, { ref: undefined } = the workspace's project. */
+	pick(): Promise<{ ref: string | undefined } | undefined>;
+	isPinned(ref: string): boolean;
+	setPinned(ref: string, pinned: boolean): Promise<void>;
+}
+
+/** Every open board: one editor tab per project, any number at once (the workspace's own and others). */
+export class ProjectBoards implements vscode.Disposable {
+	private readonly panels = new Set<BoardPanel>();
+	private readonly disposables: vscode.Disposable[] = [];
+	private roomsApi: RoomsApi | undefined;
+	rooms: RoomInfo[] = [];
+
+	constructor(private readonly host: BoardHost, readonly memento: vscode.Memento) {
 		this.disposables.push(
-			vscode.commands.registerCommand('arkestra.github.openBoard', () => this.open()),
-			vscode.window.registerWebviewPanelSerializer(VIEW, { deserializeWebviewPanel: async panel => this.adopt(panel) }),
-			source.onDidChange(() => { this.schedule(); this.scheduleGit(); }),
-			vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('arkestra.github')) { this.schedule(); } }),
+			vscode.commands.registerCommand('arkestra.github.openBoard', async (ref?: unknown) => {
+				if (typeof ref === 'string') {
+					this.open(ref || undefined);
+					return;
+				}
+				const choice = await this.host.pick();
+				if (choice) {
+					this.open(choice.ref);
+				}
+			}),
+			vscode.window.registerWebviewPanelSerializer(VIEW, { deserializeWebviewPanel: async (panel, state: { ref?: unknown } | undefined) => { this.adopt(panel, typeof state?.ref === 'string' && state.ref ? state.ref : undefined); } }),
+			vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('arkestra.github')) { this.panels.forEach(p => p.schedule()); } }),
 		);
 		void this.connectRooms();
 	}
 
 	dispose(): void {
-		clearTimeout(this.timer);
-		clearTimeout(this.gitTimer);
-		clearInterval(this.gitTicker);
-		this.panel?.dispose();
+		for (const panel of [...this.panels]) {
+			panel.dispose();
+		}
 		for (const d of this.disposables) {
 			d.dispose();
 		}
+	}
+
+	/** Opens the board of a project, or shows it when it is already open. */
+	open(ref: string | undefined): void {
+		const open = [...this.panels].find(p => p.ref === ref);
+		if (open) {
+			open.panel.reveal();
+			return;
+		}
+		const board = this.adopt(vscode.window.createWebviewPanel(VIEW, vscode.l10n.t('Project'), vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true }), ref);
+		const key = board.pinKey();
+		if (key && this.host.isPinned(key)) {
+			void vscode.commands.executeCommand('workbench.action.pinEditor');
+		}
+	}
+
+	isPinned(ref: string): boolean {
+		return this.host.isPinned(ref);
+	}
+
+	async togglePin(board: BoardPanel): Promise<void> {
+		const key = board.pinKey();
+		if (!key) {
+			return;
+		}
+		const pinned = !this.host.isPinned(key);
+		await this.host.setPinned(key, pinned);
+		if (board.panel.active) {
+			await vscode.commands.executeCommand(pinned ? 'workbench.action.pinEditor' : 'workbench.action.unpinEditor');
+		}
+		this.panels.forEach(p => p.schedule());
+	}
+
+	private adopt(panel: vscode.WebviewPanel, ref: string | undefined): BoardPanel {
+		const board = new BoardPanel(this, panel, ref, this.host.acquire(ref));
+		this.panels.add(board);
+		panel.onDidDispose(() => { this.panels.delete(board); board.dispose(); });
+		void this.loadRooms();
+		return board;
 	}
 
 	private async connectRooms(): Promise<void> {
@@ -80,7 +138,7 @@ export class ProjectBoard implements vscode.Disposable {
 	}
 
 	private async loadRooms(): Promise<void> {
-		if (!this.roomsApi || !this.panel) {
+		if (!this.roomsApi || !this.panels.size) {
 			return;
 		}
 		try {
@@ -88,28 +146,57 @@ export class ProjectBoard implements vscode.Disposable {
 		} catch {
 			this.rooms = [];
 		}
-		this.schedule();
+		this.panels.forEach(p => p.schedule());
 	}
+}
 
-	open(): void {
-		if (this.panel) {
-			this.panel.reveal();
-			return;
-		}
-		this.adopt(vscode.window.createWebviewPanel(VIEW, vscode.l10n.t('Project'), vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true }));
-	}
+/** One board tab and the project it shows. */
+class BoardPanel implements vscode.Disposable {
+	private readonly disposables: vscode.Disposable[] = [];
+	private readonly source: BoardSource;
+	private timer: ReturnType<typeof setTimeout> | undefined;
+	private git: GitInfo | undefined;
+	private gitTimer: ReturnType<typeof setTimeout> | undefined;
+	private readonly gitTicker: ReturnType<typeof setInterval>;
+	private disposed = false;
 
-	private adopt(panel: vscode.WebviewPanel): void {
-		this.panel = panel;
+	constructor(private readonly boards: ProjectBoards, readonly panel: vscode.WebviewPanel, readonly ref: string | undefined, private readonly lease: BoardLease) {
+		this.source = lease.source;
 		panel.iconPath = new vscode.ThemeIcon('project');
 		panel.webview.options = { enableScripts: true };
 		panel.webview.html = boardHtml(randomBytes(16).toString('base64'), panel.webview.cspSource);
-		panel.onDidDispose(() => { this.panel = undefined; clearInterval(this.gitTicker); this.gitTicker = undefined; }, undefined, this.disposables);
 		// The branch rails follow the local repository: read again when the project changes and every 30 s.
 		this.gitTicker = setInterval(() => { if (panel.visible) { void this.loadGit(); } }, 30_000);
+		this.disposables.push(
+			this.source.onDidChange(() => { this.schedule(); this.scheduleGit(); }),
+			panel.webview.onDidReceiveMessage(m => void this.receive(m)),
+		);
 		void this.loadGit();
-		panel.webview.onDidReceiveMessage(m => void this.receive(m), undefined, this.disposables);
-		void this.loadRooms();
+	}
+
+	private get rooms(): RoomInfo[] {
+		return this.boards.rooms;
+	}
+
+	/** The project's "owner/number", the key of its pin. */
+	pinKey(): string | undefined {
+		const snap = this.source.snapshot();
+		return this.ref ?? (snap ? `${snap.owner.toLowerCase()}/${snap.number}` : undefined);
+	}
+
+	dispose(): void {
+		if (this.disposed) {
+			return;
+		}
+		this.disposed = true;
+		clearTimeout(this.timer);
+		clearTimeout(this.gitTimer);
+		clearInterval(this.gitTicker);
+		this.lease.release();
+		for (const d of this.disposables) {
+			d.dispose();
+		}
+		this.panel.dispose();
 	}
 
 	private scheduleGit(): void {
@@ -144,26 +231,26 @@ export class ProjectBoard implements vscode.Disposable {
 		this.schedule();
 	}
 
-	private schedule(): void {
+	schedule(): void {
 		clearTimeout(this.timer);
 		this.timer = setTimeout(() => this.post(), 80);
 	}
 
 	private post(): void {
 		const panel = this.panel;
-		if (!panel) {
+		if (this.disposed) {
 			return;
 		}
 		const snap = this.source.snapshot();
 		const status = this.source.status();
 		if (!this.source.configured()) {
-			void panel.webview.postMessage({ type: 'screen', screen: { title: vscode.l10n.t('No GitHub Project for this workspace'), text: vscode.l10n.t('Pick the project this workspace follows; its Board and Table show here and stay in sync with GitHub both ways.'), actions: [{ label: vscode.l10n.t('Follow a project…'), command: 'setProject' }, { label: vscode.l10n.t('Sign in to GitHub'), command: 'signIn' }] } });
+			void panel.webview.postMessage({ type: 'screen', ref: this.ref ?? null, screen: { title: vscode.l10n.t('No GitHub Project for this workspace'), text: vscode.l10n.t('Pick the project this workspace follows; its Board and Table show here and stay in sync with GitHub both ways.'), actions: [{ label: vscode.l10n.t('Follow a project…'), command: 'setProject' }, { label: vscode.l10n.t('Sign in to GitHub'), command: 'signIn' }] } });
 			return;
 		}
 		if (!snap) {
 			const failed = status.kind === 'error';
 			void panel.webview.postMessage({
-				type: 'screen', screen: failed
+				type: 'screen', ref: this.ref ?? null, screen: failed
 					? { title: vscode.l10n.t('The project could not be read'), text: status.message, actions: [{ label: vscode.l10n.t('Sign in to GitHub'), command: 'signIn' }, { label: vscode.l10n.t('Try again'), command: 'refresh' }, { label: vscode.l10n.t('Follow another project…'), command: 'setProject' }] }
 					: { title: vscode.l10n.t('Reading the project…'), text: '' },
 			});
@@ -183,7 +270,8 @@ export class ProjectBoard implements vscode.Disposable {
 			clock,
 		});
 		const graph = graphModel(snap, this.rooms, plan, this.saved(snap));
-		void panel.webview.postMessage({ type: 'model', model: { ...model, plan, graph } });
+		const key = this.pinKey();
+		void panel.webview.postMessage({ type: 'model', ref: this.ref ?? null, model: { ...model, plan, graph, pinned: key ? this.boards.isPinned(key) : false } });
 	}
 
 	private async receive(m: any): Promise<void> {
@@ -197,6 +285,8 @@ export class ProjectBoard implements vscode.Disposable {
 					return;
 				case 'openRoom': await vscode.commands.executeCommand('arkestra.rooms.openThread', String(m.roomId)); return;
 				case 'refresh': await this.source.refresh(); return;
+				case 'togglePin': await this.boards.togglePin(this); return;
+				case 'openBoard': await vscode.commands.executeCommand('arkestra.github.openBoard'); return;
 				case 'signIn': await vscode.commands.executeCommand('arkestra.github.signIn'); return;
 				case 'setProject': await vscode.commands.executeCommand('arkestra.github.setProject'); return;
 				case 'move': {
@@ -266,13 +356,13 @@ export class ProjectBoard implements vscode.Disposable {
 	}
 
 	private saved(snap: ProjectSnapshot): GraphSaved {
-		return this.memento.get<GraphSaved>(this.key(snap)) ?? {};
+		return this.boards.memento.get<GraphSaved>(this.key(snap)) ?? {};
 	}
 
 	private async updateSaved(change: (s: GraphSaved) => GraphSaved): Promise<void> {
 		const snap = this.source.snapshot();
 		if (snap) {
-			await this.memento.update(this.key(snap), change(this.saved(snap)));
+			await this.boards.memento.update(this.key(snap), change(this.saved(snap)));
 			this.schedule();
 		}
 	}

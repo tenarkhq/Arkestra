@@ -54,6 +54,13 @@ const snap: any = {
 };
 const model = boardModel({ snapshot: snap, rooms: [{ roomId: 'x', title: 't', refs: ['#10'], type: 'coding', status: 'ended', phase: 'kész', agents: 2 }], status: { kind: 'synced', at: 0, live: true }, live: true, journal: [{ at: 0, direction: 'in', item: '#1', text: 'issues opened' }], clock: () => '14:12:08' });
 
+listeners.message({ data: { type: 'model', ref: 'o/3', model: { ...model, pinned: false } } });
+assert.equal(state.ref, 'o/3', 'the tab keeps its project for the next start');
+find(body, (e: any) => e.tag === 'button' && text(e) === 'Pin')[0].fire('click');
+find(body, (e: any) => e.tag === 'button' && text(e) === '+ Board')[0].fire('click');
+assert.ok(posted.some((m: any) => m.type === 'togglePin') && posted.some((m: any) => m.type === 'openBoard'), 'pin and open another board posted');
+listeners.message({ data: { type: 'model', ref: 'o/3', model: { ...model, pinned: true } } });
+assert.ok(find(body, (e: any) => e.tag === 'button' && text(e) === 'Pinned').length === 1, 'pinned shown');
 listeners.message({ data: { type: 'model', model } });
 const t1 = text(body); 
 assert.ok(t1.includes('Line0.9') && t1.includes('Board view') && t1.includes('Start room ▸') && t1.includes('+ 2 more') && t1.includes('GitHub → here'), 'board drawn');
