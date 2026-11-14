@@ -101,6 +101,10 @@ done
 
 # AR03 · Removed: Remote Tunnels need these product keys; without them the feature is off.
 jq 'del(.tunnelApplicationName, .tunnelApplicationConfig, .win32TunnelMutex, .win32TunnelServiceMutex)' product.json > product.json.tmp && mv product.json.tmp product.json
+# The Windows installer step still needs the names (it stops a tunnel process if one runs);
+# it gets them here, the app does not.
+perl -pi -e "s#TunnelMutex: product\.win32TunnelMutex,#TunnelMutex: product.win32TunnelMutex ?? 'arkestra-tunnel',#; s#TunnelServiceMutex: product\.win32TunnelServiceMutex,#TunnelServiceMutex: product.win32TunnelServiceMutex ?? 'arkestra-tunnelservice',#; s#TunnelApplicationName: product\.tunnelApplicationName,#TunnelApplicationName: product.tunnelApplicationName ?? 'arkestra-tunnel',#" build/gulpfile.vscode.win32.ts
+[[ "$( grep -c "?? 'arkestra-tunnel" build/gulpfile.vscode.win32.ts )" == 3 ]]
 
 # AR04 · Nothing goes to Microsoft services on its own.
 #   - Copilot account endpoints: with any GitHub sign-in the default-account service
