@@ -149,20 +149,6 @@
       }
     ],
     "menus": {
-      "view/title": [
-        {
-          "command": "arkestra.github.openBoard",
-          "when": "view == arkestra.threads",
-          "group": "navigation@9"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "arkestra.remote.toggleThread",
-          "when": "view == arkestra.threads && viewItem =~ /^thread/",
-          "group": "3_remote@1"
-        }
-      ],
       "commandPalette": [
         {
           "command": "arkestra.remote.toggleThread",

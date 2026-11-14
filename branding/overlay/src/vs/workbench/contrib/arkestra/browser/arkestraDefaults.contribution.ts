@@ -33,6 +33,7 @@ export const ARKESTRA_DEFAULTS: { readonly [key: string]: unknown } = {
 	'breadcrumbs.enabled': false,
 	'extensions.ignoreRecommendations': true,            // no recommendation pop-ups
 	'chat.titleBar.signIn.enabled': false,               // Copilot appears only for whoever turns it on
+	'chat.disableAIFeatures': true,                      // threads are Arkestra's own panel; VS Code's chat and Copilot never answer in them
 
 	// Removed
 	'workbench.tips.enabled': false,
