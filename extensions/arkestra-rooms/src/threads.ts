@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { Message, RoomState } from './room';
+import { withoutAttachments } from './references';
 
 export const ROOM_ID_KEY = 'arkestraRoomId';
 
@@ -52,7 +53,8 @@ export function historyTurns(messages: readonly Message[]): HistoryTurn[] {
 	for (const m of messages) {
 		if (m.author.kind === 'user') {
 			flush();
-			turns.push({ kind: 'request', prompt: m.text });
+			const { message, count } = withoutAttachments(m.text);
+			turns.push({ kind: 'request', prompt: count ? `${message}\n\n_(+${count} hivatkozott anyag)_` : message });
 			if (leading.length) {
 				response.push(...leading);
 				leading = [];
