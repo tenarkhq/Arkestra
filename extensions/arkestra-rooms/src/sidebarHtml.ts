@@ -4,6 +4,8 @@
  *  from the theme; the layout, spacing and type sizes from the approved render.
  *--------------------------------------------------------------------------------------------*/
 
+import { fontFaces, fontSrc, TYPE_CSS, type PageFonts } from './fonts';
+
 /** One row: a thread, a pinned board or a pinned artifact. */
 export interface SidebarRow {
 	/** `thread:<id>`, `board:<key>`, `artifact:<key>`; selection and clicks use it. */
@@ -86,13 +88,13 @@ function esc(value: string): string {
 	return value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]!));
 }
 
-export function sidebarHtml(nonce: string, s: SidebarStrings): string {
+export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts): string {
 	const strings = JSON.stringify(s).replace(/</g, '\\u003c');
 	const nav = (id: string, icon: string, label: string, extra = '') =>
 		`<div class="it${id === 'newChat' ? ' new' : ''}" role="button" tabindex="${id === 'newChat' ? 0 : -1}" data-nav="${id}" data-key="nav:${id}">${icon}<span class="n">${esc(label)}</span>${extra}</div>`;
 	return `<!DOCTYPE html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
-<style nonce="${nonce}">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}';${fontSrc(fonts)} script-src 'nonce-${nonce}';">
+<style nonce="${nonce}">${fontFaces(fonts)}
 	:root {
 		--fg: var(--vscode-sideBar-foreground, var(--vscode-foreground));
 		--mute: var(--vscode-descriptionForeground);
@@ -102,7 +104,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings): string {
 		--accent: var(--vscode-progressBar-background);
 	}
 	html, body { margin: 0; padding: 0; background: var(--vscode-sideBar-background); color: var(--fg); }
-	body { font-family: var(--vscode-font-family); font-size: 13px; padding: 10px 8px 16px; user-select: none; -webkit-user-select: none; }
+	body { ${TYPE_CSS} font-size: 13px; font-weight: 400; padding: 10px 8px 16px; user-select: none; -webkit-user-select: none; }
 	#nav, #list { display: flex; flex-direction: column; gap: 2px; }
 	.it { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 10px; border-radius: 7px; color: var(--fg); white-space: nowrap; overflow: hidden; cursor: pointer; outline: none; flex: none; }
 	.it:hover, .it.menu-open { background: var(--hover); }

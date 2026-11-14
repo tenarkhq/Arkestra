@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import type { ExistingSession } from './agent';
 import { addSection, deleteSection, keepThreads, layoutThreads, matches, moveSection, moveThread, parseSections, renameSection, sectionOf, sectionsFromCategories, shiftSection, type Section } from './sections';
 import { sidebarHtml, type SidebarMessage, type SidebarModel, type SidebarRow, type SidebarStrings } from './sidebarHtml';
+import { FONT_ROOT, pageFonts } from './webviewFonts';
 import { projectName, type ThreadSummary } from './threads';
 
 /** The sections in globalState: [{ id, name, threadIds }]. */
@@ -69,8 +70,8 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 
 	resolveWebviewView(view: vscode.WebviewView): void {
 		this.view = view;
-		view.webview.options = { enableScripts: true, localResourceRoots: [] };
-		view.webview.html = sidebarHtml(randomBytes(16).toString('base64'), strings());
+		view.webview.options = { enableScripts: true, localResourceRoots: [FONT_ROOT] };
+		view.webview.html = sidebarHtml(randomBytes(16).toString('base64'), strings(), pageFonts(view.webview));
 		view.onDidDispose(() => { if (this.view === view) { this.view = undefined; } }, undefined, this.disposables);
 		view.onDidChangeVisibility(() => { if (view.visible && this.dirty) { this.schedule(); } }, undefined, this.disposables);
 		view.webview.onDidReceiveMessage((m: SidebarMessage) => this.receive(m).catch(error => {

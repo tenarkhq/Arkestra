@@ -5,10 +5,15 @@
 
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
+import { existsSync, promises as fs, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
+import * as path from 'node:path';
 import type { ActivityBoard } from './activity';
 import type { AgentRegistry, InviteEntry } from './agent';
+import { allowedImage, attachmentName, fileReference, imageSource, type ImageResolver } from './images';
 import type { Room } from './room';
 import { ICONS, escapeHtml, liveHtml, renderMarkdown, rowHtml, threadPage, type ThreadStrings } from './threadHtml';
+import { FONT_ROOT, pageFonts } from './webviewFonts';
 import { agentTitle, machineOf, parseSlash, providerOf, threadRows, type LiveTurns, type Row } from './threadModel';
 import { projectName, titleFrom } from './threads';
 import { turnState } from './work';
@@ -59,6 +64,37 @@ interface View {
 	reset?: boolean;
 	/** Text for the composer that waits until the page has loaded. */
 	insert?: string;
+	/** Files pasted or dropped into this page's composer (they may be taken out again). */
+	readonly saved: Set<string>;
+	/** The folders the page may load from, as last set. */
+	roots?: string;
+}
+
+/** A real path (symlinks resolved), or undefined when it is not there. */
+function real(p: string): string | undefined {
+	try {
+		return realpathSync.native(p);
+	} catch {
+		return undefined;
+	}
+}
+
+/** The local folder of a project URI string, if it is one on this machine. */
+function projectFolder(project: string | undefined): string | undefined {
+	if (!project) {
+		return undefined;
+	}
+	try {
+		const uri = vscode.Uri.parse(project);
+		return uri.scheme === 'file' ? uri.fsPath : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Where Claude Code and Codex keep their sessions (and the pictures Arkestra read from them). */
+function agentHomes(): string[] {
+	return [path.join(homedir(), '.claude'), process.env.CODEX_HOME ?? '', path.join(homedir(), '.codex')].filter(Boolean);
 }
 
 export class ThreadViews implements vscode.Disposable {
@@ -168,14 +204,69 @@ export class ThreadViews implements vscode.Disposable {
 	}
 
 	private createPanel(column?: vscode.ViewColumn): vscode.WebviewPanel {
-		return vscode.window.createWebviewPanel(THREAD_VIEW_TYPE, vscode.l10n.t('New chat'), column ?? vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true, enableFindWidget: true, localResourceRoots: [] });
+		return vscode.window.createWebviewPanel(THREAD_VIEW_TYPE, vscode.l10n.t('New chat'), column ?? vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true, enableFindWidget: true, localResourceRoots: this.resourceRoots() });
+	}
+
+	/** The rooms' file folders (pasted pictures, template files). */
+	private filesRoot(): string {
+		return path.join(this.context.globalStorageUri.fsPath, 'room-files');
+	}
+
+	/** A room's own folder; a new chat's files wait in `_new` until its room exists. */
+	private roomFolder(roomId: string | undefined): string {
+		return path.join(this.filesRoot(), roomId && /^[\w.-]+$/.test(roomId) && !roomId.startsWith('.') ? roomId : '_new');
+	}
+
+	/** The folders a thread's pictures may come from: its room's folder, the workspace and project folders, the agents' session folders. */
+	private imageRoots(room: Room | undefined): string[] {
+		const list = [
+			this.roomFolder(room?.id),
+			...(vscode.workspace.workspaceFolders ?? []).filter(f => f.uri.scheme === 'file').map(f => f.uri.fsPath),
+			projectFolder(room?.state.project) ?? '',
+			...agentHomes(),
+		].filter(Boolean);
+		return [...new Set(list.flatMap(p => { const r = real(p); return r && r !== p ? [p, r] : [p]; }))];
+	}
+
+	/** What the webview may load at all (the page checks each picture against its own room's folders). */
+	private resourceRoots(room?: Room): vscode.Uri[] {
+		const roots = [this.filesRoot(), ...this.imageRoots(room).slice(1)];
+		return [FONT_ROOT, ...[...new Set(roots)].map(p => vscode.Uri.file(p))];
+	}
+
+	/** Sets the page's resource folders when they changed (a room's project, a workspace folder). */
+	private updateRoots(view: View, room: Room | undefined): void {
+		const roots = this.resourceRoots(room);
+		const key = roots.map(r => r.toString()).join('\n');
+		if (view.roots !== key) {
+			view.roots = key;
+			view.panel.webview.options = { enableScripts: true, localResourceRoots: roots };
+		}
+	}
+
+	/** A picture's address in the page: data: and https as they are; a file only under the room's allowed folders, its symlinks resolved. */
+	private resolver(view: View, room: Room | undefined): ImageResolver {
+		const roots = this.imageRoots(room);
+		const base = projectFolder(room?.state.project) ?? vscode.workspace.workspaceFolders?.find(f => f.uri.scheme === 'file')?.uri.fsPath;
+		const home = homedir();
+		return src => {
+			const source = imageSource(src, { home, ...(base ? { base } : {}) });
+			if (!source) {
+				return undefined;
+			}
+			if (source.kind !== 'file') {
+				return source.url;
+			}
+			const file = real(source.path);
+			return file && allowedImage(file, roots) ? view.panel.webview.asWebviewUri(vscode.Uri.file(file)).toString() : undefined;
+		};
 	}
 
 	private adopt(panel: vscode.WebviewPanel, roomId: string | undefined): View {
-		const view: View = { panel, ...(roomId ? { roomId } : {}), roundSeen: false, notice: '', buttons: [], scroll: true };
+		const view: View = { panel, ...(roomId ? { roomId } : {}), roundSeen: false, notice: '', buttons: [], scroll: true, saved: new Set() };
 		this.views.add(view);
 		panel.iconPath = new vscode.ThemeIcon(roomId ? 'comment-discussion' : 'add');
-		panel.webview.options = { enableScripts: true, localResourceRoots: [] };
+		this.updateRoots(view, undefined);
 		const nonce = randomBytes(16).toString('base64');
 		panel.webview.html = threadPage({
 			nonce,
@@ -184,6 +275,8 @@ export class ThreadViews implements vscode.Disposable {
 			...(roomId ? { roomId } : {}),
 			placeholder: roomId ? vscode.l10n.t('Write to the agents of this thread…') : vscode.l10n.t('What should they do?'),
 			heading: vscode.l10n.t('Who do you work with?'),
+			fonts: pageFonts(panel.webview),
+			close: vscode.l10n.t('Close'),
 		});
 		panel.onDidDispose(() => {
 			// A running round goes on; the thread shows it again when reopened.
@@ -253,7 +346,7 @@ export class ThreadViews implements vscode.Disposable {
 	}
 
 	private clientStrings() {
-		return { send: vscode.l10n.t('Send'), stop: vscode.l10n.t('Stop'), noAgents: vscode.l10n.t('No agent is known yet. Add a machine or sign in to an agent first.') };
+		return { send: vscode.l10n.t('Send'), stop: vscode.l10n.t('Stop'), copy: vscode.l10n.t('Copy'), remove: vscode.l10n.t('Remove'), noAgents:vscode.l10n.t('No agent is known yet. Add a machine or sign in to an agent first.') };
 	}
 
 	private async push(view: View): Promise<void> {
@@ -264,12 +357,12 @@ export class ThreadViews implements vscode.Disposable {
 		}
 	}
 
-	private rowHtml(row: Row, s: ThreadStrings): string {
-		const key = `${row.id}:${row.type === 'fold' ? row.items.length : row.text.length}`;
+	private rowHtml(row: Row, s: ThreadStrings, image: ImageResolver, roomId: string): string {
+		const key = `${roomId}:${row.id}:${row.type === 'fold' ? row.items.length : row.text.length}`;
 		let html = this.rowCache.get(key);
 		if (html === undefined) {
 			const time = row.type === 'agent' && row.at ? new Date(row.at).toLocaleTimeString(vscode.env.language, { hour: '2-digit', minute: '2-digit' }) : '';
-			html = rowHtml(row, s, renderMarkdown, time);
+			html = rowHtml(row, s, renderMarkdown, time, image);
 			if (this.rowCache.size > 4000) {
 				this.rowCache.clear();
 			}
@@ -287,15 +380,17 @@ export class ThreadViews implements vscode.Disposable {
 		}
 		view.panel.title = room.state.title;
 		view.panel.iconPath = new vscode.ThemeIcon('comment-discussion');
-		const rows = threadRows(room.messages).map(row => ({ key: row.id, html: this.rowHtml(row, s) }));
+		this.updateRoots(view, room);
+		const image = this.resolver(view, room);
+		const rows = threadRows(room.messages).map(row => ({ key: row.id, html: this.rowHtml(row, s, image, room.id) }));
 		if (view.pending && room.messages.slice(view.pending.after).some(m => m.author.kind === 'user')) {
 			view.pending = undefined;
 		}
 		if (view.pending) {
-			rows.push({ key: 'pending', html: rowHtml({ type: 'user', id: 'pending', at: '', text: view.pending.text, attached: 0 }, s) });
+			rows.push({ key: 'pending', html: rowHtml({ type: 'user', id: 'pending', at: '', text: view.pending.text, attached: 0 }, s, renderMarkdown, '', image) });
 		}
 		const parts = this.host.live.parts(room.id);
-		const live = parts.map(p => ({ key: `live:${p.agentId}`, html: liveHtml(p, this.host.registry.get(p.agentId)?.name ?? p.agentId, s) }));
+		const live = parts.map(p => ({ key: `live:${p.agentId}`, html: liveHtml(p, this.host.registry.get(p.agentId)?.name ?? p.agentId, s, image) }));
 		const turns = room.roster.map(id => { const a = this.host.activity.get(room.id, id); return turnState(a.state, a.work, a.error, !!a.ran); });
 		const busy = !!view.sending || parts.length > 0 || turns.some(t => t === 'working' || t === 'waiting' || t === 'queued');
 		const chips: object[] = room.roster.map((id, i) => {
@@ -383,8 +478,31 @@ export class ThreadViews implements vscode.Disposable {
 		});
 	}
 
-	private async receive(view: View, message: { type?: string; text?: unknown; agents?: unknown; agentId?: unknown; id?: unknown; index?: unknown }): Promise<void> {
+	private async receive(view: View, message: { type?: string; text?: unknown; agents?: unknown; agentId?: unknown; id?: unknown; index?: unknown; name?: unknown; mime?: unknown; data?: unknown; path?: unknown; uris?: unknown }): Promise<void> {
 		switch (message.type) {
+			case 'attachFile':
+				if (typeof message.id === 'string' && typeof message.data === 'string') {
+					await this.keepFile(view, message.id, typeof message.name === 'string' ? message.name : '', typeof message.mime === 'string' ? message.mime : '', message.data);
+				}
+				break;
+			case 'detach':
+				if (typeof message.path === 'string' && view.saved.delete(message.path)) {
+					await fs.unlink(message.path).catch(() => undefined);
+				}
+				break;
+			case 'tooBig':
+				void vscode.window.showWarningMessage(vscode.l10n.t('{0} is larger than 25 MB; attach it with + instead.', typeof message.name === 'string' ? message.name : ''));
+				break;
+			case 'dropUris':
+				if (Array.isArray(message.uris)) {
+					this.insertUris(view, message.uris.filter((u): u is string => typeof u === 'string'));
+				}
+				break;
+			case 'copyText':
+				if (typeof message.text === 'string') {
+					await vscode.env.clipboard.writeText(message.text);
+				}
+				break;
 			case 'ready':
 				view.scroll = true;
 				this.schedule(view, 0);
@@ -458,6 +576,7 @@ export class ThreadViews implements vscode.Disposable {
 		}
 		try {
 			const room = await this.host.createRoom(agentIds, titleFrom(parseSlash(text, SLASH_COMMANDS).prompt || text, vscode.l10n.t('Room')), view.project);
+			text = await this.moveDrafts(view, room.id, text);
 			view.roomId = room.id;
 			view.preselect = undefined;
 			view.scroll = true;
@@ -526,6 +645,67 @@ export class ThreadViews implements vscode.Disposable {
 		};
 		const noop = () => undefined;
 		return new Proxy(target, { get: (t, key) => Reflect.get(t, key) ?? noop }) as unknown as vscode.ChatResponseStream;
+	}
+
+	/** A file pasted or dropped into the composer: kept in the room's folder, its path back to the page. */
+	private async keepFile(view: View, id: string, name: string, mime: string, data: string): Promise<void> {
+		try {
+			const bytes = Buffer.from(data, 'base64');
+			if (!bytes.length || bytes.length > 25 * 1024 * 1024) {
+				throw new Error(vscode.l10n.t('the file is empty or larger than 25 MB'));
+			}
+			const folder = this.roomFolder(view.roomId);
+			await fs.mkdir(folder, { recursive: true });
+			const file = path.join(folder, attachmentName(name, mime, candidate => existsSync(path.join(folder, candidate))));
+			await fs.writeFile(file, bytes, { flag: 'wx' });
+			view.saved.add(file);
+			this.post(view, { type: 'attached', id, path: file, name: path.basename(file), url: view.panel.webview.asWebviewUri(vscode.Uri.file(file)).toString() });
+		} catch (error) {
+			this.post(view, { type: 'attached', id });
+			void vscode.window.showErrorMessage(vscode.l10n.t('The file could not be attached: {0}', error instanceof Error ? error.message : String(error)));
+		}
+	}
+
+	/** A new chat's files go into its room's own folder once the room exists; the message names them there. */
+	private async moveDrafts(view: View, roomId: string, text: string): Promise<string> {
+		const drafts = this.roomFolder(undefined);
+		const folder = this.roomFolder(roomId);
+		for (const file of [...view.saved]) {
+			if (path.dirname(file) !== drafts || !text.includes(file)) {
+				continue;
+			}
+			try {
+				await fs.mkdir(folder, { recursive: true });
+				const target = path.join(folder, attachmentName(path.basename(file), '', candidate => existsSync(path.join(folder, candidate))));
+				await fs.rename(file, target);
+				view.saved.delete(file);
+				text = text.split(fileReference(file)).join(fileReference(target));
+			} catch {
+				// It stays where it is; the reference still points at it.
+			}
+		}
+		return text;
+	}
+
+	/** Files dragged in from the explorer or the editor tabs: @file references in the composer. */
+	private insertUris(view: View, uris: readonly string[]): void {
+		const refs: string[] = [];
+		for (const value of uris.slice(0, 50)) {
+			let uri: vscode.Uri;
+			try {
+				uri = vscode.Uri.parse(value, true);
+			} catch {
+				continue;
+			}
+			if (uri.scheme !== 'file' && uri.scheme !== 'vscode-remote') {
+				continue;
+			}
+			const inWorkspace = !!vscode.workspace.getWorkspaceFolder(uri);
+			refs.push(fileReference(inWorkspace ? vscode.workspace.asRelativePath(uri, false) : uri.fsPath));
+		}
+		if (refs.length) {
+			void view.panel.webview.postMessage({ type: 'insert', text: refs.join(' ') });
+		}
 	}
 
 	/** + in the composer: a file, the working tree's diff or the last terminal command as an @-reference. */

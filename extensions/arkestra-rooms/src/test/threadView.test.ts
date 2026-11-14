@@ -174,7 +174,9 @@ test('markdown is escaped first: no raw HTML, no script links', () => {
 });
 
 test('markdown: code blocks, inline code, headings, lists, tables, quotes', () => {
-	assert.equal(renderMarkdown('```ts\nconst a = <T>(x: T) => x; // **no**\n```'), '<pre data-lang="ts"><code>const a = &lt;T&gt;(x: T) =&gt; x; // **no**</code></pre>');
+	const code = renderMarkdown('```ts\nconst a = <T>(x: T) => x; // **no**\n```');
+	assert.ok(code.startsWith('<div class="code"><pre data-lang="ts"><code>const a = &lt;T&gt;(x: T) =&gt; x; // **no**</code></pre><button class="cpy" data-copycode'), code);
+	assert.ok(code.endsWith('</button></div>'));
 	assert.equal(renderMarkdown('run `a **b**` now'), '<p>run <code>a **b**</code> now</p>');
 	assert.equal(renderMarkdown('## Plan'), '<h4>Plan</h4>');
 	assert.equal(renderMarkdown('- one\n- two\n  - nested\n- three'), '<ul><li>one</li><li>two<ul><li>nested</li></ul></li><li>three</li></ul>');

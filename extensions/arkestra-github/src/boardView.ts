@@ -6,6 +6,7 @@
 
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
+import * as path from 'node:path';
 import { boardModel, type RoomInfo } from './board';
 import { boardHtml } from './boardHtml';
 import { readGitInfo } from './gitInfo';
@@ -13,6 +14,9 @@ import { planModel, type GitInfo } from './plan';
 import { graphModel, wouldCycle, type GraphSaved } from './graph';
 import type { FieldInput, ProjectSnapshot } from './project';
 import type { JournalEntry, SyncStatus } from './sync';
+
+/** The bundled Inter (media/fonts, SIL OFL 1.1): out/ (tsc) and dist/ (esbuild) are both one level under the extension's root. */
+const FONT_ROOT = vscode.Uri.file(path.join(__dirname, '..', 'media', 'fonts'));
 
 export interface BoardSource {
 	configured(): boolean;
@@ -168,7 +172,7 @@ export class ProjectBoards implements vscode.Disposable {
 			open.panel.reveal();
 			return;
 		}
-		const board = this.adopt(vscode.window.createWebviewPanel(VIEW, vscode.l10n.t('Project'), vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true }), ref);
+		const board = this.adopt(vscode.window.createWebviewPanel(VIEW, vscode.l10n.t('Project'), vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [FONT_ROOT] }), ref);
 		const key = board.pinKey();
 		if (key && this.host.isPinned(key)) {
 			void vscode.commands.executeCommand('workbench.action.pinEditor');
@@ -240,8 +244,8 @@ class BoardPanel implements vscode.Disposable {
 	constructor(private readonly boards: ProjectBoards, readonly panel: vscode.WebviewPanel, readonly ref: string | undefined, private readonly lease: BoardLease) {
 		this.source = lease.source;
 		panel.iconPath = new vscode.ThemeIcon('project');
-		panel.webview.options = { enableScripts: true };
-		panel.webview.html = boardHtml(randomBytes(16).toString('base64'), panel.webview.cspSource, pageStrings());
+		panel.webview.options = { enableScripts: true, localResourceRoots: [FONT_ROOT] };
+		panel.webview.html = boardHtml(randomBytes(16).toString('base64'), panel.webview.cspSource, pageStrings(), panel.webview.asWebviewUri(FONT_ROOT).toString());
 		// The branch rails follow the local repository: read again when the project changes and every 30 s.
 		this.gitTicker = setInterval(() => { if (panel.visible) { void this.loadGit(); } }, 30_000);
 		this.disposables.push(
