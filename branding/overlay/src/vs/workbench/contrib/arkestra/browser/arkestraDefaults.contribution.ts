@@ -31,6 +31,11 @@ export const ARKESTRA_DEFAULTS: { readonly [key: string]: unknown } = {
 	'update.showReleaseNotes': false,
 	'workbench.activity.showAccounts': false,            // accounts live under Settings › Accounts
 
+	// Themes (AR06): dark by default; the light one when the system asks for light
+	'workbench.colorTheme': 'Arkestra Dark',
+	'workbench.preferredDarkColorTheme': 'Arkestra Dark',
+	'workbench.preferredLightColorTheme': 'Arkestra Light',
+
 	// No Microsoft service on the way (AR04)
 	'github-authentication.preferDeviceCodeFlow': true,  // GitHub sign-in without the vscode.dev redirect
 };
