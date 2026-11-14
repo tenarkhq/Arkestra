@@ -12,6 +12,7 @@ import { RelayClient, describe, type RelayEvent, type RelayState } from './relay
 import { graphqlClient } from './graphql';
 import { parseProjectRef, type FieldInput, type ProjectSnapshot } from './project';
 import { ProjectSync, type JournalEntry, type SyncStatus } from './sync';
+import { ProjectBoard } from './boardView';
 
 const TOKEN = 'arkestra.github.relayToken';
 const SCOPES = ['repo', 'read:org', 'project'];
@@ -289,6 +290,28 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 		}),
 		context.secrets.onDidChange(e => { if (e.key === TOKEN) { void restartRelay(); } }),
 		vscode.authentication.onDidChangeSessions(e => { if (e.provider.id === 'github') { token = undefined; void restartSync(); } }),
+	);
+	// The Board and Table views (AR30) follow the project, the sync state, the journal and the relay.
+	const boardChanged = new vscode.EventEmitter<void>();
+	const board = new ProjectBoard({
+		configured: () => !!parseProjectRef(vscode.workspace.getConfiguration('arkestra.github').get<string>('project') ?? ''),
+		signedIn: () => !!token,
+		snapshot: () => sync?.snapshot,
+		status: () => syncStatus,
+		live: () => state.kind === 'live',
+		journal: () => sync?.journal ?? [],
+		onDidChange: boardChanged.event,
+		setField: (itemId, field, value) => need().setField(itemId, field, value),
+		createIssue: (repository, title, body, fields) => need().createIssue(repository, title, body, fields),
+		refresh: async () => { await need().refresh(); },
+	});
+	context.subscriptions.push(
+		boardChanged, board,
+		projectChanged.event(() => boardChanged.fire()),
+		syncChanged.event(() => boardChanged.fire()),
+		journalAdded.event(() => boardChanged.fire()),
+		states.event(() => boardChanged.fire()),
+		vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('arkestra.github.project')) { boardChanged.fire(); } }),
 	);
 	void restartRelay().then(restartSync);
 

@@ -10,5 +10,7 @@
   "project": "The GitHub Project this workspace follows, as `owner/number` (for example `tenarkhq/3`) or the project's URL. Changes on GitHub show up within seconds; changes made in Arkestra are written to GitHub at once.",
   "signIn": "Sign in to GitHub for the project sync",
   "setProject": "Follow a GitHub Project in this workspace…",
-  "refreshProject": "Read the GitHub Project again"
+  "refreshProject": "Read the GitHub Project again",
+  "openBoard": "Open the project board",
+  "cardFields": "The project fields the board's cards show, by name (for example `Line`, `Executor`, `Review`). Empty: the first four fields besides Status."
 }
