@@ -166,7 +166,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}
 		let run = runs.get(room.id);
 		if (!run) {
-			const io = new GitTemplateIO(() => state.code ? { dirs: state.code.dirs, branches: state.code.branches, coordinator: state.code.coordinator } : undefined);
+			const io = new GitTemplateIO(() => state.code ? { repo: state.code.repo, base: state.code.base, dirs: state.code.dirs, branches: state.code.branches, coordinator: state.code.coordinator } : undefined);
 			run = new TemplateRun(room, state, io, (_role, agentId, event) => {
 				switch (event.kind) {
 					case 'start': activity.start(room.id, agentId); break;
