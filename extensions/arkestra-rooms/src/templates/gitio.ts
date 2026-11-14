@@ -1,13 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Arkestra. Git for template rooms: one work tree and branch per agent inside the project
  *  (.arkestra/rooms/<room>/<agent>), commits on [SZELET KÉSZ], the merge on [ÁTEMELÉS] and
- *  the test command on [KÉSZ]. Commits run without the repository's hooks and signing.
+ *  the test command on [KÉSZ], and the landing of the finished work in the base branch.
+ *  Commits run without the repository's hooks and signing.
  *--------------------------------------------------------------------------------------------*/
 
 import { execFile, spawn } from 'node:child_process';
 import { appendFile, mkdir, readFile, stat } from 'node:fs/promises';
 import * as path from 'node:path';
-import type { TemplateIO, WorkTreeState } from './engine';
+import type { LandResult, TemplateIO, WorkTreeState } from './engine';
 import type { Role } from './signals';
 
 const NO_HOOKS = ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'core.fsmonitor=false'];
@@ -61,7 +62,7 @@ export async function createWorkTrees(repo: string, base: string, roomId: string
 }
 
 export class GitTemplateIO implements TemplateIO {
-	constructor(private readonly code: () => { dirs: Record<Role, string>; branches: Record<Role, string>; coordinator: Role } | undefined) { }
+	constructor(private readonly code: () => { repo: string; base: string; dirs: Record<Role, string>; branches: Record<Role, string>; coordinator: Role } | undefined) { }
 
 	async fileExists(file: string): Promise<boolean> {
 		return stat(file).then(s => s.isFile(), () => false);
@@ -119,6 +120,56 @@ export class GitTemplateIO implements TemplateIO {
 		}
 		const ff = await git(peerDir, ['merge', '--ff-only', '-q', c.branches[lead]]);
 		return ff.ok ? { merged, synced: true } : { merged, synced: false, syncReason: 'error' };
+	}
+
+	async unmerged(role: Role): Promise<number> {
+		const c = this.code()!;
+		const r = await git(c.dirs[c.coordinator], ['rev-list', '--count', `${c.branches[c.coordinator]}..${c.branches[role]}`]);
+		return r.ok ? Number(r.out.trim()) || 0 : 0;
+	}
+
+	async land(title: string): Promise<LandResult> {
+		const c = this.code()!;
+		const branch = c.branches[c.coordinator];
+		const baseRef = `refs/heads/${c.base}`;
+		if (!(await git(c.repo, ['rev-parse', '--verify', '-q', baseRef])).ok) {
+			return { ok: false, reason: 'error', detail: `nincs ${c.base} ág` };
+		}
+		const short = (dir: string, ref: string) => must(dir, ['rev-parse', '--short', ref]);
+		if ((await git(c.repo, ['merge-base', '--is-ancestor', branch, baseRef])).ok) {
+			return { ok: true, how: 'already', head: await short(c.repo, baseRef), where: c.repo };
+		}
+		// Where the base branch is checked out (the project itself or another work tree).
+		const list = (await must(c.repo, ['worktree', 'list', '--porcelain'])).split('\n\n');
+		const where = list.map(block => ({ dir: /^worktree (.+)$/m.exec(block)?.[1], branch: /^branch (.+)$/m.exec(block)?.[1] })).find(w => w.branch === baseRef)?.dir;
+		if (!where) {
+			// Not checked out anywhere: only a fast-forward of the branch itself is safe.
+			if (!(await git(c.repo, ['merge-base', '--is-ancestor', baseRef, branch])).ok) {
+				return { ok: false, reason: 'diverged' };
+			}
+			const old = await must(c.repo, ['rev-parse', baseRef]);
+			const sha = await must(c.repo, ['rev-parse', branch]);
+			const r = await git(c.repo, ['update-ref', '-m', `arkestra: ${title}`, baseRef, sha, old]);
+			return r.ok ? { ok: true, how: 'fast-forward', head: await short(c.repo, baseRef), where: c.repo } : { ok: false, reason: 'error', detail: r.err.trim().split('\n').at(-1) };
+		}
+		const ff = (await git(where, ['merge-base', '--is-ancestor', 'HEAD', branch])).ok;
+		const merge = await git(where, ['merge', '--no-edit', '--no-verify', '-m', `Arkestra: ${title}`, branch]);
+		if (merge.ok) {
+			// The coordinator goes on from the base it landed in (a merge commit is new to it).
+			await git(c.dirs[c.coordinator], ['merge', '--ff-only', '-q', baseRef]);
+			return { ok: true, how: ff ? 'fast-forward' : 'merge', head: await short(where, 'HEAD'), where };
+		}
+		const conflicts = (await git(where, ['diff', '--name-only', '--diff-filter=U'])).out.split('\n').filter(Boolean);
+		if (conflicts.length) {
+			await git(where, ['merge', '--abort']);
+			return { ok: false, reason: 'conflict', files: conflicts, where };
+		}
+		const text = `${merge.out}\n${merge.err}`;
+		if (/local changes|untracked working tree files|would be overwritten/i.test(text)) {
+			const files = text.split('\n').filter(l => /^\s+\S/.test(l)).map(l => l.trim());
+			return { ok: false, reason: 'dirty', files, detail: files.slice(0, 5).join(', '), where };
+		}
+		return { ok: false, reason: 'error', detail: merge.err.trim().split('\n').at(-1), where };
 	}
 
 	runTests(command: string, timeoutMs = 20 * 60_000): Promise<{ ok: boolean; why?: string; tail?: string }> {

@@ -43,6 +43,8 @@ function fakeIO(files: Set<string>, overrides: Partial<TemplateIO> = {}): Templa
 		workTree: async role => ({ head: `h-${role}-${n}`, dirty: false }),
 		integrate: async () => { calls.push('integrate'); return { merged: `m${++n}`, synced: true }; },
 		runTests: async cmd => { calls.push(`test ${cmd}`); return { ok: true }; },
+		unmerged: async () => 0,
+		land: async title => { calls.push(`land ${title}`); return { ok: true, how: 'merge', head: 'L1', where: '/repo' }; },
 		...overrides,
 	};
 }
@@ -123,7 +125,34 @@ test('coding: assignment, slice, merge, done, tests and verification, as in 2ARK
 	await engine.answer('A', 'Pótoltam.\n[KÉSZ]');
 	clear();
 	await engine.answer('B', 'Rendben.\n[EGYETÉRTEK]');
-	assert.match(log.at(-1)!, /^end kész · arkestra\/x-claude @ h-A-\d+ · \/w\/claude$/);
+	assert.ok(io.calls.includes('land Claude: Rendben.'), 'the checked work goes into the base branch');
+	assert.deepEqual(log.slice(-2), ['notice Bevezetve: arkestra/x-claude → main (összefésülve), main most L1.', 'end kész · main @ L1 · /repo']);
+});
+
+test('coding: the room ends only when the work is in the base branch; unmerged peer work and a failed landing go back to the coordinator', async () => {
+	const { log, out, clear } = recorder();
+	let behind = 2;
+	let landing: Awaited<ReturnType<TemplateIO['land']>> = { ok: false, reason: 'conflict', files: ['a.ts'], where: '/repo' };
+	const io = fakeIO(new Set(), { unmerged: async () => behind, land: async () => landing });
+	const engine = new TemplateEngine(base({ code: code({ verify: false, test: undefined }) }), io, out);
+	engine.start();
+	clear();
+	await engine.answer('A', 'Kész.\n[KÉSZ]');
+	assert.match(log.at(-1)!, /^→A Codex ágán \(arkestra\/x-codex\) 2 commit van/);
+	behind = 0;
+	clear();
+	await engine.answer('A', 'Kész.\n[KÉSZ]');
+	assert.ok(!log.some(l => l.startsWith('end')), 'a conflict with the base branch does not end the room');
+	assert.match(log.at(-1)!, /^→A A munka kész, de még nincs a main ágban/);
+	landing = { ok: false, reason: 'dirty', files: ['a.ts'], detail: 'a.ts', where: '/repo' };
+	clear();
+	await engine.answer('A', 'Kész.\n[KÉSZ]');
+	assert.ok(log.some(l => l.startsWith('wait A A kész munka')), 'uncommitted changes in the base checkout wait for the user');
+	assert.equal(engine.state.ended, undefined);
+	landing = { ok: true, how: 'fast-forward', head: 'L2', where: '/repo' };
+	clear();
+	await engine.answer('A', 'Kész.\n[KÉSZ]');
+	assert.equal(log.at(-1), 'end kész · main @ L2 · /repo');
 });
 
 test('coding: the slice plan waits for the user, the limit holds the relay back until Continue, decisions wait', async () => {
@@ -254,7 +283,7 @@ test('a coding room runs: instructions only for their agent, both agents work in
 	const run = new TemplateRun(room, state, io);
 	const ended = new Promise<string>(resolve => run.on(e => { if (e.kind === 'end') { resolve(e.reason); } }));
 	run.engine.start();
-	assert.match(await ended, /^kész · arkestra\/x-claude/);
+	assert.match(await ended, /^kész · main @ L1/);
 	assert.equal(await run.settled(), 'ended');
 	assert.equal(shared.max, 2, 'the coordinator worked on its own slice while the executor worked on its one');
 	assert.ok(codex.seen.every(t => !t.some(line => line.startsWith('Kezdd'))), 'the coordinator\'s instructions never reach the executor');
@@ -300,7 +329,7 @@ test('git: work trees on their own branches, commits, a clean merge, a conflict,
 	assert.ok(trees.dirs.B.endsWith(path.join('.arkestra', 'rooms', 'room1abc', 'codex')));
 	assert.ok((await readFile(path.join(repo, '.git', 'info', 'exclude'), 'utf8')).includes('/.arkestra/'));
 	assert.equal(sh(repo, 'status', '--porcelain'), '', 'the work trees do not show up in the project');
-	const io = new GitTemplateIO(() => ({ ...trees, coordinator: 'A' as Role }));
+	const io = new GitTemplateIO(() => ({ ...trees, repo, base: 'main', coordinator: 'A' as Role }));
 	assert.equal(await io.commitAll('B', 'nothing'), null);
 	await writeFile(path.join(trees.dirs.B, 'b.txt'), 'codex\n');
 	const commit = await io.commitAll('B', 'Codex: b.txt');
@@ -320,4 +349,58 @@ test('git: work trees on their own branches, commits, a clean merge, a conflict,
 	assert.equal(red.ok, false);
 	assert.equal(red.why, 'kilépési kód 3');
 	assert.match(red.tail!, /nope/);
+});
+
+test('git: landing brings the coordinator\'s branch into the checked-out base, refuses conflicts and dirty files, never leaves a half merge', async () => {
+	const repo = await mkdtemp(path.join(tmpdir(), 'arkestra-land-'));
+	const sh = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+	process.env.GIT_AUTHOR_NAME = process.env.GIT_COMMITTER_NAME = 't';
+	process.env.GIT_AUTHOR_EMAIL = process.env.GIT_COMMITTER_EMAIL = 't@t';
+	sh(repo, 'init', '-q', '-b', 'main');
+	await writeFile(path.join(repo, 'a.txt'), 'one\n');
+	sh(repo, 'add', '.');
+	sh(repo, 'commit', '-q', '-m', 'init');
+	const trees = await createWorkTrees(repo, 'main', 'room-land', { A: 'Claude', B: 'Codex' });
+	const io = new GitTemplateIO(() => ({ ...trees, repo, base: 'main', coordinator: 'A' as Role }));
+	await writeFile(path.join(trees.dirs.A, 'b.txt'), 'claude\n');
+	await io.commitAll('A', 'Claude: b');
+	await writeFile(path.join(trees.dirs.B, 'c.txt'), 'codex\n');
+	await io.commitAll('B', 'Codex: c');
+	assert.equal(await io.unmerged('B'), 1, 'the peer\'s commit is not in the coordinator\'s branch yet');
+	await io.integrate();
+	assert.equal(await io.unmerged('B'), 0);
+	const ff = await io.land('Claude: kész');
+	assert.equal(ff.ok && ff.how, 'fast-forward');
+	assert.equal(await readFile(path.join(repo, 'b.txt'), 'utf8'), 'claude\n', 'the work is in the user\'s checkout');
+	assert.equal(sh(repo, 'status', '--porcelain'), '');
+	assert.equal((await io.land('again')).ok && 'already', 'already');
+	// The base moved on and touches the same file: a conflict, and main is left as it was.
+	await writeFile(path.join(repo, 'a.txt'), 'user\n');
+	sh(repo, 'commit', '-qam', 'user edit');
+	await writeFile(path.join(trees.dirs.A, 'a.txt'), 'claude\n');
+	await io.commitAll('A', 'Claude: a');
+	const conflict = await io.land('Claude: a');
+	assert.equal(!conflict.ok && conflict.reason, 'conflict');
+	assert.deepEqual(!conflict.ok && conflict.files, ['a.txt']);
+	assert.equal(sh(repo, 'status', '--porcelain'), '', 'the failed merge was aborted');
+	// The coordinator merges main in, then landing is a real merge.
+	sh(trees.dirs.A, 'merge', '-q', '-X', 'ours', '--no-edit', 'main');
+	await writeFile(path.join(repo, 'x.txt'), 'side\n');
+	sh(repo, 'add', 'x.txt');
+	sh(repo, 'commit', '-qm', 'side');
+	await writeFile(path.join(repo, 'a.txt'), 'dirty\n');
+	const dirty = await io.land('Claude: a');
+	assert.equal(!dirty.ok && dirty.reason, 'dirty');
+	sh(repo, 'checkout', '--', 'a.txt');
+	const merged = await io.land('Claude: a');
+	assert.equal(merged.ok && merged.how, 'merge');
+	assert.equal(await readFile(path.join(repo, 'a.txt'), 'utf8'), 'claude\n');
+	// Base not checked out anywhere and behind: a fast-forward of the ref only.
+	sh(repo, 'checkout', '-q', '-b', 'other');
+	await writeFile(path.join(trees.dirs.A, 'd.txt'), 'd\n');
+	await io.commitAll('A', 'Claude: d');
+	const refOnly = await io.land('Claude: d');
+	assert.equal(refOnly.ok && refOnly.how, 'fast-forward');
+	assert.equal(sh(repo, 'rev-parse', 'main'), sh(trees.dirs.A, 'rev-parse', 'HEAD'));
+	assert.equal(sh(repo, 'rev-parse', '--abbrev-ref', 'HEAD'), 'other', 'the user\'s checkout is not switched');
 });

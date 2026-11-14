@@ -23,8 +23,16 @@ export interface TemplateIO {
 	workTree(role: Role): Promise<WorkTreeState>;
 	/** Merges the other branch into the coordinator's, and brings the other work tree up to it. */
 	integrate(): Promise<{ merged: string; conflicts?: string[]; synced?: boolean; syncReason?: 'dirty' | 'diverged' | 'error' }>;
+	/** Commits on the role's branch that the coordinator's branch does not have yet. */
+	unmerged(role: Role): Promise<number>;
+	/** Brings the coordinator's branch into the base branch, where the user works. */
+	land(title: string): Promise<LandResult>;
 	runTests(command: string): Promise<{ ok: boolean; why?: string; tail?: string }>;
 }
+
+export type LandResult =
+	| { ok: true; how: 'already' | 'fast-forward' | 'merge'; head: string; where: string }
+	| { ok: false; reason: 'conflict' | 'dirty' | 'diverged' | 'error'; files?: string[]; detail?: string; where?: string };
 
 export interface TemplateOutput {
 	/** One message for one agent; the room runs that agent's turn with it. */
@@ -236,6 +244,10 @@ export class TemplateEngine {
 		if (before.A.dirty || before.B.dirty) {
 			return this.deliver(role, 'A lezárás előtt valamelyik munkafában még nem commitolt változás van. Rendezd a szeleteket, majd jelezz újra: [KÉSZ].');
 		}
+		const behind = await this.io.unmerged(other(role));
+		if (behind) {
+			return this.deliver(role, `${this.name(other(role))} ágán (${c.branches[other(role)]}) ${behind} commit van, ami a te ágadban még nincs. Emeld át (az utolsó sor: [ÁTEMELÉS]), és utána jelezz újra: [KÉSZ].`);
+		}
 		if (c.test) {
 			this.out.notice(`Tesztek futnak: ${c.test}`);
 			const result = await this.io.runTests(c.test);
@@ -253,7 +265,35 @@ export class TemplateEngine {
 		if (s.audit?.phase === 'fix' || c.verify) {
 			return this.startVerify(role, head, answer, before);
 		}
-		this.end(`kész · ${c.branches[role]} @ ${head} · ${c.dirs[role]}`, { branch: c.branches[role], head });
+		return this.land(role, answer);
+	}
+
+	/**
+	 * The finished, checked work goes into the base branch, so the room really ends: the
+	 * change is committed where the user works, not left in an agent's work tree. When git
+	 * cannot do it on its own, the coordinator gets the task and the room goes on.
+	 */
+	private async land(lead: Role, answer: string, final?: string): Promise<void> {
+		const c = this.state.code!;
+		const result = await this.io.land(commitTitle(this.name(lead), answer));
+		if (result.ok) {
+			const how = result.how === 'already' ? 'már benne volt' : result.how === 'fast-forward' ? 'előretekerve' : 'összefésülve';
+			this.out.notice(`Bevezetve: ${c.branches[lead]} → ${c.base} (${how}), ${c.base} most ${result.head}.`);
+			return this.end(`kész · ${c.base} @ ${result.head} · ${result.where}`, { branch: c.base, head: result.head, ...(final ? { final } : {}) });
+		}
+		const where = result.where ? ` (${result.where})` : '';
+		this.out.notice(`A bevezetés a ${c.base} ágba nem sikerült: ${result.reason}${result.detail ? ` · ${result.detail}` : ''}.`);
+		const task =
+			result.reason === 'conflict' ? `A ${c.base} ág közben továbbment, és ütközik a munkáddal ezekben a fájlokban:\n${(result.files ?? []).map(f => `- ${f}`).join('\n')}\n\nA munkafádban (${c.dirs[lead]}) futtasd: git merge ${c.base}, oldd fel az ütközéseket, commitold,`
+			: result.reason === 'diverged' ? `A ${c.base} ág közben továbbment, és nincs kivéve sehol, így az Arkestra nem tudja összefésülni. A munkafádban (${c.dirs[lead]}) futtasd: git merge ${c.base}, és ha kell, oldd fel az ütközéseket és commitold,`
+			: result.reason === 'dirty' ? `A ${c.base} ág munkakönyvtárában${where} nem commitolt változás van, ami ütközik a munkáddal${result.detail ? ` (${result.detail})` : ''}. Ezt a felhasználó rendezi; addig nincs teendőd. Ha ${USER} szól, hogy rendezte,`
+			: `Git-hiba${result.detail ? `: ${result.detail}` : ''}. Nézd meg, mi okozza, és ha rendezted,`;
+		if (result.reason === 'dirty') {
+			this.state.waiting[lead] = 'bevezetés';
+			this.out.changed();
+			this.out.wait(lead, `A kész munka (${c.branches[lead]}) nem vihető be a ${c.base} ágba, mert a munkakönyvtárában${where} nem commitolt, ütköző változás van. Commitold vagy tedd félre, és írd meg, hogy mehet.`);
+		}
+		return this.deliver(lead, `A munka kész, de még nincs a ${c.base} ágban, így a feladat nincs befejezve. ${task} majd jelezz újra: [KÉSZ].`);
 	}
 
 	private startVerify(lead: Role, head: string, answer: string, state: Record<Role, WorkTreeState>): void {
@@ -289,7 +329,6 @@ export class TemplateEngine {
 			return this.decision(role, answer);
 		}
 		if (role === peer && signal === 'EGYETÉRTEK') {
-			const head = a ? a.head! : c.verifying!;
 			const now = { A: await this.io.workTree('A'), B: await this.io.workTree('B') };
 			const same = c.verification && (['A', 'B'] as Role[]).every(r => c.verification![r].head === now[r].head && !now[r].dirty);
 			c.verification = undefined;
@@ -303,7 +342,7 @@ export class TemplateEngine {
 			if (a) {
 				a.phase = 'fixed';
 			}
-			return this.end(`kész · ${c.branches[lead]} @ ${head} · ${c.dirs[lead]}`, { branch: c.branches[lead], head, ...(a ? { final: path.join(s.folder, AUDIT_FILE) } : {}) });
+			return this.land(lead, answer, a ? path.join(s.folder, AUDIT_FILE) : undefined);
 		}
 		if (role === peer) {
 			// Back to work: the coordinator's next [KÉSZ] sends it to the check again.
