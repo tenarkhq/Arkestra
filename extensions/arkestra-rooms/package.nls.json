@@ -71,5 +71,8 @@
   "agentList.view": "Agents",
   "command.newThreadWith": "New thread with this agent",
   "command.fixAgent": "Sign in or set up",
-  "command.refreshAgents": "Check the agents again"
+  "command.refreshAgents": "Check the agents again",
+  "command.newChat": "New chat",
+  "details.container": "Thread",
+  "details.view": "Details"
 }

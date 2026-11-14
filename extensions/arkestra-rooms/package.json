@@ -18,7 +18,8 @@
     "onView:arkestra.threads",
     "onWebviewPanel:arkestra.agents",
     "onWebviewPanel:arkestra.lane",
-    "onWebviewPanel:arkestra.artifacts"
+    "onWebviewPanel:arkestra.artifacts",
+    "onWebviewPanel:arkestra.thread"
   ],
   "main": "./out/extension",
   "capabilities": {
@@ -129,6 +130,12 @@
         "command": "arkestra.rooms.openThread",
         "title": "%command.openThread%",
         "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.rooms.newChat",
+        "title": "%command.newChat%",
+        "category": "Arkestra",
+        "icon": "$(add)"
       },
       {
         "command": "arkestra.rooms.archive",
@@ -372,9 +379,23 @@
           "title": "%threads.container%",
           "icon": "media/threads.svg"
         }
+      ],
+      "secondarySidebar": [
+        {
+          "id": "arkestra-details",
+          "title": "%details.container%",
+          "icon": "media/threads.svg"
+        }
       ]
     },
     "views": {
+      "arkestra-details": [
+        {
+          "type": "webview",
+          "id": "arkestra.details",
+          "name": "%details.view%"
+        }
+      ],
       "arkestra": [
         {
           "id": "arkestra.pinned",
