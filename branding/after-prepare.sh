@@ -77,6 +77,13 @@ if ! grep -q "extensions/copilot/node_modules/@github/copilot/\*\*" build/lib/ex
 fi
 grep -q "extensions/copilot/node_modules/@github/copilot/\*\*" build/lib/extensions.ts
 
+# The Copilot CLI ships native modules for every platform (e.g. its clipboard module);
+# the Windows version stamping (rcedit) can only open Windows binaries.
+if ! grep -q "Arkestra: other platforms" build/gulpfile.vscode.ts; then
+  perl -0pi -e "s#glob\('\*\*/\*\.node', \{ cwd, ignore: 'extensions/node_modules/\@parcel/watcher/\*\*' \}\)#glob('**/*.node', { cwd, ignore: ['extensions/node_modules/\@parcel/watcher/**', '**/*.{darwin,linux,linuxmusl}-*.node', '**/{darwin,linux,linuxmusl}-*/**/*.node'] /* Arkestra: other platforms */ })#" build/gulpfile.vscode.ts
+fi
+grep -q "Arkestra: other platforms" build/gulpfile.vscode.ts
+
 # AR03 · Removed: built-in extensions Arkestra does not ship.
 #   microsoft-authentication, tunnel-forwarding: Microsoft sign-in and relay.
 #   grunt, gulp, jake: outdated task runners; available from Open VSX.

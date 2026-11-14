@@ -48,6 +48,8 @@ jobs:
       SHOULD_BUILD_REH: 'no'
       SHOULD_BUILD_REH_WEB: 'no'
       WORK: ${{ github.workspace }}/build/work
+      # Downloads from GitHub during the build (ripgrep, Electron) go over the API limit without it.
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Keep LF line endings (Windows; the scripts and patches need them)
         if: matrix.os_name == 'windows'
