@@ -10,7 +10,7 @@ import * as vscode from 'vscode';
 import { execFile } from 'node:child_process';
 import { RelayClient, describe, type RelayEvent, type RelayState } from './relayClient';
 import { graphqlClient } from './graphql';
-import { parseProjectRef, type FieldInput, type ProjectSnapshot } from './project';
+import { PROJECT_LIST_QUERY, parseProjectList, parseProjectRef, type FieldInput, type ProjectChoice, type ProjectSnapshot } from './project';
 import { ProjectSync, type JournalEntry, type SyncStatus } from './sync';
 import { ProjectBoard } from './boardView';
 import { RemoteControl } from './remoteUi';
@@ -260,6 +260,30 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 		}),
 		vscode.commands.registerCommand('arkestra.github.setProject', async () => {
 			const config = vscode.workspace.getConfiguration('arkestra.github');
+			const save = (ref: { owner: string; number: number } | undefined) => config.update('project', ref ? `${ref.owner}/${ref.number}` : '', vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
+			// The projects of the signed-in user and their organizations; typing one in stays possible.
+			let projects: ProjectChoice[] = [];
+			let listError: string | undefined;
+			try {
+				token ??= await githubToken(true);
+				projects = parseProjectList(await graphqlClient(async () => token)(PROJECT_LIST_QUERY, {}));
+			} catch (error) {
+				listError = error instanceof Error ? error.message : String(error);
+			}
+			type Pick = vscode.QuickPickItem & { ref?: { owner: string; number: number }; manual?: true };
+			const current = config.get<string>('project') ?? '';
+			const items: Pick[] = [
+				...projects.map(p => ({ label: p.title, description: `${p.owner}/${p.number}${p.closed ? ` · ${vscode.l10n.t('closed')}` : ''}${`${p.owner}/${p.number}` === current ? ` · ${vscode.l10n.t('current')}` : ''}`, ref: { owner: p.owner, number: p.number } })),
+				{ label: `$(edit) ${vscode.l10n.t('Enter owner/number or a project URL…')}`, ...(listError ? { detail: vscode.l10n.t('The list could not be read: {0}', listError) } : {}), manual: true },
+			];
+			const pick = await vscode.window.showQuickPick(items, { title: vscode.l10n.t('GitHub Project'), placeHolder: vscode.l10n.t('The project this workspace follows'), matchOnDescription: true, ignoreFocusOut: true });
+			if (!pick) {
+				return;
+			}
+			if (pick.ref) {
+				await save(pick.ref);
+				return;
+			}
 			const text = await vscode.window.showInputBox({
 				title: vscode.l10n.t('GitHub Project'),
 				prompt: vscode.l10n.t('The project this workspace follows: owner/number or the project\'s URL'),
@@ -271,8 +295,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 			if (text === undefined) {
 				return;
 			}
-			const ref = parseProjectRef(text);
-			await config.update('project', ref ? `${ref.owner}/${ref.number}` : '', vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
+			await save(parseProjectRef(text));
 		}),
 		vscode.commands.registerCommand('arkestra.github.refreshProject', async () => {
 			try {
