@@ -1,17 +1,16 @@
 /*---------------------------------------------------------------------------------------------
  *  Arkestra. Mozaik and Pult workspaces: every part (room, agents, lanes, code, terminal) is
  *  a tile in the editor grid, so each can be dragged, split and maximised like an editor.
- *  The default layout (Mozaik unless set to Pult) opens on first start; layouts can be saved
- *  by name and brought back, and the status bar switcher shows and changes the current one.
+ *  Layouts are applied only on request; they can be saved by name and brought back, and the
+ *  status bar switcher shows and changes the current one.
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
 import { capture, mosaic, pult, readLayout, type EditorLayout, type SavedLayout, type TabDescriptor, type Tile } from './layout';
 
 const LAYOUTS = 'arkestra.workspace.layouts';
-const INITIALIZED = 'arkestra.workspace.initialized';
+const CLEANED = 'arkestra.workspace.cleanedSimpleLayout';
 const CURRENT = 'arkestra.workspace.current';
-const FOCUS_GROUP = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth'].map(n => `workbench.action.focus${n}EditorGroup`);
 
 export function activate(context: vscode.ExtensionContext): void {
 	const saved = (): SavedLayout[] => (context.globalState.get<unknown[]>(LAYOUTS) ?? []).map(readLayout).filter((l): l is SavedLayout => !!l);
@@ -44,10 +43,8 @@ export function activate(context: vscode.ExtensionContext): void {
 	const openTile = async (tile: Tile, column: number) => {
 		switch (tile.kind) {
 			case 'room':
-				if (!has(column, 'chat') && FOCUS_GROUP[column - 1]) {
-					await vscode.commands.executeCommand(FOCUS_GROUP[column - 1]);
-					await vscode.commands.executeCommand('workbench.action.openChat');
-				}
+				// The thread is Arkestra's own panel, never VS Code's chat.
+				await vscode.commands.executeCommand('arkestra.rooms.openThread', undefined, column);
 				break;
 			case 'agents':
 				await vscode.commands.executeCommand('arkestra.rooms.showAgents', column);
@@ -149,12 +146,24 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand('arkestra.workspace.deleteLayout', remove),
 	);
 
-	// The first start opens the default layout (Mozaik unless set to Pult); afterwards VS Code
-	// restores the grid itself and the switcher shows the name last applied.
+	// No layout is put up by itself any more: Arkestra opens with its left bar and the thread
+	// panel (the approved simple layout). Once per profile, the tiles an earlier first start put
+	// into the editor grid (VS Code's chat, the old Agents and Lane panels) are closed and the
+	// grid joined back into one group; terminals and files stay.
 	showCurrent();
-	if (!context.globalState.get<boolean>(INITIALIZED)) {
-		const first = vscode.workspace.getConfiguration('arkestra.workspace').get<string>('defaultLayout') === 'pult' ? pultLayout() : Promise.resolve(mosaicLayout());
-		void context.globalState.update(INITIALIZED, true).then(() => first).then(apply);
+	if (!context.globalState.get<boolean>(CLEANED)) {
+		void context.globalState.update(CLEANED, true).then(async () => {
+			const old = vscode.window.tabGroups.all.flatMap(g => g.tabs).filter(tab => {
+				const d = describe(tab);
+				return d.type === 'chat' || (d.type === 'webview' && /(^|-)arkestra\.(lane|agents)$/.test(d.viewType));
+			});
+			if (old.length) {
+				await vscode.window.tabGroups.close(old, true);
+			}
+			if (vscode.window.tabGroups.all.length > 1) {
+				await vscode.commands.executeCommand('workbench.action.joinAllGroups');
+			}
+		});
 	}
 }
 

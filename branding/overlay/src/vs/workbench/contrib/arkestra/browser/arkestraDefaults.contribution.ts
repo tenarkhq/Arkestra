@@ -80,10 +80,12 @@ viewsRegistry.onViewsRegistered(added => added.forEach(({ views }) => hide(views
 // ---- The simple layout, set once per profile ----------------------------------------------------
 
 /** Raised when the layout below changes, so existing installs get it once more. */
-const LAYOUT_VERSION = 2;
+const LAYOUT_VERSION = 3;
 /** The left bar: Arkestra's own view container (Pinned, Projects, Boards, Chats, Agents, Machines). */
 const LEFT_CONTAINER = 'workbench.view.extension.arkestra';
 const LAYOUT_KEY = 'arkestra.layout.version';
+/** The right side: the active thread's details (arkestra-rooms). */
+const DETAILS_CONTAINER = 'workbench.view.extension.arkestra-details';
 /** Bottom panel: only the terminals. */
 export const ARKESTRA_HIDDEN_PANEL_TABS: readonly string[] = [
 	'workbench.panel.markers', 'workbench.panel.output', 'workbench.panel.repl',
@@ -166,6 +168,20 @@ class ArkestraLayout extends Disposable implements IWorkbenchContribution {
 		// The left bar shows Arkestra's sections; a side bar left on Files (now on the right) would stay empty.
 		this.layout.setPartHidden(false, Parts.SIDEBAR_PART);
 		void this.panes.openPaneComposite(LEFT_CONTAINER, ViewContainerLocation.Sidebar);
+		// The right side shows the thread's details (agents, background tasks, changes, machine).
+		this.layout.setPartHidden(false, Parts.AUXILIARYBAR_PART);
+		void this.panes.openPaneComposite(DETAILS_CONTAINER, ViewContainerLocation.AuxiliaryBar);
+		// Both bars as wide as the approved layout (268 and 330 px), unless someone made them wider.
+		try {
+			const size = this.layout.getSize(Parts.SIDEBAR_PART);
+			if (size.width < 260) {
+				this.layout.setSize(Parts.SIDEBAR_PART, { width: 268, height: size.height });
+			}
+			const right = this.layout.getSize(Parts.AUXILIARYBAR_PART);
+			if (right.width < 320) {
+				this.layout.setSize(Parts.AUXILIARYBAR_PART, { width: 330, height: right.height });
+			}
+		} catch { /* the size is only a default */ }
 		this.storage.store(LAYOUT_KEY, LAYOUT_VERSION, StorageScope.PROFILE, StorageTarget.USER);
 		return true;
 	}
