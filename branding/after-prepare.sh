@@ -38,6 +38,20 @@ for f in build/gulpfile.vscode.ts build/gulpfile.vscode.web.ts build/gulpfile.re
   [[ -f "$f" ]] && sed -i 's#https://github.com/VSCodium/sourcemaps/#https://github.com/tenarkhq/arkestra-sourcemaps/#g' "$f"
 done
 
+# Arkestra's own built-in extensions: copied in, compiled and installed with
+# the others.
+for EXT in ../arkestra-extensions/*/; do
+  NAME="$( basename "${EXT}" )"
+  rm -rf "extensions/${NAME}"
+  cp -R "${EXT}" "extensions/${NAME}"
+  grep -q "'extensions/${NAME}/tsconfig.json'" build/gulpfile.extensions.ts || \
+    sed -i "s#^\(\s*\)'extensions/merge-conflict/tsconfig.json',#&\n\1'extensions/${NAME}/tsconfig.json',#" build/gulpfile.extensions.ts
+  grep -q "'extensions/${NAME}'," build/npm/dirs.ts || \
+    sed -i "s#^\(\s*\)'extensions/merge-conflict',#&\n\1'extensions/${NAME}',#" build/npm/dirs.ts
+  grep -q "'extensions/${NAME}/tsconfig.json'" build/gulpfile.extensions.ts
+  grep -q "'extensions/${NAME}'," build/npm/dirs.ts
+done
+
 if [[ -f resources/linux/debian/postinst.template ]]; then
   sed -i -E 's/\bcodium(-insiders)?\b/arkestra/' resources/linux/debian/postinst.template
 fi

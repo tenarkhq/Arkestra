@@ -1,0 +1,10 @@
+{
+  "displayName": "Arkestra Rooms",
+  "description": "One thread shared by any number of agents, joinable at any time.",
+  "room.fullName": "Arkestra room",
+  "room.description": "Every agent in the room answers, in order, with the whole thread",
+  "command.invite": "Invite an agent into this thread",
+  "command.agents": "Agents in this room and who can join",
+  "command.new": "New room",
+  "command.open": "Open a room"
+}

@@ -1,0 +1,48 @@
+{
+  "name": "arkestra-rooms",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "0.1.0",
+  "publisher": "vscode",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": ["AI", "Chat"],
+  "activationEvents": [
+    "onChatParticipant:arkestra.room"
+  ],
+  "main": "./out/extension",
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": { "supported": true }
+  },
+  "contributes": {
+    "chatParticipants": [
+      {
+        "id": "arkestra.room",
+        "name": "room",
+        "fullName": "%room.fullName%",
+        "description": "%room.description%",
+        "isSticky": true,
+        "commands": [
+          { "name": "invite", "description": "%command.invite%" },
+          { "name": "agents", "description": "%command.agents%" },
+          { "name": "new", "description": "%command.new%" }
+        ]
+      }
+    ],
+    "commands": [
+      { "command": "arkestra.rooms.new", "title": "%command.new%", "category": "Arkestra" },
+      { "command": "arkestra.rooms.invite", "title": "%command.invite%", "category": "Arkestra" },
+      { "command": "arkestra.rooms.open", "title": "%command.open%", "category": "Arkestra" }
+    ]
+  },
+  "scripts": {
+    "compile": "gulp compile-extension:arkestra-rooms",
+    "watch": "gulp watch-extension:arkestra-rooms"
+  },
+  "devDependencies": {
+    "@types/node": "24.x"
+  }
+}
