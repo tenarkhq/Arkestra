@@ -8,14 +8,20 @@
   "engines": {
     "vscode": "^1.100.0"
   },
-  "categories": ["AI", "Chat"],
+  "categories": [
+    "AI",
+    "Chat"
+  ],
   "activationEvents": [
-    "onChatParticipant:arkestra.room"
+    "onChatParticipant:arkestra.room",
+    "onWebviewPanel:arkestra.agents"
   ],
   "main": "./out/extension",
   "capabilities": {
     "virtualWorkspaces": true,
-    "untrustedWorkspaces": { "supported": true }
+    "untrustedWorkspaces": {
+      "supported": true
+    }
   },
   "contributes": {
     "chatParticipants": [
@@ -26,16 +32,42 @@
         "description": "%room.description%",
         "isSticky": true,
         "commands": [
-          { "name": "invite", "description": "%command.invite%" },
-          { "name": "agents", "description": "%command.agents%" },
-          { "name": "new", "description": "%command.new%" }
+          {
+            "name": "invite",
+            "description": "%command.invite%"
+          },
+          {
+            "name": "agents",
+            "description": "%command.agents%"
+          },
+          {
+            "name": "new",
+            "description": "%command.new%"
+          }
         ]
       }
     ],
     "commands": [
-      { "command": "arkestra.rooms.new", "title": "%command.new%", "category": "Arkestra" },
-      { "command": "arkestra.rooms.invite", "title": "%command.invite%", "category": "Arkestra" },
-      { "command": "arkestra.rooms.open", "title": "%command.open%", "category": "Arkestra" }
+      {
+        "command": "arkestra.rooms.new",
+        "title": "%command.new%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.rooms.invite",
+        "title": "%command.invite%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.rooms.open",
+        "title": "%command.open%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.rooms.showAgents",
+        "title": "%showAgents%",
+        "category": "Arkestra"
+      }
     ]
   },
   "scripts": {

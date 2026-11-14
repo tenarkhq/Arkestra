@@ -1,0 +1,61 @@
+{
+  "name": "arkestra-workspace",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "0.1.0",
+  "publisher": "vscode",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "AI"
+  ],
+  "extensionDependencies": [
+    "vscode.arkestra-rooms"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension",
+  "capabilities": {
+    "virtualWorkspaces": false,
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "arkestra.workspace.mosaic",
+        "title": "%mosaic%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.workspace.layout",
+        "title": "%layout%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.workspace.saveLayout",
+        "title": "%saveLayout%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.workspace.deleteLayout",
+        "title": "%deleteLayout%",
+        "category": "Arkestra"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "gulp compile-extension:arkestra-workspace",
+    "watch": "gulp watch-extension:arkestra-workspace"
+  },
+  "devDependencies": {
+    "@types/node": "24.x"
+  },
+  "enabledApiProposals": [
+    "chatTab"
+  ]
+}
