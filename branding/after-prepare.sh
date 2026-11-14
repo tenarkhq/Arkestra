@@ -68,6 +68,29 @@ done
 # AR03 · Removed: Remote Tunnels need these product keys; without them the feature is off.
 jq 'del(.tunnelApplicationName, .tunnelApplicationConfig, .win32TunnelMutex, .win32TunnelServiceMutex)' product.json > product.json.tmp && mv product.json.tmp product.json
 
+# AR04 · Nothing goes to Microsoft services on its own.
+#   - Copilot account endpoints: with any GitHub sign-in the default-account service
+#     would query them in the background; empty URLs make it skip every call.
+#   - Voice chat streams to a Microsoft endpoint: removed.
+#   - Help links point to Arkestra or go; badge images from Microsoft hosts are not loaded.
+jq '
+  .defaultChatAgent.entitlementUrl = "" | .defaultChatAgent.tokenEntitlementUrl = "" |
+  .defaultChatAgent.managedSettingsUrl = "" | .defaultChatAgent.mcpRegistryDataUrl = "" |
+  del(.voiceWsUrl, .keyboardShortcutsUrlLinux, .keyboardShortcutsUrlMac, .keyboardShortcutsUrlWin,
+      .introductoryVideosUrl, .tipsAndTricksUrl, .twitterUrl, .checksumFailMoreInfoUrl, .releaseNotesUrl) |
+  .documentationUrl = "https://github.com/tenarkhq/Arkestra#readme" |
+  .requestFeatureUrl = "https://github.com/tenarkhq/Arkestra/issues" |
+  .extensionAllowedBadgeProviders |= map(select(test("(^|\\.)(visualstudio\\.com|azure\\.com|microsoft\\.com)$") | not))
+' product.json > product.json.tmp && mv product.json.tmp product.json
+
+# AR04 · The sign-in success page loads Segoe UI from a Microsoft CDN in the browser;
+# it keeps only the locally installed fonts.
+perl -0pi -e 's/,?url\("https:\/\/c\.s-microsoft\.com[^"]*"\)(\s*format\("[^"]*"\))?//g' src/vs/workbench/api/node/loopbackServer.ts
+if grep -q "s-microsoft" src/vs/workbench/api/node/loopbackServer.ts; then
+  echo "after-prepare: Microsoft font URLs left in loopbackServer.ts" >&2
+  exit 1
+fi
+
 # AR03 · Hidden and Removed rows: Arkestra's workbench defaults, one source overlay.
 cp -R ../arkestra-overlay/. ./
 grep -q "contrib/arkestra/browser/arkestraDefaults.contribution.js" src/vs/workbench/workbench.common.main.ts || \

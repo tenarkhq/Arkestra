@@ -140,8 +140,17 @@ The base is VSCodium's build scripts, vendored unchanged in
   keeps VS Code's built-in Agent Host, with its Claude agent (own Claude login
   or API key, no GitHub) and its optional Copilot agent.
 - `branding/after-prepare.sh`: replaces the remaining VSCodium names and
-  links, removes VSCodium's update feed, and keeps the built-in AI features on
-  by default.
+  links, removes VSCodium's update feed, keeps the built-in AI features on by
+  default, leaves out the built-ins Arkestra does not ship, and removes what
+  would call Microsoft services by itself.
+- `branding/overlay`: Arkestra's source additions to VS Code, such as the
+  workbench defaults (hidden and removed parts, sign-in without Microsoft
+  redirects). They are defaults: each can be turned back on.
+
+`scripts/network-check.mjs` checks that nothing goes to Microsoft services on
+its own: `static build/work/vscode` checks a prepared tree, and
+`capture -- <app>` runs a build behind a logging proxy and lists every host it
+contacted.
 
 `scripts/prepare.sh [work-dir]` makes a work copy, fetches the pinned VS Code
 source and applies all of the above. Building from the work copy uses
