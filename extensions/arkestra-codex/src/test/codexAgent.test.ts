@@ -7,7 +7,7 @@ import * as assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { CodexAgent, ROOM_PREAMBLE, describeItem, type CodexAuth } from '../codexAgent';
+import { CodexAgent, ROOM_PREAMBLE, codexLimits, codexUsage, describeItem, type CodexAuth } from '../codexAgent';
 import type { AgentEvent, Message } from '../rooms';
 
 const FAKE = `#!/usr/bin/env node
@@ -221,4 +221,16 @@ test('permission lists: with rules Codex runs "untrusted" and the lists answer i
 	const turns = (await readFile(process.env.FAKE_LOG!, 'utf8')).trim().split('\n').map(l => JSON.parse(l)).filter(m => m.method === 'turn/start');
 	assert.deepEqual(turns.map(t => t.params.approvalPolicy), ['untrusted', 'untrusted', 'never']);
 	agent.dispose();
+});
+
+test('usage: token reports add only what is new; the context is the last call; quota windows get labels', () => {
+	const first = codexUsage({ total: { inputTokens: 1000, cachedInputTokens: 600, outputTokens: 50, totalTokens: 1050 }, last: { totalTokens: 1050 }, modelContextWindow: 272_000 }, undefined);
+	assert.deepEqual(first, { input: 400, cached: 600, output: 50, context: { used: 1050, window: 272_000 } });
+	const next = codexUsage({ total: { inputTokens: 1500, cachedInputTokens: 900, outputTokens: 80, totalTokens: 1580 }, last: { totalTokens: 1580 } }, { inputTokens: 1000, cachedInputTokens: 600, outputTokens: 50, totalTokens: 1050 });
+	assert.deepEqual(next, { input: 200, cached: 300, output: 30, context: { used: 1580 } });
+	assert.deepEqual(codexLimits({ primary: { usedPercent: 12, windowDurationMins: 300, resetsAt: 1795000000 }, secondary: { usedPercent: 40, windowDurationMins: 10080, resetsAt: null } }), [
+		{ label: '5h', usedPercent: 12, resetsAt: new Date(1795000000 * 1000).toISOString() },
+		{ label: 'week', usedPercent: 40 },
+	]);
+	assert.deepEqual(codexLimits(null), []);
 });

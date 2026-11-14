@@ -107,7 +107,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 					: [editSettings];
 			return { ...readiness, reason: localize(readiness.reason), actions };
 		},
-		turn: (input, onEvent, signal) => agent.turn(input, (event: AgentEvent) => onEvent(event.kind === 'text' ? event : { ...event, text: localize(event.text) ?? event.text }), signal)
+		turn: (input, onEvent, signal) => agent.turn(input, (event: AgentEvent) => onEvent(event.kind === 'tool' || event.kind === 'error' ? { ...event, text: localize(event.text) ?? event.text } : event), signal)
 			.catch(e => { throw e instanceof Error ? new Error(localize(e.message)) : e; }),
 	});
 

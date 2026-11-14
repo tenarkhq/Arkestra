@@ -149,7 +149,7 @@ export class InlineEdits implements vscode.Disposable, vscode.CodeLensProvider {
 						text += text ? `\n\n${event.text}` : event.text;
 					} else if (event.kind === 'tool') {
 						progress.report({ message: event.text });
-					} else {
+					} else if (event.kind === 'error') {
 						error = event.text;
 					}
 				}, abort.signal);

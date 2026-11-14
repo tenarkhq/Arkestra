@@ -6,7 +6,7 @@ import { test, before, after } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { OpenAIAgent, ROOM_INSTRUCTIONS, toInput } from '../openaiAgent';
+import { OpenAIAgent, ROOM_INSTRUCTIONS, parseEvent, toInput } from '../openaiAgent';
 import type { AgentEvent, Message } from '../rooms';
 
 const msg = (kind: 'user' | 'agent' | 'system', id: string, text: string): Message =>
@@ -101,4 +101,9 @@ test('readiness: no key, rejected key, unknown model, ready', async () => {
 
 test('system messages are labelled as the room', () => {
 	assert.deepEqual(toInput([msg('system', 'room', 'Claude joined.')], 'gpt'), [{ role: 'user', content: '[room] Claude joined.' }]);
+});
+
+test('usage from the completed response', () => {
+	assert.deepEqual(parseEvent({ type: 'response.completed', response: { usage: { input_tokens: 900, output_tokens: 100, input_tokens_details: { cached_tokens: 300 } } } }), { done: true, usage: { input: 900, output: 100, cached: 300, context: { used: 1000 } } });
+	assert.deepEqual(parseEvent({ type: 'response.completed', response: {} }), { done: true });
 });

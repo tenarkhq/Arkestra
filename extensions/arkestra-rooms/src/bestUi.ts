@@ -99,7 +99,7 @@ export class BestOfN implements vscode.Disposable {
 							last = event.text;
 						} else if (event.kind === 'tool') {
 							stream.progress(`${a.n}. ${a.agentName}: ${event.text}`);
-						} else {
+						} else if (event.kind === 'error') {
 							a.error = event.text;
 						}
 					}, abort.signal);

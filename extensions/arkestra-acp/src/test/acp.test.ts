@@ -89,7 +89,8 @@ test('cancel stops the turn without an error; a dismissed permission is declined
 		setTimeout(() => abort.abort(), 200);
 		assert.deepEqual(await turn(agent, 'r1', [msg(1, 'user', 'me', 'WAIT')], abort.signal), []);
 		const events = await turn(agent, 'r1', [msg(1, 'user', 'me', 'WAIT'), msg(2, 'user', 'me', 'go')]);
-		assert.equal(events.at(-1)?.text, 'file=two exit=0 out:v1 permission=cancelled');
+		const last = events.at(-1);
+		assert.equal(last?.kind === 'text' ? last.text : undefined, 'file=two exit=0 out:v1 permission=cancelled');
 	} finally {
 		agent.dispose();
 	}

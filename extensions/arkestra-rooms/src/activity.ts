@@ -2,6 +2,9 @@
  *  Arkestra. What each agent of a room is doing right now: the Agents tile shows it.
  *--------------------------------------------------------------------------------------------*/
 
+import type { Usage } from './agent';
+import { addUsage, type AgentUsage } from './usage';
+
 export type AgentState = 'idle' | 'queued' | 'answering';
 
 export interface AgentActivity {
@@ -12,6 +15,8 @@ export interface AgentActivity {
 	readonly error?: string;
 	/** When the state last changed (ISO). */
 	readonly since: string;
+	/** Tokens, context and quota in this room (AR25). */
+	readonly usage?: AgentUsage;
 }
 
 /** Activity per room and agent; listeners hear every change. */
@@ -44,6 +49,18 @@ export class ActivityBoard {
 
 	tool(roomId: string, agentId: string, text: string): void {
 		this.set(roomId, agentId, { ...this.get(roomId, agentId), tool: text });
+	}
+
+	/** An agent's token, context or quota report: added to the room's figures. */
+	usage(roomId: string, agentId: string, u: Usage): void {
+		let room = this.rooms.get(roomId);
+		if (!room) {
+			room = new Map();
+			this.rooms.set(roomId, room);
+		}
+		const a = this.get(roomId, agentId);
+		room.set(agentId, { ...a, since: a.since || this.now().toISOString(), usage: addUsage(a.usage, u) });
+		this.fire(roomId);
 	}
 
 	error(roomId: string, agentId: string, text: string): void {
@@ -79,6 +96,7 @@ export class ActivityBoard {
 			...(!fresh && value.tool ? { tool: value.tool } : {}),
 			...(!fresh && value.error ? { error: value.error } : {}),
 			since: previous?.state === value.state && previous.since ? previous.since : this.now().toISOString(),
+			...(previous?.usage ? { usage: previous.usage } : {}),
 		});
 		if (fire) {
 			this.fire(roomId);
