@@ -13,6 +13,8 @@ import { RoomStore } from './store';
 import { laneAgent, laneEntries, type LaneEntry } from './lanes';
 import { copyFile, mkdir, readFile, stat } from 'node:fs/promises';
 import { progressItems, taskRooms, type TaskRoom } from './tasks';
+import { TURN_TEXT, turnState, workHtml } from './work';
+import { ActivityView } from './activityView';
 import { templateForm } from './templateForm';
 import { ChangesUi } from './changesView';
 import { InlineEdits } from './inlineEditUi';
@@ -212,6 +214,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 					case 'tool': activity.tool(room.id, agentId, event.text); break;
 					case 'error': activity.error(room.id, agentId, event.text); break;
 					case 'usage': activity.usage(room.id, agentId, event.usage); break;
+					case 'work': activity.work(room.id, agentId, event.work); break;
 					case 'end': activity.end(room.id, agentId); break;
 				}
 			});
@@ -410,6 +413,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 					case 'tool': activity.tool(room.id, agent.id, event.text); stream.progress(`${agent.name}: ${event.text}`); break;
 					case 'error': activity.error(room.id, agent.id, event.text); stream.markdown(`\n\n> ${agent.name}: ${event.text}\n`); break;
 					case 'usage': activity.usage(room.id, agent.id, event.usage); break;
+					case 'work': activity.work(room.id, agent.id, event.work); break;
 					case 'end': activity.end(room.id, agent.id); break;
 				}
 			}, abort.signal);
@@ -492,6 +496,9 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		vscode.window.registerWebviewPanelSerializer('arkestra.agents', { deserializeWebviewPanel: async panel => adoptAgentsPanel(panel) }),
 		vscode.commands.registerCommand('arkestra.rooms.showAgents', showAgents),
 	);
+
+	// Agent activity in every thread and in total (AR37): the Activity view and the status bar.
+	context.subscriptions.push(new ActivityView(activity, id => loaded.get(id)?.state.title ?? id, id => registry.get(id)?.name ?? id));
 
 	// Pult lanes: one tile per agent slot of the current room (slot n = the room's n-th agent).
 	const lanes = new Map<number, vscode.WebviewPanel>();
@@ -841,11 +848,12 @@ function escapeHtml(value: string): string {
 function agentsHtml(rows: readonly AgentRow[] | undefined): string {
 	const nonce = randomBytes(16).toString('base64');
 	const time = (iso: string) => iso ? new Date(iso).toLocaleTimeString(vscode.env.language, { hour: '2-digit', minute: '2-digit' }) : '';
-	const state = (a: AgentActivity) => a.state === 'answering'
-		? { cls: 'busy', text: a.tool ? vscode.l10n.t('working · {0}', a.tool) : vscode.l10n.t('working') }
-		: a.state === 'queued'
-			? { cls: 'wait', text: vscode.l10n.t('waiting for its turn') }
-			: { cls: 'idle', text: a.tool ? vscode.l10n.t('idle · last: {0}', a.tool) : vscode.l10n.t('idle') };
+	const state = (a: AgentActivity) => {
+		const turn = turnState(a.state, a.work, a.error, !!a.ran);
+		const cls = turn === 'working' ? 'busy' : turn === 'waiting' || turn === 'queued' ? 'wait' : turn === 'error' ? 'err' : 'idle';
+		const tool = a.tool ? (turn === 'working' ? ` · ${a.tool}` : turn === 'done' || turn === 'idle' ? ` · last: ${a.tool}` : '') : '';
+		return { cls, text: vscode.l10n.t(TURN_TEXT[turn]) + tool };
+	};
 	const body = !rows
 		? `<p class="mut">${escapeHtml(vscode.l10n.t('No room yet. Start one in the chat with @room.'))}</p>`
 		: !rows.length
@@ -865,6 +873,7 @@ function agentsHtml(rows: readonly AgentRow[] | undefined): string {
 					<div class="mut">${escapeHtml(r.detail)}${line ? ` · ${escapeHtml(line)}` : ''}</div>
 					<div class="${s.cls}">${escapeHtml(s.text)}</div>
 					${r.activity.error ? `<div class="err">${escapeHtml(r.activity.error)}</div>` : ''}
+					${workHtml(r.activity.work, escapeHtml)}
 				</div>`;
 			}).join('');
 	return `<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -886,6 +895,17 @@ function agentsHtml(rows: readonly AgentRow[] | undefined): string {
 	.busy { color: var(--vscode-foreground); }
 	.wait { color: var(--vscode-editorWarning-foreground); }
 	.err { color: var(--vscode-errorForeground); }
+	.dot.err { background: var(--vscode-errorForeground); }
+	details.work { margin-top: 2px; }
+	details.work summary { cursor: pointer; color: var(--vscode-descriptionForeground); font-size: .92em; }
+	details.work ul, details.work ol { margin: 4px 0 2px; padding-left: 18px; }
+	details.work ul { list-style: none; padding-left: 4px; }
+	.todo.completed { color: var(--vscode-descriptionForeground); text-decoration: line-through; }
+	.todo.in_progress { font-weight: 600; }
+	.item .st { display: inline-block; width: 1em; }
+	.item.running .st { color: var(--vscode-progressBar-background); }
+	.item.done .st { color: var(--vscode-charts-green, var(--vscode-testing-iconPassed)); }
+	.item.error .st { color: var(--vscode-errorForeground); }
 	button { margin-top: 12px; font: inherit; padding: 4px 12px; border: 0; border-radius: 4px; cursor: pointer; background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
 	button:hover { background: var(--vscode-button-hoverBackground); }
 </style></head><body>

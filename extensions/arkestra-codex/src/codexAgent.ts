@@ -6,7 +6,7 @@
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
-import type { Agent, AgentEvent, Message, PermissionRequest, Readiness, TurnInput, Usage } from './rooms';
+import type { Agent, AgentEvent, Message, PermissionRequest, Readiness, TurnInput, Usage, WorkUpdate } from './rooms';
 import { RpcClient, type Notification } from './rpc';
 
 export type CodexAuth = { readonly mode: 'subscription' } | { readonly mode: 'apiKey'; readonly key: string | undefined };
@@ -100,6 +100,39 @@ export function describeItem(item: any): string | undefined {
 		default:
 			return undefined;
 	}
+}
+
+/** Codex's plan (turn/plan/updated) as the agent's task list. */
+export function codexPlan(plan: unknown): WorkUpdate {
+	const status = (s: unknown) => s === 'completed' ? 'completed' : s === 'inProgress' ? 'in_progress' : 'pending';
+	return { type: 'todos', items: (Array.isArray(plan) ? plan : []).filter((p: any) => typeof p?.step === 'string').map((p: any) => ({ text: p.step, status: status(p.status) })) };
+}
+
+/** Codex's sub-agents: spawned through collab tool calls, or reported as sub-agent activity. */
+export function codexWork(item: any, completed: boolean): WorkUpdate[] {
+	const out: WorkUpdate[] = [];
+	const final = (s: unknown) => s === 'completed' || s === 'shutdown' ? true : s === 'errored' || s === 'interrupted' || s === 'notFound' ? false : undefined;
+	if (item?.type === 'collabAgentToolCall') {
+		const states: Record<string, { status?: string; message?: string | null }> = item.agentsStates && typeof item.agentsStates === 'object' ? item.agentsStates : {};
+		if (item.tool === 'spawnAgent' && !completed) {
+			for (const id of Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds : []) {
+				out.push({ type: 'subagent', id: String(id), name: typeof item.model === 'string' && item.model ? item.model : 'sub-agent', ...(typeof item.prompt === 'string' ? { task: item.prompt.split('\n')[0] } : {}), status: 'running' });
+			}
+		}
+		for (const [id, state] of Object.entries(states)) {
+			const ok = final(state?.status);
+			if (ok !== undefined) {
+				out.push({ type: 'finished', id, ok, ...(state?.message ? { text: String(state.message) } : {}) });
+			}
+		}
+	} else if (item?.type === 'subAgentActivity' && typeof item.agentThreadId === 'string') {
+		if (item.kind === 'started') {
+			out.push({ type: 'subagent', id: item.agentThreadId, name: typeof item.agentPath === 'string' && item.agentPath ? item.agentPath : typeof item.model === 'string' ? item.model : 'sub-agent', status: 'running' });
+		} else if (item.kind === 'completed' || item.kind === 'interrupted') {
+			out.push({ type: 'finished', id: item.agentThreadId, ok: item.kind === 'completed' });
+		}
+	}
+	return out;
 }
 
 export class CodexAgent implements Agent {
@@ -197,6 +230,15 @@ export class CodexAgent implements Agent {
 					}
 					return;
 				}
+				if (n.method === 'turn/plan/updated') {
+					onEvent({ kind: 'work', work: codexPlan(n.params.plan) });
+					return;
+				}
+				if (n.method === 'item/started' || n.method === 'item/completed') {
+					for (const work of codexWork(n.params.item, n.method === 'item/completed')) {
+						onEvent({ kind: 'work', work });
+					}
+				}
 				if (n.method === 'item/started') {
 					const tool = describeItem(n.params.item);
 					if (tool) {
@@ -219,7 +261,15 @@ export class CodexAgent implements Agent {
 			// The sandbox is set on every turn: a Plan mode turn is read-only, and the override
 			// would otherwise carry over to the next turns.
 			const ruled = !!this.options.permissions?.active();
-			this.approvals.set(threadId, (method, params) => this.approve(method, params, signal));
+			this.approvals.set(threadId, (method, params) => {
+				const asked = this.approve(method, params, signal);
+				if (asked) {
+					// The Activity view shows that the agent waits for the user's answer.
+					onEvent({ kind: 'work', work: { type: 'waiting', reason: method.includes('fileChange') ? 'asks to change files' : 'asks to run a command' } });
+					void asked.finally(() => onEvent({ kind: 'work', work: { type: 'waiting' } })).catch(() => { });
+				}
+				return asked;
+			});
 			const started = await client.request<{ turn: { id: string } }>('turn/start', {
 				threadId, input: [{ type: 'text', text, text_elements: [] }],
 				sandboxPolicy: sandboxPolicy(input.mode === 'plan' ? 'read-only' : this.options.sandbox),

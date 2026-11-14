@@ -25,7 +25,23 @@ export type AgentEvent =
 	| { readonly kind: 'text'; readonly text: string }
 	| { readonly kind: 'tool'; readonly text: string }
 	| { readonly kind: 'error'; readonly text: string }
-	| { readonly kind: 'usage'; readonly usage: Usage };
+	| { readonly kind: 'usage'; readonly usage: Usage }
+	| { readonly kind: 'work'; readonly work: WorkUpdate };
+
+/**
+ * What an agent does beside its answer (AR37), as the vendors' desktop apps show it: its task
+ * list, sub-agents, background commands, chapters, and when it waits for the user.
+ * `finished` ends the sub-agent or background command with that id; `poll` says that a later
+ * `finished` with this id reports the state of the background command `target`.
+ */
+export type WorkUpdate =
+	| { readonly type: 'todos'; readonly items: readonly { readonly text: string; readonly status: 'pending' | 'in_progress' | 'completed' }[] }
+	| { readonly type: 'subagent'; readonly id: string; readonly name: string; readonly task?: string; readonly status: 'running' | 'done' | 'error'; readonly result?: string }
+	| { readonly type: 'background'; readonly id: string; readonly command: string; readonly status: 'running' | 'done' | 'error'; readonly output?: string }
+	| { readonly type: 'finished'; readonly id: string; readonly ok: boolean; readonly text?: string }
+	| { readonly type: 'poll'; readonly id: string; readonly target: string; readonly kill?: boolean }
+	| { readonly type: 'chapter'; readonly title: string; readonly summary?: string }
+	| { readonly type: 'waiting'; readonly reason?: string };
 
 /** Token, context and quota figures an agent reports (AR25); every field is optional. */
 export interface Usage {

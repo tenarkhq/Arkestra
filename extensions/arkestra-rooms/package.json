@@ -328,6 +328,11 @@
           "icon": "media/threads.svg"
         },
         {
+          "id": "arkestra.activity",
+          "name": "%activity.view%",
+          "icon": "media/threads.svg"
+        },
+        {
           "id": "arkestra.changes",
           "name": "%changes.view%",
           "icon": "media/threads.svg"

@@ -18,7 +18,7 @@ test('a round: everyone queued, then each answers in turn with its tool line, th
 
 	board.start('r', 'claude');
 	board.tool('r', 'claude', 'Edit src/advisor/state.py');
-	assert.deepEqual({ ...board.get('r', 'claude'), since: '' }, { state: 'answering', tool: 'Edit src/advisor/state.py', since: '' });
+	assert.deepEqual({ ...board.get('r', 'claude'), since: '' }, { state: 'answering', tool: 'Edit src/advisor/state.py', since: '', ran: true });
 	board.end('r', 'claude');
 	assert.equal(board.get('r', 'claude').state, 'idle');
 	assert.equal(board.get('r', 'claude').tool, 'Edit src/advisor/state.py', 'the last tool line stays visible');

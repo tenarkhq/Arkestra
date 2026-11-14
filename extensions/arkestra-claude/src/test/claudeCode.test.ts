@@ -7,7 +7,7 @@ import * as assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { ClaudeCodeAgent, permissionArgs, ROOM_PREAMBLE, parseLine, rateLimit } from '../claudeCode';
+import { ClaudeCodeAgent, permissionArgs, ROOM_PREAMBLE, parseLine, rateLimit, workOf } from '../claudeCode';
 import type { AgentEvent, Message } from '../rooms';
 
 const FAKE = `#!/usr/bin/env node
@@ -136,4 +136,21 @@ test('usage: the result\'s totals and cost, the context fill of the last model c
 	const limit = parseLine(JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning', rateLimitType: 'seven_day', utilization: 0.83, resetsAt: 1795000000 } }));
 	assert.deepEqual(limit.events, [{ kind: 'usage', usage: { limits: [{ label: 'week', usedPercent: 83, resetsAt: new Date(1795000000 * 1000).toISOString() } ] } }]);
 	assert.equal(rateLimit({ status: 'allowed' }), undefined, 'no utilization, no ring');
+});
+
+test('work beside the answer: task list, sub-agents, background commands, polls, chapters', () => {
+	const tool = (name: string, input: unknown, id = 'tu1', parent: string | null = null) => JSON.stringify({ type: 'assistant', parent_tool_use_id: parent, message: { content: [{ type: 'tool_use', id, name, input }] } });
+	const work = (line: string) => parseLine(line).events.filter(e => e.kind === 'work').map(e => (e as Extract<AgentEvent, { kind: 'work' }>).work);
+	assert.deepEqual(work(tool('TodoWrite', { todos: [{ content: 'Read', status: 'completed', activeForm: 'Reading' }, { content: 'Write', status: 'in_progress', activeForm: 'Writing the tests' }, { content: 'Ship', status: 'pending' }] })),
+		[{ type: 'todos', items: [{ text: 'Read', status: 'completed' }, { text: 'Writing the tests', status: 'in_progress' }, { text: 'Ship', status: 'pending' }] }]);
+	assert.deepEqual(work(tool('Task', { subagent_type: 'Explore', description: 'Find the board', prompt: '…' }, 't9')), [{ type: 'subagent', id: 't9', name: 'Explore', task: 'Find the board', status: 'running' }]);
+	assert.deepEqual(work(tool('Bash', { command: 'npm run watch', run_in_background: true }, 'b1')), [{ type: 'background', id: 'b1', command: 'npm run watch', status: 'running' }]);
+	assert.deepEqual(work(tool('Bash', { command: 'ls' })), []);
+	assert.deepEqual(work(tool('BashOutput', { bash_id: 'shell_7' }, 'p1')), [{ type: 'poll', id: 'p1', target: 'shell_7' }]);
+	assert.deepEqual(work(tool('KillShell', { shell_id: 'shell_7' }, 'k1')), [{ type: 'poll', id: 'k1', target: 'shell_7', kill: true }]);
+	assert.deepEqual(workOf({ name: 'mcp__ccd_session__mark_chapter', input: { title: 'Tests', summary: 'all green' } }), { type: 'chapter', title: 'Tests', summary: 'all green' });
+	// A sub-agent's own task list is not the agent's.
+	assert.deepEqual(work(tool('TodoWrite', { todos: [{ content: 'x', status: 'pending' }] }, 'tu2', 't9')), []);
+	const result = JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't9', is_error: false, content: [{ type: 'text', text: 'found it' }] }] } });
+	assert.deepEqual(work(result), [{ type: 'finished', id: 't9', ok: true, text: 'found it' }]);
 });

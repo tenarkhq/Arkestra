@@ -2,7 +2,8 @@
  *  Arkestra. What each agent of a room is doing right now: the Agents tile shows it.
  *--------------------------------------------------------------------------------------------*/
 
-import type { Usage } from './agent';
+import type { Usage, WorkUpdate } from './agent';
+import { EMPTY_WORK, applyWork, newTurn, type AgentWork } from './work';
 import { addUsage, type AgentUsage } from './usage';
 
 export type AgentState = 'idle' | 'queued' | 'answering';
@@ -17,6 +18,10 @@ export interface AgentActivity {
 	readonly since: string;
 	/** Tokens, context and quota in this room (AR25). */
 	readonly usage?: AgentUsage;
+	/** Task list, sub-agents, background commands, chapters, waiting (AR37). */
+	readonly work?: AgentWork;
+	/** Whether the agent has run a turn in this room in this session. */
+	readonly ran?: boolean;
 }
 
 /** Activity per room and agent; listeners hear every change. */
@@ -63,6 +68,29 @@ export class ActivityBoard {
 		this.fire(roomId);
 	}
 
+	/** What the agent does beside its answer: kept across turns while it runs. */
+	work(roomId: string, agentId: string, u: WorkUpdate): void {
+		let room = this.rooms.get(roomId);
+		if (!room) {
+			room = new Map();
+			this.rooms.set(roomId, room);
+		}
+		const a = this.get(roomId, agentId);
+		room.set(agentId, { ...a, since: a.since || this.now().toISOString(), work: applyWork(a.work ?? EMPTY_WORK, u, this.now().toISOString()) });
+		this.fire(roomId);
+	}
+
+	/** Every room's agents, for totals. */
+	all(): { roomId: string; agentId: string; activity: AgentActivity }[] {
+		const out: { roomId: string; agentId: string; activity: AgentActivity }[] = [];
+		for (const [roomId, room] of this.rooms) {
+			for (const [agentId, activity] of room) {
+				out.push({ roomId, agentId, activity });
+			}
+		}
+		return out;
+	}
+
 	error(roomId: string, agentId: string, text: string): void {
 		this.set(roomId, agentId, { ...this.get(roomId, agentId), error: text });
 	}
@@ -70,6 +98,12 @@ export class ActivityBoard {
 	end(roomId: string, agentId: string): void {
 		const last = this.get(roomId, agentId);
 		this.set(roomId, agentId, { state: 'idle', ...(last.tool ? { tool: last.tool } : {}), ...(last.error ? { error: last.error } : {}) });
+		const room = this.rooms.get(roomId);
+		const now = room?.get(agentId);
+		if (room && now?.work?.waiting) {
+			room.set(agentId, { ...now, work: newTurn(now.work) });
+			this.fire(roomId);
+		}
 	}
 
 	/** The round ended or was cancelled: nobody is waiting or answering any more. */
@@ -97,6 +131,8 @@ export class ActivityBoard {
 			...(!fresh && value.error ? { error: value.error } : {}),
 			since: previous?.state === value.state && previous.since ? previous.since : this.now().toISOString(),
 			...(previous?.usage ? { usage: previous.usage } : {}),
+			...(previous?.work ? { work: fresh ? newTurn(previous.work) : previous.work } : {}),
+			...(previous?.ran || value.state === 'answering' ? { ran: true } : {}),
 		});
 		if (fire) {
 			this.fire(roomId);
