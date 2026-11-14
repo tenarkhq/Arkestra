@@ -66,6 +66,14 @@ assert.ok(posted.some((m: any) => m.type === 'move' && m.itemId === 'I1' && m.op
 // table
 find(body, (e: any) => e.tag === 'button' && text(e) === 'Table')[0].fire('click');
 const t2 = text(body);
+// Status: not done hides the Done cards; all brings them back.
+const statusSel = find(body, (e: any) => e.tag === 'select' && text(e).startsWith('Status: all'))[0];
+assert.ok(text(statusSel).includes('Status: not done') && text(statusSel).includes('Status: Done'), 'status filter offered');
+statusSel.value = '!done'; statusSel.fire('change');
+assert.ok(text(body).includes('Board view') && !text(body).includes('Old 0'), 'done hidden');
+assert.equal(state.filters.status, '!done', 'kept in the view state');
+statusSel.value = ''; statusSel.fire('change');
+assert.ok(text(body).includes('Old 0'), 'done back');
 assert.ok(t2.includes('Estimate') && t2.includes('Prerequisites') && t2.includes('Progress'), 'table drawn');
 const input = find(body, (e: any) => e.tag === 'input' && e.attrs.type === 'number')[0];
 input.value = '3'; input.fire('change');
