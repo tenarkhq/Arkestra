@@ -33,7 +33,8 @@ system language and can be switched with one click.
    machine or on a server over SSH. A room can mix them, for example a local
    Claude with a Codex running on a server.
    Files move over SSH by drag and drop: drop files or folders from the
-   desktop onto a remote folder to upload them (SFTP), drag them out to
+   desktop onto a remote folder, or onto an SSH terminal for its current
+   folder, to upload them (SFTP); drag them out to
    download, with progress and cancel, for any connection, even without
    opening that project.
 4. **Projects and categories.** Threads are grouped into projects (a project is
