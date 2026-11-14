@@ -222,6 +222,21 @@
         "command": "arkestra.permissions.open",
         "title": "%permissions.open%",
         "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.shared.openRules",
+        "title": "%shared.openRules%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.shared.openMemory",
+        "title": "%shared.openMemory%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.shared.remember",
+        "title": "%shared.remember%",
+        "category": "Arkestra"
       }
     ],
     "chatSessions": [

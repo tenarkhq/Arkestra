@@ -17,6 +17,8 @@ import { ChangesUi } from './changesView';
 import { InlineEdits } from './inlineEditUi';
 import { References } from './referencesUi';
 import { Permissions, type PermissionsApi } from './permissionsUi';
+import { SharedContext } from './sharedUi';
+import { extractMemories } from './shared';
 import { GitTemplateIO, createWorkTrees } from './templates/gitio';
 import { TemplateRun } from './templates/run';
 import type { Role } from './templates/signals';
@@ -44,6 +46,9 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	const loaded = new Map<string, Room>();
 	/** The Changes and Checkpoints views; set once the views exist. */
 	let changesUi: ChangesUi | undefined;
+	/** Shared rules and memory for every agent (AR23). */
+	const shared = new SharedContext(context.globalStorageUri.fsPath);
+	context.subscriptions.push(shared);
 	/** Untitled native sessions (a new session before its first item exists) and their rooms. */
 	const untitledSessions = new Map<string, string>();
 	/** The room of the thread used last; the palette commands and the Agents tile follow it. */
@@ -53,7 +58,17 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 
 	const track = (room: Room): Room => {
 		loaded.set(room.id, room);
-		room.afterTurn = agent => changesUi?.take(room.id, vscode.l10n.t('After {0}', agent.name)) ?? Promise.resolve();
+		room.shared = () => shared.block();
+		room.afterTurn = async (agent, reply) => {
+			await changesUi?.take(room.id, vscode.l10n.t('After {0}', agent.name));
+			const memories = extractMemories(reply);
+			if (memories.length) {
+				const added = await shared.remember(memories, agent.name);
+				if (added.length) {
+					room.post(`Közös memóriába felvéve (${agent.name}): ${added.join(' · ')}`);
+				}
+			}
+		};
 		room.onDidChange(() => {
 			void store.save(room.state);
 			refreshThreadsLater();

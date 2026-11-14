@@ -37,15 +37,24 @@ export async function repoRoot(folder: string): Promise<string | undefined> {
 	return r.ok ? r.out.trim() : undefined;
 }
 
-/** Creates the two work trees on their own branches from `base`; reuses them when they exist. */
-export async function createWorkTrees(repo: string, base: string, roomId: string, names: Record<Role, string>): Promise<{ dirs: Record<Role, string>; branches: Record<Role, string> }> {
-	await must(repo, ['rev-parse', '--verify', `${base}^{commit}`]);
-	const exclude = path.join(await must(repo, ['rev-parse', '--git-common-dir']).then(d => path.resolve(repo, d)), 'info', 'exclude');
+/** Keeps the project's .arkestra folder (work trees, local rules and memory) out of git. */
+export async function excludeArkestraFolder(folder: string): Promise<void> {
+	const dir = await git(folder, ['rev-parse', '--git-common-dir']);
+	if (!dir.ok) {
+		return; // not a repository
+	}
+	const exclude = path.join(path.resolve(folder, dir.out.trim()), 'info', 'exclude');
 	const current = await readFile(exclude, 'utf8').catch(() => '');
 	if (!current.split('\n').includes('/.arkestra/')) {
 		await mkdir(path.dirname(exclude), { recursive: true });
 		await appendFile(exclude, `${current && !current.endsWith('\n') ? '\n' : ''}/.arkestra/\n`);
 	}
+}
+
+/** Creates the two work trees on their own branches from `base`; reuses them when they exist. */
+export async function createWorkTrees(repo: string, base: string, roomId: string, names: Record<Role, string>): Promise<{ dirs: Record<Role, string>; branches: Record<Role, string> }> {
+	await must(repo, ['rev-parse', '--verify', `${base}^{commit}`]);
+	await excludeArkestraFolder(repo);
 	const short = roomId.replace(/[^A-Za-z0-9]/g, '').slice(-8);
 	const dirs = {} as Record<Role, string>;
 	const branches = {} as Record<Role, string>;
