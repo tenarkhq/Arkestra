@@ -98,6 +98,12 @@ export function sshArgs(machine: Machine, script: string): string[] {
 	];
 }
 
+/** ssh arguments for an interactive terminal that runs one command in the machine's folder. */
+export function sshTerminalArgs(machine: Machine, command: string, args: readonly string[]): string[] {
+	const script = `cd ${machine.folder ? remotePath(machine.folder) : '"$HOME"'} || exit 98\nexec ${[command, ...args].map(shQuote).join(' ')}`;
+	return ['-t', ...(machine.port ? ['-p', String(machine.port)] : []), machine.host, `sh -lc ${shQuote(script)}`];
+}
+
 export interface SshOptions {
 	/** The ssh client, `ssh` unless configured. */
 	readonly ssh: string;

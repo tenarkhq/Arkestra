@@ -103,6 +103,17 @@ export class ClaudeCodeAgent implements Agent {
 		if (version === undefined || version.code !== 0) {
 			return { ready: false, reason: 'Claude Code CLI not found', fix: 'install' };
 		}
+		if (!await this.options.apiKey()) {
+			// Subscription: the CLI has to be signed in. A CLI without `auth status` is taken as ready.
+			const status = await this.run(['auth', 'status'], 20_000).catch(() => undefined);
+			let loggedIn: unknown = true;
+			try {
+				loggedIn = JSON.parse(status?.out ?? '').loggedIn;
+			} catch { /* older CLI or no JSON */ }
+			if (loggedIn === false) {
+				return { ready: false, reason: 'Claude Code is not signed in', fix: 'signIn' };
+			}
+		}
 		return { ready: true };
 	}
 
