@@ -54,3 +54,14 @@ test('a turn in an imported thread first binds the agent to its session', async 
 	assert.equal(input?.transcript.at(-1)?.text, 'now deploy');
 	assert.equal(room.messages.at(-1)?.text, 'Deployed.');
 });
+
+test('registry: the Agents section hears when an agent comes or goes', () => {
+	const registry = new AgentRegistry();
+	let changes = 0;
+	const sub = registry.onDidChange(() => changes++);
+	const reg = registry.register({ id: 'x', name: 'X', detail: '', readiness: async () => ({ ready: true }), turn: async () => '' } as never);
+	reg.dispose();
+	sub.dispose();
+	registry.register({ id: 'y', name: 'Y', detail: '', readiness: async () => ({ ready: true }), turn: async () => '' } as never);
+	assert.equal(changes, 2);
+});

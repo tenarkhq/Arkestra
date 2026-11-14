@@ -125,13 +125,21 @@ export interface InviteEntry {
 /** Every agent Arkestra knows of. Adapters (Claude Code, Codex, OpenAI, ACP) register here. */
 export class AgentRegistry {
 	private readonly agents = new Map<string, Agent>();
+	private readonly listeners = new Set<() => void>();
+
+	/** Called when an agent comes or goes (a machine added or removed). */
+	onDidChange(listener: () => void): { dispose(): void } {
+		this.listeners.add(listener);
+		return { dispose: () => { this.listeners.delete(listener); } };
+	}
 
 	register(agent: Agent): { dispose(): void } {
 		if (this.agents.has(agent.id)) {
 			throw new Error(`agent already registered: ${agent.id}`);
 		}
 		this.agents.set(agent.id, agent);
-		return { dispose: () => { this.agents.delete(agent.id); } };
+		this.listeners.forEach(l => l());
+		return { dispose: () => { this.agents.delete(agent.id); this.listeners.forEach(l => l()); } };
 	}
 
 	get(id: string): Agent | undefined {

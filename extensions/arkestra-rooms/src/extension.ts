@@ -131,8 +131,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 
 	// Set once the left column exists; rooms changing before that need no refresh.
 	let refreshThreadsLater: () => void = () => { };
-	const createRoom = async (title: string): Promise<Room> => {
-		const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.toString();
+	const createRoom = async (title: string, project?: string): Promise<Room> => {
+		const workspace = project ?? vscode.workspace.workspaceFolders?.[0]?.uri.toString();
 		const room = track(new Room(newRoomState(title, workspace), registry));
 		await store.save(room.state);
 		return use(room);
@@ -185,6 +185,49 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			await chooseFor(room, pick.entry.agent.id, true);
 		}
 		return joined;
+	};
+
+	/** Who works in a new thread: several can be ticked; the last choice comes ticked. */
+	const LAST_AGENTS = 'arkestra.rooms.lastAgents';
+	const pickAgents = (title: string): Promise<string[] | undefined> => new Promise(resolve => {
+		type Item = vscode.QuickPickItem & { entry: InviteEntry };
+		const qp = vscode.window.createQuickPick<Item>();
+		qp.title = title;
+		qp.canSelectMany = true;
+		qp.busy = true;
+		qp.placeholder = vscode.l10n.t('Who works in this thread? More can be invited later.');
+		let done = false;
+		const finish = (ids: string[] | undefined) => { if (!done) { done = true; resolve(ids); qp.dispose(); } };
+		qp.onDidAccept(() => finish(qp.selectedItems.map(i => i.entry.agent.id)));
+		qp.onDidHide(() => finish(undefined));
+		qp.show();
+		void registry.inviteList([]).then(entries => {
+			const last = context.globalState.get<string[]>(LAST_AGENTS) ?? [];
+			qp.items = entries.map(entry => ({
+				label: entry.readiness.ready ? entry.agent.name : `$(warning) ${entry.agent.name}`,
+				description: entry.agent.detail,
+				...(entry.readiness.ready ? {} : { detail: describe(entry) }),
+				entry,
+			}));
+			qp.selectedItems = qp.items.filter(i => i.entry.readiness.ready && last.includes(i.entry.agent.id));
+			qp.busy = false;
+		});
+	});
+	/** A new thread with the agents asked for (or picked), in a project (default: this window's). */
+	const startThread = async (agentIds: readonly string[] | undefined, project?: string): Promise<void> => {
+		const ids = agentIds ?? await pickAgents(vscode.l10n.t('New thread'));
+		if (!ids) {
+			return;
+		}
+		const room = await createRoom(vscode.l10n.t('Room'), project);
+		for (const id of ids) {
+			await invite(room, id);
+		}
+		if (ids.length) {
+			await context.globalState.update(LAST_AGENTS, [...ids]);
+		}
+		refreshThreads();
+		await vscode.commands.executeCommand('vscode.open', sessionUri(room.id));
 	};
 
 	// Model and effort per agent and thread (AR38).
@@ -925,6 +968,26 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			item.command = { command: 'arkestra.rooms.openThread', title: vscode.l10n.t('Open'), arguments: [t.id] };
 			return item;
 	};
+	// The Agents section: every agent on every machine, its state, and what fixes it.
+	const changedAgents = new vscode.EventEmitter<void>();
+	type AgentNode = { entry: InviteEntry };
+	const agentTree: vscode.TreeDataProvider<AgentNode> = {
+		onDidChangeTreeData: changedAgents.event,
+		getChildren: async node => node ? [] : (await registry.inviteList([])).map(entry => ({ entry })),
+		getTreeItem: ({ entry }) => {
+			const item = new vscode.TreeItem(entry.agent.name, vscode.TreeItemCollapsibleState.None);
+			item.id = `agent:${entry.agent.id}`;
+			const ready = entry.readiness.ready;
+			item.iconPath = new vscode.ThemeIcon(ready ? 'circle-filled' : 'warning', new vscode.ThemeColor(ready ? 'testing.iconPassed' : 'list.warningForeground'));
+			item.description = ready ? vscode.l10n.t('ready') : describe(entry);
+			item.tooltip = `${entry.agent.name}\n${entry.agent.detail}\n${describe(entry)}`;
+			item.contextValue = ready ? 'agent.ready' : 'agent.fix';
+			item.command = ready
+				? { command: 'arkestra.rooms.newThreadWith', title: vscode.l10n.t('New thread with this agent'), arguments: [{ entry }] }
+				: { command: 'arkestra.rooms.fixAgent', title: vscode.l10n.t('Sign in or set up'), arguments: [{ entry }] };
+			return item;
+		},
+	};
 	const leftTree = (view: LeftView): vscode.TreeDataProvider<Node> => ({ onDidChangeTreeData: changedThreads.event, getChildren: node => children(view, node), getTreeItem: treeItem });
 	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 	const refreshThreads: () => void = () => {
@@ -965,6 +1028,9 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		controller,
 		changedThreads,
 		vscode.chat.registerChatSessionContentProvider(ROOM_SCHEME, contentProvider, sessionParticipant),
+		vscode.window.createTreeView('arkestra.agentList', { treeDataProvider: agentTree }),
+		changedAgents,
+		registry.onDidChange(() => changedAgents.fire()),
 		vscode.window.createTreeView('arkestra.pinned', { treeDataProvider: leftTree('pinned') }),
 		vscode.window.createTreeView('arkestra.projects', { treeDataProvider: leftTree('projects'), showCollapseAll: true }),
 		vscode.window.createTreeView('arkestra.boards', { treeDataProvider: leftTree('boards') }),
@@ -1058,11 +1124,29 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 				void vscode.window.showErrorMessage(vscode.l10n.t('The template room could not start: {0}', error instanceof Error ? error.message : String(error)));
 			}
 		}),
-		vscode.commands.registerCommand('arkestra.rooms.newThread', async () => {
-			const room = await createRoom(vscode.l10n.t('Room'));
-			refreshThreads();
-			await vscode.commands.executeCommand('vscode.open', sessionUri(room.id));
+		vscode.commands.registerCommand('arkestra.rooms.newThread', async (arg?: unknown) => {
+			// From a project's row: a thread of that project.
+			const project = (arg as { kind?: string; group?: ProjectThreads } | undefined)?.group?.project;
+			await startThread(undefined, project);
 		}),
+		vscode.commands.registerCommand('arkestra.rooms.newThreadWith', async (arg?: unknown) => {
+			const id = typeof arg === 'string' ? arg : (arg as { entry?: InviteEntry } | undefined)?.entry?.agent.id;
+			await startThread(id ? [id] : undefined);
+		}),
+		vscode.commands.registerCommand('arkestra.rooms.fixAgent', async (arg?: unknown) => {
+			const entry = (arg as { entry?: InviteEntry } | undefined)?.entry;
+			if (!entry) {
+				return;
+			}
+			const actions = entry.readiness.actions ?? [];
+			if (actions.length === 1) {
+				await actions[0].run();
+			} else {
+				await explain(entry);
+			}
+			changedAgents.fire();
+		}),
+		vscode.commands.registerCommand('arkestra.rooms.refreshAgents', () => changedAgents.fire()),
 		vscode.commands.registerCommand('arkestra.rooms.pin', arg => editRoom(arg, room => { room.state.pinned = true; })),
 		vscode.commands.registerCommand('arkestra.rooms.unpin', arg => editRoom(arg, room => { delete room.state.pinned; })),
 		vscode.commands.registerCommand('arkestra.rooms.archive', arg => editRoom(arg, room => { room.state.archived = true; delete room.state.pinned; })),
@@ -1127,7 +1211,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.invite', async (roomId?: unknown) => {
 			// From a thread's button: that thread's room. From the palette: the room used last.
-			const room = (typeof roomId === 'string' ? await open(roomId) : undefined) ?? await currentRoom();
+			const id = threadId(roomId);
+			const room = (id ? await open(id) : undefined) ?? await currentRoom();
 			if (!room) {
 				void vscode.window.showInformationMessage(vscode.l10n.t('Start a room in the chat with @room first.'));
 				return;
