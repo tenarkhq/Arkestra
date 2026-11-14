@@ -13,6 +13,7 @@ import { graphqlClient } from './graphql';
 import { parseProjectRef, type FieldInput, type ProjectSnapshot } from './project';
 import { ProjectSync, type JournalEntry, type SyncStatus } from './sync';
 import { ProjectBoard } from './boardView';
+import { RemoteControl } from './remoteUi';
 
 const TOKEN = 'arkestra.github.relayToken';
 const SCOPES = ['repo', 'read:org', 'project'];
@@ -315,6 +316,12 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 		states.event(() => boardChanged.fire()),
 		vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('arkestra.github.project')) { boardChanged.fire(); } }),
 	);
+	// Remote Control (AR36): the threads on a phone, through the same relay.
+	context.subscriptions.push(new RemoteControl(context, async () => {
+		const url = vscode.workspace.getConfiguration('arkestra.github').get<string>('relayUrl')?.trim();
+		const relayToken = await context.secrets.get(TOKEN);
+		return url && relayToken ? { url, token: relayToken } : undefined;
+	}, log));
 	void restartRelay().then(restartSync);
 
 	return {

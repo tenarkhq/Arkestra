@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#14161a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Arkestra Remote</title>
+<style>
+:root { --bg: #f6f7f9; --panel: #ffffff; --fg: #1b1e23; --muted: #69707c; --line: #e2e5ea; --accent: #3367d6; --ok: #2e9a4f; --warn: #b7791f; --bad: #c9363e; --me: #e8effd; color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root { --bg: #14161a; --panel: #1d2025; --fg: #e6e8eb; --muted: #9aa1ad; --line: #2c3037; --accent: #7aa2f7; --ok: #4cc072; --warn: #e0a84a; --bad: #f2737a; --me: #22304a; color-scheme: dark; } }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); display: flex; flex-direction: column; }
+header { display: flex; align-items: center; gap: 10px; padding: 10px max(14px, env(safe-area-inset-right)) 10px max(14px, env(safe-area-inset-left)); background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
+header h1 { font-size: 16px; margin: 0; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.on { background: var(--ok); } .dot.off { background: var(--bad); }
+button { font: inherit; border: 0; border-radius: 8px; padding: 8px 12px; background: var(--line); color: var(--fg); }
+button.primary { background: var(--accent); color: #fff; }
+button.danger { background: var(--bad); color: #fff; }
+button:disabled { opacity: .5; }
+main { flex: 1; overflow-y: auto; padding: 12px max(14px, env(safe-area-inset-right)) 12px max(14px, env(safe-area-inset-left)); }
+.note { color: var(--muted); font-size: 14px; text-align: center; padding: 30px 10px; }
+.thread { display: flex; gap: 10px; align-items: center; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; }
+.thread .t { flex: 1; min-width: 0; } .thread .t b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.muted { color: var(--muted); font-size: 13px; }
+.chip { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 10px; background: var(--line); white-space: nowrap; }
+.chip.work { background: color-mix(in srgb, var(--accent) 22%, transparent); } .chip.wait { background: color-mix(in srgb, var(--warn) 28%, transparent); } .chip.err { background: color-mix(in srgb, var(--bad) 25%, transparent); } .chip.done { background: color-mix(in srgb, var(--ok) 22%, transparent); }
+.agents { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.agent { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.agent .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.agent select { font: inherit; font-size: 13px; padding: 4px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); max-width: 48%; }
+details { margin-top: 6px; } summary { color: var(--muted); font-size: 13px; }
+ul { margin: 4px 0; padding-left: 18px; font-size: 13px; }
+li.completed { color: var(--muted); text-decoration: line-through; } li.in_progress { font-weight: 600; }
+.msg { margin: 0 0 10px; padding: 10px 12px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); overflow-wrap: anywhere; }
+.msg.user { background: var(--me); }
+.msg.system { background: transparent; border-style: dashed; color: var(--muted); font-size: 13px; }
+.msg .who { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.msg .text { white-space: pre-wrap; }
+footer { background: var(--panel); border-top: 1px solid var(--line); padding: 8px max(10px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left)); display: flex; gap: 8px; align-items: flex-end; }
+footer textarea { flex: 1; min-width: 0; font: inherit; border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; background: var(--bg); color: var(--fg); resize: none; max-height: 30vh; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+	<button id="back" hidden aria-label="Back">‹</button>
+	<span class="dot" id="dot"></span>
+	<h1 id="title">Arkestra</h1>
+	<button id="stop" class="danger" hidden>Stop</button>
+</header>
+<main id="main"><p class="note">Connecting…</p></main>
+<footer id="composer" hidden>
+	<textarea id="text" rows="1" placeholder="Write to the thread…"></textarea>
+	<button id="send" class="primary">Send</button>
+</footer>
+<script>
+'use strict';
+// The pairing (channel and key) comes after '#': the browser never sends it to the relay.
+const KEY_STORE = 'arkestra.remote.pairing';
+function readPairing() {
+	const q = new URLSearchParams(location.hash.slice(1));
+	if (q.get('c') && q.get('k')) {
+		try { localStorage.setItem(KEY_STORE, JSON.stringify({ c: q.get('c'), k: q.get('k') })); } catch (e) { /* private mode */ }
+		history.replaceState(null, '', location.pathname); // the key leaves the address bar
+		return { c: q.get('c'), k: q.get('k') };
+	}
+	try { return JSON.parse(localStorage.getItem(KEY_STORE) || 'null'); } catch (e) { return null; }
+}
+const pairing = readPairing();
+const $ = (id) => document.getElementById(id);
+const b64 = { enc: (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))), dec: (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0)) };
+const b64url = (s) => b64.dec(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4));
+let key = null;
+const aad = () => new TextEncoder().encode(pairing.c);
+async function seal(message) {
+	const iv = crypto.getRandomValues(new Uint8Array(12));
+	const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aad() }, key, new TextEncoder().encode(JSON.stringify(message)));
+	return { iv: b64.enc(iv), data: b64.enc(data) };
+}
+async function unseal(frame) {
+	const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64.dec(frame.iv), additionalData: aad() }, key, b64.dec(frame.data));
+	return JSON.parse(new TextDecoder().decode(plain));
+}
+
+const ui = { online: false, threads: [], open: null, thread: null, pending: new Map() };
+function h(tag, attrs, ...kids) {
+	const el = document.createElement(tag);
+	for (const [k, v] of Object.entries(attrs || {})) {
+		if (v === undefined || v === null || v === false) continue;
+		if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+		else if (k === 'class') el.className = v;
+		else el.setAttribute(k, v === true ? '' : String(v));
+	}
+	for (const kid of kids.flat(Infinity)) {
+		if (kid === undefined || kid === null || kid === false) continue;
+		el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+	}
+	return el;
+}
+const base = () => './' + encodeURIComponent(pairing.c);
+async function send(message) {
+	if (!ui.online) { toast('The machine is offline.'); return false; }
+	const res = await fetch(base() + '/cmd', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(await seal(message)) }).catch(() => null);
+	if (!res || !res.ok) { toast(res && res.status === 503 ? 'The machine is offline.' : 'Could not send.'); return false; }
+	return true;
+}
+function toast(text) {
+	const n = h('div', { class: 'note' }, text);
+	$('main').prepend(n);
+	setTimeout(() => n.remove(), 4000);
+}
+const turnClass = (t) => t === 'working' || t === 'queued' ? 'work' : t === 'waiting' ? 'wait' : t === 'error' ? 'err' : t === 'done' ? 'done' : '';
+
+function drawList() {
+	$('back').hidden = true; $('stop').hidden = true; $('composer').hidden = true;
+	$('title').textContent = 'Arkestra';
+	const main = $('main');
+	if (!ui.threads.length) {
+		main.replaceChildren(h('p', { class: 'note' }, ui.online ? 'No thread is shown here. Turn Remote Control on for a thread in Arkestra.' : 'The machine is offline. Arkestra has to run with Remote Control on.'));
+		return;
+	}
+	main.replaceChildren(...ui.threads.map(t => h('div', { class: 'thread', onclick: () => openThread(t.id) },
+		h('div', { class: 't' }, h('b', {}, t.title), h('span', { class: 'muted' }, t.agents + ' agent' + (t.agents === 1 ? '' : 's') + (t.lastAt ? ' · ' + new Date(t.lastAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''))),
+		t.waiting ? h('span', { class: 'chip wait' }, 'waits for you') : t.busy ? h('span', { class: 'chip work' }, 'working') : null)));
+}
+
+function agentEl(a) {
+	const done = a.todos.filter(t => t.status === 'completed').length;
+	const models = a.choices && a.choices.models || [];
+	const chosen = models.find(m => m.id === a.choice.model);
+	const efforts = (chosen || models[0] || {}).efforts || [];
+	const modelSel = models.length ? h('select', { onchange: (e) => choose(a.id, e.target.value || undefined, undefined) }, h('option', { value: '' }, 'Default model'), models.map(m => h('option', { value: m.id, selected: m.id === a.choice.model }, m.label))) : null;
+	const effortSel = efforts.length ? h('select', { onchange: (e) => choose(a.id, a.choice.model, e.target.value || undefined) }, h('option', { value: '' }, 'Default effort'), efforts.map(e => h('option', { value: e, selected: e === a.choice.effort }, e))) : null;
+	return h('div', { class: 'agent' },
+		h('div', { class: 'row' }, h('b', {}, a.name), h('span', { class: 'chip ' + turnClass(a.turn) }, a.turnText), a.tool && a.turn === 'working' ? h('span', { class: 'muted' }, a.tool) : null),
+		a.waiting ? h('div', { class: 'muted' }, '⏸ ' + a.waiting + ' — answer it in Arkestra') : null,
+		a.error ? h('div', { class: 'muted' }, a.error) : null,
+		modelSel || effortSel ? h('div', { class: 'row', style: 'margin-top:6px' }, modelSel, effortSel) : null,
+		a.todos.length ? h('details', { open: a.todos.some(t => t.status !== 'completed') }, h('summary', {}, 'Tasks ' + done + '/' + a.todos.length), h('ul', {}, a.todos.map(t => h('li', { class: t.status }, t.text)))) : null,
+		a.subagents.length ? h('details', {}, h('summary', {}, 'Sub-agents · ' + a.subagents.filter(s => s.status === 'running').length + ' running'), h('ul', {}, a.subagents.map(s => h('li', {}, (s.status === 'running' ? '● ' : s.status === 'done' ? '✓ ' : '✕ ') + s.name + (s.detail ? ' · ' + s.detail : ''))))) : null,
+		a.background.length ? h('details', {}, h('summary', {}, 'Background · ' + a.background.filter(s => s.status === 'running').length + ' running'), h('ul', {}, a.background.map(s => h('li', { title: s.result || '' }, (s.status === 'running' ? '● ' : s.status === 'done' ? '✓ ' : '✕ ') + s.name)))) : null);
+}
+
+function drawThread() {
+	const t = ui.thread;
+	$('back').hidden = false; $('composer').hidden = false;
+	if (!t) { $('main').replaceChildren(h('p', { class: 'note' }, 'Loading the thread…')); return; }
+	$('title').textContent = t.title;
+	$('stop').hidden = !t.busy;
+	const main = $('main');
+	const atBottom = main.scrollHeight - main.scrollTop - main.clientHeight < 80;
+	main.replaceChildren(
+		h('div', { class: 'agents' }, t.agents.map(agentEl)),
+		t.messages.map(m => h('div', { class: 'msg ' + m.author.kind }, h('div', { class: 'who' }, m.author.name + ' · ' + new Date(m.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })), h('div', { class: 'text' }, m.text))));
+	if (atBottom) main.scrollTop = main.scrollHeight;
+}
+
+async function openThread(id) {
+	ui.open = id; ui.thread = null; drawThread();
+	await send({ t: 'open', id });
+}
+async function choose(agentId, model, effort) {
+	await send({ t: 'choose', id: ui.open, agentId, model, effort, cmdId: crypto.randomUUID() });
+}
+
+$('back').addEventListener('click', () => { ui.open = null; ui.thread = null; drawList(); send({ t: 'list' }); });
+$('stop').addEventListener('click', () => send({ t: 'stop', id: ui.open, cmdId: crypto.randomUUID() }));
+$('send').addEventListener('click', async () => {
+	const text = $('text').value.trim();
+	if (!text || !ui.open) return;
+	const cmdId = crypto.randomUUID();
+	$('send').disabled = true;
+	if (await send({ t: 'say', id: ui.open, text, cmdId })) { ui.pending.set(cmdId, text); $('text').value = ''; }
+	$('send').disabled = false;
+});
+$('text').addEventListener('input', (e) => { e.target.style.height = 'auto'; e.target.style.height = e.target.scrollHeight + 'px'; });
+
+async function onFrame(frame) {
+	let m;
+	try { m = await unseal(frame); } catch (e) { return; } // not for this key
+	if (m.t === 'threads') { ui.threads = m.threads; if (!ui.open) drawList(); }
+	else if (m.t === 'thread' && m.thread.id === ui.open) { ui.thread = m.thread; drawThread(); }
+	else if (m.t === 'closed' && m.id === ui.open) { ui.open = null; toast('Remote Control was turned off for that thread.'); drawList(); }
+	else if (m.t === 'ack') { if (!m.ok) toast(m.error || 'Refused.'); ui.pending.delete(m.cmdId); }
+}
+
+async function main() {
+	if (!pairing || !window.crypto || !crypto.subtle) {
+		$('main').replaceChildren(h('p', { class: 'note' }, !pairing ? 'Open the pairing link from Arkestra (Remote Control → Copy the pairing link) on this phone.' : 'This browser cannot decrypt (it needs a secure https page).'));
+		return;
+	}
+	key = await crypto.subtle.importKey('raw', b64url(pairing.k), 'AES-GCM', false, ['encrypt', 'decrypt']);
+	const es = new EventSource(base() + '/down');
+	es.addEventListener('status', (e) => {
+		ui.online = JSON.parse(e.data).online;
+		$('dot').className = 'dot ' + (ui.online ? 'on' : 'off');
+		if (ui.online) send({ t: 'list' }).then(() => ui.open && send({ t: 'open', id: ui.open }));
+		else if (!ui.open) drawList();
+	});
+	es.addEventListener('frame', (e) => onFrame(JSON.parse(e.data)));
+	es.onerror = () => { $('dot').className = 'dot'; };
+	drawList();
+}
+main();
+</script>
+</body>
+</html>

@@ -11,6 +11,7 @@
 // No dependencies; Node 18+.
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createRemote } from './remote.mjs';
 import { createServer } from 'node:http';
 import { readFileSync, watchFile } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -91,6 +92,8 @@ export function createRelay(options) {
 		res.end(JSON.stringify(body));
 	};
 
+	const remote = createRemote({ clients: options.clients, app: options.remoteApp, now });
+
 	const tokenOf = (req, url) => {
 		const auth = req.headers.authorization ?? '';
 		return auth.startsWith('Bearer ') ? auth.slice(7).trim() : url.searchParams.get('token') ?? '';
@@ -142,6 +145,9 @@ export function createRelay(options) {
 			});
 			return;
 		}
+		if (url.pathname.startsWith('/remote/') || url.pathname === '/remote') {
+			return remote.handle(req, res, url, tokenOf(req, url));
+		}
 		if (req.method === 'GET' && url.pathname === '/events') {
 			const client = options.clients().get(tokenOf(req, url));
 			if (!client) {
@@ -170,7 +176,7 @@ export function createRelay(options) {
 		json(res, 404, { error: 'not found' });
 	};
 
-	return { handler, publish, get size() { return streams.size; }, buffer };
+	return { handler, publish, get size() { return streams.size; }, buffer, remote };
 }
 
 function main() {
@@ -190,7 +196,13 @@ function main() {
 			console.error(`clients file not reloaded: ${e.message}`);
 		}
 	});
-	const relay = createRelay({ secret, clients: () => clients });
+	let remoteApp;
+	try {
+		remoteApp = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'remote-app.html'));
+	} catch {
+		remoteApp = undefined; // Remote Control's phone page is optional
+	}
+	const relay = createRelay({ secret, clients: () => clients, remoteApp });
 	const port = Number(process.env.PORT ?? 8787);
 	const host = process.env.HOST ?? '127.0.0.1';
 	createServer(relay.handler).listen(port, host, () => console.log(`arkestra relay on ${host}:${port}, ${clients.size} client(s)`));

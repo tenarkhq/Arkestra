@@ -16,6 +16,7 @@ import { progressItems, taskRooms, type TaskRoom } from './tasks';
 import { TURN_TEXT, turnState, workHtml } from './work';
 import { ActivityView } from './activityView';
 import { choiceLabel, effortsFor, fitChoice, type Choice } from './choice';
+import { threadListItem, threadSnapshot, type ThreadListItem, type ThreadSnapshot } from './threadSnapshot';
 import type { AgentChoices } from './agent';
 import { templateForm } from './templateForm';
 import { ChangesUi } from './changesView';
@@ -44,7 +45,16 @@ export interface ArkestraRoomsApi {
 	/** What an agent can run with, and the choice per thread (AR38); the mobile view uses these too. */
 	agentChoices(agentId: string): Promise<AgentChoices | undefined>;
 	setChoice(roomId: string, agentId: string, choice: { model?: string; effort?: string }): Promise<void>;
+	/** Threads for another screen (AR36, Remote Control): the list, one thread, writing to it, stopping it. */
+	threads(): Promise<ThreadListItem[]>;
+	thread(roomId: string): Promise<ThreadSnapshot | undefined>;
+	say(roomId: string, text: string): Promise<void>;
+	stop(roomId: string): Promise<void>;
+	/** A thread changed: a message, an agent's state or work, its model choice. */
+	readonly onDidChangeThread: vscode.Event<string>;
 }
+
+export type { ThreadListItem, ThreadSnapshot };
 
 export type { TaskRoom };
 
@@ -71,6 +81,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	let current: Room | undefined;
 	const activity = new ActivityBoard();
 	const currentChanged = new vscode.EventEmitter<void>();
+	const threadChanged = new vscode.EventEmitter<string>();
+	context.subscriptions.push(threadChanged, activity.onDidChange(roomId => threadChanged.fire(roomId)));
 
 	const track = (room: Room): Room => {
 		loaded.set(room.id, room);
@@ -87,6 +99,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		};
 		room.onDidChange(() => {
 			void store.save(room.state);
+			threadChanged.fire(room.id);
 			refreshThreadsLater();
 			if (room === current) {
 				currentChanged.fire();
@@ -201,6 +214,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}
 		room.state.choices = all;
 		await store.save(room.state);
+		threadChanged.fire(room.id);
 		if (room === current) {
 			currentChanged.fire();
 		}
@@ -919,6 +933,65 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}),
 	);
 
+	// Writing to a thread from another screen (AR36): the same round as the chat's, without a chat view.
+	const remoteRounds = new Map<string, AbortController>();
+	const remoteSay = async (roomId: string, text: string): Promise<void> => {
+		const room = await open(roomId);
+		if (!room) {
+			throw new Error('no such thread');
+		}
+		if (!text.trim()) {
+			return;
+		}
+		if (room.state.template) {
+			const run = ensureRun(room)!;
+			run.unpause();
+			room.addUser(text);
+			await run.engine.user(text, run.addressed(text));
+			return;
+		}
+		if (!room.roster.length) {
+			throw new Error('there is no agent in this thread yet');
+		}
+		if (remoteRounds.has(roomId) || room.roster.some(id => activity.get(roomId, id).state !== 'idle')) {
+			throw new Error('a round is running in this thread; wait for it or stop it');
+		}
+		const abort = new AbortController();
+		remoteRounds.set(roomId, abort);
+		activity.queue(room.id, room.roster);
+		await changesUi?.take(room.id, vscode.l10n.t('Before: {0}', titleFrom(text, vscode.l10n.t('Room'))));
+		void (async () => {
+			try {
+				await room.say(text, (agent, event) => {
+					switch (event.kind) {
+						case 'start': activity.start(room.id, agent.id); break;
+						case 'tool': activity.tool(room.id, agent.id, event.text); break;
+						case 'error': activity.error(room.id, agent.id, event.text); break;
+						case 'usage': activity.usage(room.id, agent.id, event.usage); break;
+						case 'work': activity.work(room.id, agent.id, event.work); break;
+						case 'end': activity.end(room.id, agent.id); break;
+					}
+				}, abort.signal);
+			} finally {
+				activity.settle(room.id);
+				remoteRounds.delete(roomId);
+			}
+		})();
+	};
+	const remoteStop = async (roomId: string): Promise<void> => {
+		remoteRounds.get(roomId)?.abort();
+		runs.get(roomId)?.pause(vscode.l10n.t('Stopped from another screen.'));
+	};
+	const snapshot = async (roomId: string): Promise<ThreadSnapshot | undefined> => {
+		const room = await open(roomId);
+		if (!room) {
+			return undefined;
+		}
+		const choices = new Map<string, AgentChoices | undefined>();
+		await Promise.all(room.roster.map(async id => choices.set(id, await agentChoices(id))));
+		return threadSnapshot(room.state, id => ({ name: registry.get(id)?.name ?? id, activity: activity.get(roomId, id), ...(choices.get(id) ? { choices: choices.get(id)! } : {}) }));
+	};
+
 	const permissions = new Permissions(machine => machine === 'local' ? vscode.l10n.t('this machine') : machine);
 	context.subscriptions.push(permissions);
 	return {
@@ -927,6 +1000,11 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		tasks,
 		onDidChangeTasks: tasksChanged.event,
 		agentChoices,
+		threads: async () => (await store.list()).map(s => loaded.get(s.id)?.state ?? s).sort((a, b) => (b.messages.at(-1)?.at ?? '').localeCompare(a.messages.at(-1)?.at ?? '')).map(s => threadListItem(s, id => activity.get(s.id, id))),
+		thread: snapshot,
+		say: remoteSay,
+		stop: remoteStop,
+		onDidChangeThread: threadChanged.event,
 		setChoice: async (roomId, agentId, choice) => {
 			const room = await open(roomId);
 			if (room) {
