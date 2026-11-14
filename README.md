@@ -42,6 +42,9 @@ system language and can be switched with one click.
    (coding, audit, brief, idea). Threads can be pinned.
 5. **API key and subscription.** Every provider connects by API key, by
    subscription login (through its own CLI), or both.
+   Beyond the built-in providers, any agent that speaks the open Agent
+   Client Protocol (ACP) joins rooms without its own integration code, for
+   example Gemini CLI, or Claude Code and Codex through their ACP adapters.
 
 ### Taken from Cursor
 
