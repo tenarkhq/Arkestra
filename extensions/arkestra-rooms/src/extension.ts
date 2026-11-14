@@ -28,12 +28,13 @@ import { SharedContext } from './sharedUi';
 import { extractMemories } from './shared';
 import { BestOfN } from './bestUi';
 import { ArtifactGallery } from './artifactsUi';
+import { SidebarView } from './sidebarView';
 import { contextPercent, ringSvg, statusText, tightestLimit, usageLine, formatTokens } from './usage';
 import { GitTemplateIO, createWorkTrees } from './templates/gitio';
 import { TemplateRun } from './templates/run';
 import type { Role } from './templates/signals';
 import type { CodeState, ReviewState, TemplateState } from './templates/types';
-import { ROOM_ID_KEY, ROOM_SCHEME, archivedThreads, groupThreads, historyTurns, projectName, roomIdFromHistory, roomIdFromSessionPath, summarize, titleFrom, type ProjectThreads, type ThreadSummary } from './threads';
+import { ROOM_ID_KEY, ROOM_SCHEME, historyTurns, projectName, roomIdFromHistory, roomIdFromSessionPath, summarize, titleFrom, type ProjectThreads, type ThreadSummary } from './threads';
 import { ThreadViews } from './threadView';
 import { DetailsView } from './detailsView';
 import { LiveTurns } from './threadModel';
@@ -804,9 +805,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		},
 	};
 
-	// The left bar: Pinned, Projects (every view of a project), Boards, Chats (newest first).
+	// The left bar (arkestra.sidebar): fed with the threads, the boards, the pins and the machines' sessions.
 	const changedThreads = new vscode.EventEmitter<void>();
-	type Tool = 'chats' | 'board' | 'files' | 'search' | 'git' | 'changes' | 'checkpoints' | 'activity' | 'artifacts' | 'agents' | 'lanes';
 	type BoardEntry = { readonly key: string; readonly title: string; readonly workspace: boolean; readonly pinned: boolean };
 	interface GitHubBoards { boards(): readonly BoardEntry[]; readonly onDidChangeBoards: vscode.Event<void> }
 	let github: GitHubBoards | undefined;
@@ -818,24 +818,6 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			changedThreads.fire();
 		}
 	}, () => undefined);
-	/** A project's views in the left bar, in this order; each opens where VS Code keeps it. */
-	const TOOLS: readonly { tool: Tool; label: () => string; icon: string; command?: string; args?: unknown[] }[] = [
-		{ tool: 'chats', label: () => vscode.l10n.t('Chats and rooms'), icon: 'comment-discussion' },
-		{ tool: 'board', label: () => vscode.l10n.t('Board · Table · Plan · Graph'), icon: 'project', command: 'arkestra.github.openBoard', args: [''] },
-		{ tool: 'files', label: () => vscode.l10n.t('Files'), icon: 'files', command: 'workbench.view.explorer' },
-		{ tool: 'search', label: () => vscode.l10n.t('Search'), icon: 'search', command: 'workbench.view.search' },
-		{ tool: 'git', label: () => vscode.l10n.t('Git'), icon: 'source-control', command: 'workbench.view.scm' },
-		{ tool: 'changes', label: () => vscode.l10n.t('Changes'), icon: 'diff', command: 'arkestra.changes.focus' },
-		{ tool: 'checkpoints', label: () => vscode.l10n.t('Checkpoints'), icon: 'history', command: 'arkestra.checkpoints.focus' },
-		{ tool: 'activity', label: () => vscode.l10n.t('Activity'), icon: 'pulse', command: 'arkestra.activity.focus' },
-		{ tool: 'artifacts', label: () => vscode.l10n.t('Artifacts'), icon: 'layers', command: 'arkestra.artifacts.open' },
-		{ tool: 'agents', label: () => vscode.l10n.t('Agents'), icon: 'organization', command: 'arkestra.rooms.showAgents' },
-		{ tool: 'lanes', label: () => vscode.l10n.t('Lanes'), icon: 'split-horizontal', command: 'arkestra.rooms.showLane' },
-	];
-	type Node = { kind: 'project'; label: string; group: ProjectThreads; current: boolean }
-		| { kind: 'tool'; tool: Tool; group: ProjectThreads } | { kind: 'board'; board: BoardEntry } | { kind: 'openBoard' }
-		| { kind: 'artifact'; key: string; title: string; artifactKind: string } | { kind: 'openProject'; project: string } | { kind: 'category'; name: string; threads: readonly ThreadSummary[] } | { kind: 'thread'; thread: ThreadSummary }
-		| { kind: 'archived'; threads: readonly ThreadSummary[] } | { kind: 'machines' } | { kind: 'sessionAgent'; agentId: string; name: string } | { kind: 'session'; agentId: string; session: ExistingSession } | { kind: 'note'; text: string };
 	// AR39 · The sessions the agents' CLIs already have on their machines; an SSH listing is slow, so kept for a while.
 	const sessionLists = new Map<string, { at: number; sessions: readonly ExistingSession[] }>();
 	const sessionAgents = () => registry.all().filter(a => a.existingSessions && a.sessionHistory && a.adoptSession).sort((a, b) => a.name.localeCompare(b.name));
@@ -848,200 +830,6 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		sessionLists.set(agent.id, { at: Date.now(), sessions });
 		return sessions;
 	};
-	const when = (iso: string) => iso ? new Date(iso).toLocaleString(vscode.env.language, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-	const currentProject = () => vscode.workspace.workspaceFolders?.[0]?.uri.toString();
-	const threadsOf = (group: ProjectThreads): Node[] => [
-		...group.pinned.map(thread => ({ kind: 'thread' as const, thread })),
-		...group.categories.map(c => ({ kind: 'category' as const, name: c.name, threads: c.threads })),
-		...group.uncategorized.map(thread => ({ kind: 'thread' as const, thread })),
-	];
-	type LeftView = 'pinned' | 'projects' | 'boards' | 'chats';
-	const roots = async (view: LeftView): Promise<Node[]> => {
-		const all = await allThreads();
-		switch (view) {
-			case 'chats': {
-				const archived = archivedThreads(all);
-				return [
-					...all.filter(t => !t.archived).sort((a, b) => b.lastAt.localeCompare(a.lastAt)).map(thread => ({ kind: 'thread' as const, thread })),
-					...(sessionAgents().length ? [{ kind: 'machines' as const }] : []),
-					...(archived.length ? [{ kind: 'archived' as const, threads: archived }] : []),
-				];
-			}
-			case 'projects': {
-				const { current, others } = groupThreads(all, currentProject());
-				return [
-					{ kind: 'project', label: projectName(current.project) || vscode.l10n.t('No project'), group: current, current: true },
-					...others.map(group => ({ kind: 'project' as const, label: projectName(group.project) || vscode.l10n.t('No project'), group, current: false })),
-				];
-			}
-			case 'boards':
-				return [...(github?.boards() ?? []).map(board => ({ kind: 'board' as const, board })), { kind: 'openBoard' }];
-			case 'pinned':
-				return [
-					...(github?.boards() ?? []).filter(b => b.pinned).map(board => ({ kind: 'board' as const, board })),
-					...(await gallery.pinnedArtifacts()).map(a => ({ kind: 'artifact' as const, key: a.key, title: a.title, artifactKind: a.kind })),
-					...all.filter(t => t.pinned && !t.archived).sort((a, b) => b.lastAt.localeCompare(a.lastAt)).map(thread => ({ kind: 'thread' as const, thread })),
-				];
-		}
-	};
-	const children = async (view: LeftView, node: Node | undefined): Promise<Node[]> => {
-		if (!node) {
-			return roots(view);
-		}
-		if (node.kind === 'project') {
-			return node.current
-				? TOOLS.map(t => ({ kind: 'tool' as const, tool: t.tool, group: node.group }))
-				: [{ kind: 'tool', tool: 'chats', group: node.group }, ...(node.group.project ? [{ kind: 'openProject' as const, project: node.group.project }] : [])];
-		}
-		if (node.kind === 'tool') {
-			return node.tool === 'chats' ? threadsOf(node.group) : [];
-		}
-			if (node.kind === 'machines') {
-				return sessionAgents().map(a => ({ kind: 'sessionAgent' as const, agentId: a.id, name: a.name }));
-			}
-			if (node.kind === 'sessionAgent') {
-				const agent = registry.get(node.agentId);
-				if (!agent?.existingSessions) {
-					return [];
-				}
-				try {
-					const sessions = await sessionsOf(agent);
-					return sessions.length ? sessions.map(session => ({ kind: 'session' as const, agentId: agent.id, session })) : [{ kind: 'note', text: vscode.l10n.t('No sessions on this machine') }];
-				} catch (error) {
-					return [{ kind: 'note', text: vscode.l10n.t('Could not read the sessions: {0}', error instanceof Error ? error.message : String(error)) }];
-				}
-			}
-			if (node.kind === 'archived') {
-				return node.threads.map(thread => ({ kind: 'thread' as const, thread }));
-			}
-			return node.kind === 'category' ? node.threads.map(thread => ({ kind: 'thread' as const, thread })) : [];
-	};
-	const treeItem = (node: Node): vscode.TreeItem => {
-			if (node.kind === 'tool') {
-				const tool = TOOLS.find(t => t.tool === node.tool)!;
-				const item = new vscode.TreeItem(tool.label(), node.tool === 'chats' ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
-				item.id = `tool:${node.group.project ?? ''}:${node.tool}`;
-				item.iconPath = new vscode.ThemeIcon(tool.icon);
-				if (node.tool === 'chats') {
-					item.description = String(node.group.count);
-				}
-				if (tool.command) {
-					item.command = { command: tool.command, title: tool.label(), arguments: tool.args ?? [] };
-				}
-				return item;
-			}
-			if (node.kind === 'board') {
-				const b = node.board;
-				const item = new vscode.TreeItem(b.title, vscode.TreeItemCollapsibleState.None);
-				item.id = `board:${b.key}`;
-				item.iconPath = new vscode.ThemeIcon(b.pinned ? 'pinned' : 'project');
-				item.description = b.workspace ? `${b.key} · ${vscode.l10n.t('this window')}` : b.key;
-				item.contextValue = 'board';
-				item.command = { command: 'arkestra.github.openBoard', title: vscode.l10n.t('Open'), arguments: [b.workspace ? '' : b.key] };
-				return item;
-			}
-			if (node.kind === 'openBoard') {
-				const item = new vscode.TreeItem(vscode.l10n.t('Open a board…'), vscode.TreeItemCollapsibleState.None);
-				item.iconPath = new vscode.ThemeIcon('add');
-				item.command = { command: 'arkestra.github.openBoard', title: vscode.l10n.t('Open a board…') };
-				return item;
-			}
-			if (node.kind === 'artifact') {
-				const item = new vscode.TreeItem(node.title, vscode.TreeItemCollapsibleState.None);
-				item.id = `artifact:${node.key}`;
-				item.iconPath = new vscode.ThemeIcon('layers');
-				item.description = node.artifactKind;
-				item.command = { command: 'arkestra.artifacts.reveal', title: vscode.l10n.t('Open'), arguments: [node.key] };
-				return item;
-			}
-			if (node.kind === 'openProject') {
-				const item = new vscode.TreeItem(vscode.l10n.t('Open this project'), vscode.TreeItemCollapsibleState.None);
-				item.iconPath = new vscode.ThemeIcon('folder-opened');
-				item.command = { command: 'vscode.openFolder', title: vscode.l10n.t('Open this project'), arguments: [vscode.Uri.parse(node.project), { forceNewWindow: true }] };
-				return item;
-			}
-			if (node.kind === 'archived') {
-				const item = new vscode.TreeItem(vscode.l10n.t('Archived'), vscode.TreeItemCollapsibleState.Collapsed);
-				item.id = 'archived';
-				item.iconPath = new vscode.ThemeIcon('archive');
-				item.description = String(node.threads.length);
-				return item;
-			}
-			if (node.kind === 'machines') {
-				const item = new vscode.TreeItem(vscode.l10n.t('Sessions on the machines'), vscode.TreeItemCollapsibleState.Collapsed);
-				item.iconPath = new vscode.ThemeIcon('history');
-				item.tooltip = vscode.l10n.t('Claude Code and Codex sessions started outside Arkestra (a terminal, an IDE). Open one to continue it here.');
-				item.contextValue = 'machines';
-				return item;
-			}
-			if (node.kind === 'sessionAgent') {
-				const item = new vscode.TreeItem(node.name, vscode.TreeItemCollapsibleState.Collapsed);
-				item.id = `sessions:${node.agentId}`;
-				item.iconPath = new vscode.ThemeIcon(node.agentId.includes('@') ? 'remote' : 'vm');
-				item.contextValue = 'sessionAgent';
-				return item;
-			}
-			if (node.kind === 'session') {
-				const s = node.session;
-				const item = new vscode.TreeItem(s.title, vscode.TreeItemCollapsibleState.None);
-				item.id = `session:${node.agentId}:${s.id}`;
-				item.iconPath = new vscode.ThemeIcon('comment');
-				item.description = [s.cwd ? path.posix.basename(s.cwd) : '', when(s.updatedAt)].filter(Boolean).join(' · ');
-				item.tooltip = [s.title, s.cwd, when(s.updatedAt)].filter(Boolean).join('\n');
-				item.contextValue = 'session';
-				item.command = { command: 'arkestra.rooms.continueSession', title: vscode.l10n.t('Continue here'), arguments: [node.agentId, s] };
-				return item;
-			}
-			if (node.kind === 'note') {
-				const item = new vscode.TreeItem(node.text, vscode.TreeItemCollapsibleState.None);
-				item.iconPath = new vscode.ThemeIcon('info');
-				return item;
-			}
-			if (node.kind === 'project') {
-				const item = new vscode.TreeItem(node.label, node.current ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
-				item.id = `project:${node.group.project ?? ''}`;
-				item.iconPath = new vscode.ThemeIcon(node.current ? 'root-folder-opened' : 'root-folder');
-				item.description = node.current ? vscode.l10n.t('this window') : String(node.group.count);
-				item.contextValue = 'project';
-				return item;
-			}
-			if (node.kind === 'category') {
-				const item = new vscode.TreeItem(node.name, vscode.TreeItemCollapsibleState.Expanded);
-				item.iconPath = new vscode.ThemeIcon('tag');
-				item.description = String(node.threads.length);
-				return item;
-			}
-			const t = node.thread;
-			const item = new vscode.TreeItem(t.title, vscode.TreeItemCollapsibleState.None);
-			item.id = t.id;
-			item.iconPath = new vscode.ThemeIcon(busy(t.id) ? 'loading~spin' : t.archived ? 'archive' : t.pinned ? 'pinned' : 'comment-discussion');
-			item.description = [projectName(t.project), t.lastAt ? new Date(t.lastAt).toLocaleString(vscode.env.language, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''].filter(Boolean).join(' · ') || undefined;
-			item.tooltip = vscode.l10n.t('{0} agents', t.agents);
-			item.contextValue = t.archived ? 'thread.archived' : t.pinned ? 'thread.pinned' : 'thread';
-			item.command = { command: 'arkestra.rooms.openThread', title: vscode.l10n.t('Open'), arguments: [t.id] };
-			return item;
-	};
-	// The Agents section: every agent on every machine, its state, and what fixes it.
-	const changedAgents = new vscode.EventEmitter<void>();
-	type AgentNode = { entry: InviteEntry };
-	const agentTree: vscode.TreeDataProvider<AgentNode> = {
-		onDidChangeTreeData: changedAgents.event,
-		getChildren: async node => node ? [] : (await registry.inviteList([])).map(entry => ({ entry })),
-		getTreeItem: ({ entry }) => {
-			const item = new vscode.TreeItem(entry.agent.name, vscode.TreeItemCollapsibleState.None);
-			item.id = `agent:${entry.agent.id}`;
-			const ready = entry.readiness.ready;
-			item.iconPath = new vscode.ThemeIcon(ready ? 'circle-filled' : 'warning', new vscode.ThemeColor(ready ? 'testing.iconPassed' : 'list.warningForeground'));
-			item.description = ready ? vscode.l10n.t('ready') : describe(entry);
-			item.tooltip = `${entry.agent.name}\n${entry.agent.detail}\n${describe(entry)}`;
-			item.contextValue = ready ? 'agent.ready' : 'agent.fix';
-			item.command = ready
-				? { command: 'arkestra.rooms.newThreadWith', title: vscode.l10n.t('New thread with this agent'), arguments: [{ entry }] }
-				: { command: 'arkestra.rooms.fixAgent', title: vscode.l10n.t('Sign in or set up'), arguments: [{ entry }] };
-			return item;
-		},
-	};
-	const leftTree = (view: LeftView): vscode.TreeDataProvider<Node> => ({ onDidChangeTreeData: changedThreads.event, getChildren: node => children(view, node), getTreeItem: treeItem });
 	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 	const refreshThreads: () => void = () => {
 		clearTimeout(refreshTimer);
@@ -1081,13 +869,16 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		controller,
 		changedThreads,
 		vscode.chat.registerChatSessionContentProvider(ROOM_SCHEME, contentProvider, sessionParticipant),
-		vscode.window.createTreeView('arkestra.agentList', { treeDataProvider: agentTree }),
-		changedAgents,
-		registry.onDidChange(() => changedAgents.fire()),
-		vscode.window.createTreeView('arkestra.pinned', { treeDataProvider: leftTree('pinned') }),
-		vscode.window.createTreeView('arkestra.projects', { treeDataProvider: leftTree('projects'), showCollapseAll: true }),
-		vscode.window.createTreeView('arkestra.boards', { treeDataProvider: leftTree('boards') }),
-		vscode.window.createTreeView('arkestra.threads', { treeDataProvider: leftTree('chats'), showCollapseAll: true }),
+		new SidebarView(context, {
+			threads: allThreads,
+			busy,
+			currentThread: () => current?.id,
+			boards: () => github?.boards() ?? [],
+			pinnedArtifacts: () => gallery.pinnedArtifacts(),
+			machineSessions: () => sessionAgents().map(a => ({ id: a.id, name: a.name, sessions: () => sessionsOf(a) })),
+			refreshSessions: () => sessionLists.clear(),
+			onDidChange: changedThreads.event,
+		}),
 		gallery.onDidChangePins(() => changedThreads.fire()),
 		activity.onDidChange(refreshThreads),
 		currentChanged.event(refreshThreads),
@@ -1201,9 +992,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			} else {
 				await explain(entry);
 			}
-			changedAgents.fire();
 		}),
-		vscode.commands.registerCommand('arkestra.rooms.refreshAgents', () => changedAgents.fire()),
 		vscode.commands.registerCommand('arkestra.rooms.pin', arg => editRoom(arg, room => { room.state.pinned = true; })),
 		vscode.commands.registerCommand('arkestra.rooms.unpin', arg => editRoom(arg, room => { delete room.state.pinned; })),
 		vscode.commands.registerCommand('arkestra.rooms.archive', arg => editRoom(arg, room => { room.state.archived = true; delete room.state.pinned; })),
