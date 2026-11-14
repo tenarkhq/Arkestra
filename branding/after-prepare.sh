@@ -44,12 +44,18 @@ for EXT in ../arkestra-extensions/*/; do
   NAME="$( basename "${EXT}" )"
   rm -rf "extensions/${NAME}"
   cp -R "${EXT}" "extensions/${NAME}"
-  grep -q "'extensions/${NAME}/tsconfig.json'" build/gulpfile.extensions.ts || \
-    sed -i "s#^\(\s*\)'extensions/merge-conflict/tsconfig.json',#&\n\1'extensions/${NAME}/tsconfig.json',#" build/gulpfile.extensions.ts
-  grep -q "'extensions/${NAME}'," build/npm/dirs.ts || \
-    sed -i "s#^\(\s*\)'extensions/merge-conflict',#&\n\1'extensions/${NAME}',#" build/npm/dirs.ts
-  grep -q "'extensions/${NAME}/tsconfig.json'" build/gulpfile.extensions.ts
-  grep -q "'extensions/${NAME}'," build/npm/dirs.ts
+  # Compiled only if it has sources; npm-installed only if it has dependencies
+  # (a theme extension has neither).
+  if [[ -f "extensions/${NAME}/tsconfig.json" ]]; then
+    grep -q "'extensions/${NAME}/tsconfig.json'" build/gulpfile.extensions.ts || \
+      sed -i "s#^\(\s*\)'extensions/merge-conflict/tsconfig.json',#&\n\1'extensions/${NAME}/tsconfig.json',#" build/gulpfile.extensions.ts
+    grep -q "'extensions/${NAME}/tsconfig.json'" build/gulpfile.extensions.ts
+  fi
+  if [[ -f "extensions/${NAME}/package-lock.json" ]]; then
+    grep -q "'extensions/${NAME}'," build/npm/dirs.ts || \
+      sed -i "s#^\(\s*\)'extensions/merge-conflict',#&\n\1'extensions/${NAME}',#" build/npm/dirs.ts
+    grep -q "'extensions/${NAME}'," build/npm/dirs.ts
+  fi
 done
 
 # AR03 · Removed: built-in extensions Arkestra does not ship.
