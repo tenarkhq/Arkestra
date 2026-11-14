@@ -11,7 +11,9 @@
   "categories": [
     "AI"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onView:arkestra.machines"
+  ],
   "main": "./out/extension",
   "capabilities": {
     "virtualWorkspaces": false,
@@ -74,9 +76,80 @@
       {
         "command": "arkestra.connections.add",
         "title": "%add%",
-        "category": "Arkestra"
+        "category": "Arkestra",
+        "icon": "$(add)"
+      },
+      {
+        "command": "arkestra.connections.openTerminal",
+        "title": "%openTerminal%",
+        "category": "Arkestra",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "arkestra.connections.upload",
+        "title": "%upload%",
+        "category": "Arkestra",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "arkestra.connections.refreshMachines",
+        "title": "%refreshMachines%",
+        "category": "Arkestra",
+        "icon": "$(refresh)"
       }
-    ]
+    ],
+    "views": {
+      "arkestra": [
+        {
+          "id": "arkestra.machines",
+          "name": "%machines.view%",
+          "icon": "$(remote)"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "arkestra.machines",
+        "contents": "%machines.empty%"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "arkestra.connections.add",
+          "when": "view == arkestra.machines",
+          "group": "navigation@1"
+        },
+        {
+          "command": "arkestra.connections.refreshMachines",
+          "when": "view == arkestra.machines",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "arkestra.connections.openTerminal",
+          "when": "view == arkestra.machines && viewItem =~ /^(machine|folder)$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "arkestra.connections.upload",
+          "when": "view == arkestra.machines && viewItem =~ /^(machine|folder)$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "arkestra.connections.refreshMachines",
+          "when": "view == arkestra.machines && viewItem =~ /^(machine|folder)$/",
+          "group": "9_refresh"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "arkestra.connections.refreshMachines",
+          "when": "false"
+        }
+      ]
+    }
   },
   "scripts": {
     "compile": "gulp compile-extension:arkestra-connections",
