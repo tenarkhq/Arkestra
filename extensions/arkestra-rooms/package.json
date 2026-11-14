@@ -358,6 +358,21 @@
     "views": {
       "arkestra": [
         {
+          "id": "arkestra.pinned",
+          "name": "%pinned.view%",
+          "icon": "media/threads.svg"
+        },
+        {
+          "id": "arkestra.projects",
+          "name": "%projects.view%",
+          "icon": "media/threads.svg"
+        },
+        {
+          "id": "arkestra.boards",
+          "name": "%boards.view%",
+          "icon": "media/threads.svg"
+        },
+        {
           "id": "arkestra.threads",
           "name": "%threads.view%",
           "icon": "media/threads.svg"
@@ -385,6 +400,10 @@
         "contents": "%threads.empty%"
       },
       {
+        "view": "arkestra.pinned",
+        "contents": "%pinned.empty%"
+      },
+      {
         "view": "arkestra.changes",
         "contents": "%changes.empty%"
       },
@@ -397,7 +416,12 @@
       "view/title": [
         {
           "command": "arkestra.rooms.newThread",
-          "when": "view == arkestra.threads",
+          "when": "view == arkestra.threads || view == arkestra.projects",
+          "group": "navigation"
+        },
+        {
+          "command": "arkestra.github.openBoard",
+          "when": "view == arkestra.boards",
           "group": "navigation"
         },
         {
@@ -429,67 +453,67 @@
       "view/item/context": [
         {
           "command": "arkestra.rooms.archive",
-          "when": "view == arkestra.threads && viewItem =~ /^thread(\\.pinned)?$/",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem =~ /^thread(\\.pinned)?$/",
           "group": "inline@8"
         },
         {
           "command": "arkestra.rooms.unarchive",
-          "when": "view == arkestra.threads && viewItem == thread.archived",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem == thread.archived",
           "group": "inline@8"
         },
         {
           "command": "arkestra.rooms.delete",
-          "when": "view == arkestra.threads && viewItem =~ /^thread/",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem =~ /^thread/",
           "group": "inline@9"
         },
         {
           "command": "arkestra.rooms.archive",
-          "when": "view == arkestra.threads && viewItem =~ /^thread(\\.pinned)?$/",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem =~ /^thread(\\.pinned)?$/",
           "group": "8_archive@1"
         },
         {
           "command": "arkestra.rooms.unarchive",
-          "when": "view == arkestra.threads && viewItem == thread.archived",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem == thread.archived",
           "group": "8_archive@1"
         },
         {
           "command": "arkestra.rooms.delete",
-          "when": "view == arkestra.threads && viewItem =~ /^thread/",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem =~ /^thread/",
           "group": "8_archive@2"
         },
         {
           "command": "arkestra.rooms.pin",
-          "when": "view == arkestra.threads && viewItem == thread",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem == thread",
           "group": "inline"
         },
         {
           "command": "arkestra.rooms.unpin",
-          "when": "view == arkestra.threads && viewItem == thread.pinned",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem == thread.pinned",
           "group": "inline"
         },
         {
           "command": "arkestra.rooms.openThread",
-          "when": "view == arkestra.threads && viewItem =~ /^thread/",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem =~ /^thread/",
           "group": "1_open"
         },
         {
           "command": "arkestra.rooms.setCategory",
-          "when": "view == arkestra.threads && viewItem =~ /^thread/",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem =~ /^thread/",
           "group": "2_edit@1"
         },
         {
           "command": "arkestra.rooms.rename",
-          "when": "view == arkestra.threads && viewItem =~ /^thread/",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem =~ /^thread/",
           "group": "2_edit@2"
         },
         {
           "command": "arkestra.rooms.pin",
-          "when": "view == arkestra.threads && viewItem == thread",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem == thread",
           "group": "2_edit@3"
         },
         {
           "command": "arkestra.rooms.unpin",
-          "when": "view == arkestra.threads && viewItem == thread.pinned",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem == thread.pinned",
           "group": "2_edit@3"
         },
         {
@@ -514,17 +538,17 @@
         },
         {
           "command": "arkestra.rooms.chooseModel",
-          "when": "view == arkestra.threads && viewItem =~ /^thread/",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem =~ /^thread/",
           "group": "2_agents@1"
         },
         {
           "command": "arkestra.rooms.refreshSessions",
-          "when": "view == arkestra.threads && viewItem =~ /^(machines|sessionAgent)$/",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem =~ /^(machines|sessionAgent)$/",
           "group": "inline"
         },
         {
           "command": "arkestra.rooms.continueSession",
-          "when": "view == arkestra.threads && viewItem == session",
+          "when": "view =~ /^arkestra\\.(threads|projects|pinned)$/ && viewItem == session",
           "group": "1_open"
         }
       ],

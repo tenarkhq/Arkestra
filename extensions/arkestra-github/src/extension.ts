@@ -18,6 +18,14 @@ import { RemoteControl } from './remoteUi';
 const TOKEN = 'arkestra.github.relayToken';
 const SCOPES = ['repo', 'read:org', 'project'];
 
+export interface BoardEntry {
+	/** "owner/number" in lower case. */
+	readonly key: string;
+	readonly title: string;
+	readonly workspace: boolean;
+	readonly pinned: boolean;
+}
+
 export interface ArkestraGitHubApi {
 	readonly onEvent: vscode.Event<RelayEvent>;
 	readonly onState: vscode.Event<RelayState>;
@@ -28,6 +36,9 @@ export interface ArkestraGitHubApi {
 	/** The workspace's GitHub Project, as last read (with changes on their way applied). */
 	project(): ProjectSnapshot | undefined;
 	readonly onDidChangeProject: vscode.Event<ProjectSnapshot>;
+	/** The boards to list: the workspace's project first, then the pinned ones. */
+	boards(): readonly BoardEntry[];
+	readonly onDidChangeBoards: vscode.Event<void>;
 	syncStatus(): SyncStatus;
 	readonly onDidChangeSyncStatus: vscode.Event<SyncStatus>;
 	/** The sync journal, newest first: both directions. */
@@ -315,6 +326,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 			}
 			if (e.affectsConfiguration('arkestra.github.project')) {
 				void restartSync();
+				boardsChanged.fire();
 			}
 		}),
 		context.secrets.onDidChange(e => { if (e.key === TOKEN) { void restartRelay(); } }),
@@ -411,10 +423,24 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 	};
 	const PINS = 'arkestra.github.pinnedProjects';
 	const pins = () => context.globalState.get<string[]>(PINS) ?? [];
+	const boardsChanged = new vscode.EventEmitter<void>();
+	const boardList = (): BoardEntry[] => {
+		const own = workspaceRef();
+		const titleOf = (key: string) => {
+			const ref = parseProjectRef(key);
+			const snap = key === own ? sync?.snapshot : extra.get(key)?.sync.snapshot ?? (ref ? context.globalState.get<ProjectSnapshot>(cacheKey(ref.owner, ref.number)) : undefined);
+			return snap?.title ?? key;
+		};
+		return [
+			...(own ? [{ key: own, title: titleOf(own), workspace: true, pinned: pins().includes(own) }] : []),
+			...pins().filter(k => k !== own).map(k => ({ key: k, title: titleOf(k), workspace: false, pinned: true })),
+		];
+	};
 	const boards = new ProjectBoards({
 		acquire: ref => !ref || ref === workspaceRef() ? { source: workspaceSource, release: () => undefined } : otherProject(ref),
 		isPinned: ref => pins().includes(ref),
-		setPinned: async (ref, pinned) => { await context.globalState.update(PINS, pinned ? [...new Set([...pins(), ref])] : pins().filter(p => p !== ref)); },
+		isWorkspace: ref => ref.toLowerCase() === workspaceRef(),
+		setPinned: async (ref, pinned) => { await context.globalState.update(PINS, pinned ? [...new Set([...pins(), ref])] : pins().filter(p => p !== ref)); boardsChanged.fire(); },
 		pick: async () => {
 			type Pick = vscode.QuickPickItem & { ref?: string; workspace?: true; manual?: true };
 			const own = workspaceRef();
@@ -457,7 +483,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 		},
 	}, context.workspaceState);
 	context.subscriptions.push(
-		boardChanged, boards,
+		boardChanged, boards, boardsChanged,
+		projectChanged.event(() => boardsChanged.fire()),
 		projectChanged.event(() => boardChanged.fire()),
 		syncChanged.event(() => boardChanged.fire()),
 		journalAdded.event(() => boardChanged.fire()),
@@ -479,6 +506,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 		lastEventAt: () => lastEventAt,
 		project: () => sync?.snapshot,
 		onDidChangeProject: projectChanged.event,
+		boards: boardList,
+		onDidChangeBoards: boardsChanged.event,
 		syncStatus: () => syncStatus,
 		onDidChangeSyncStatus: syncChanged.event,
 		journal: () => sync?.journal ?? [],

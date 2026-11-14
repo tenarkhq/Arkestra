@@ -10,7 +10,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { RoomState } from './room';
-import { ARTIFACT_KINDS, extensionFor, roomArtifacts, type Artifact, type ArtifactVersion } from './artifacts';
+import { ARTIFACT_KINDS, extensionFor, filterArtifacts, roomArtifacts, type Artifact, type ArtifactVersion } from './artifacts';
 import { flowchartSvg, parseFlowchart } from './flowchart';
 
 const PINNED = 'arkestra.artifacts.pinned';
@@ -21,6 +21,11 @@ export class ArtifactGallery implements vscode.Disposable {
 	private panel: vscode.WebviewPanel | undefined;
 	private artifacts: Artifact[] = [];
 	private readonly disposables: vscode.Disposable[] = [];
+	private readonly pinsChanged = new vscode.EventEmitter<void>();
+	/** Fires when an artifact is pinned or unpinned (the left bar's Pinned list follows). */
+	readonly onDidChangePins = this.pinsChanged.event;
+	/** The artifact to select when the gallery shows next. */
+	private selectNext: string | undefined;
 
 	constructor(
 		private readonly context: vscode.ExtensionContext,
@@ -28,7 +33,9 @@ export class ArtifactGallery implements vscode.Disposable {
 		private readonly openThread: (roomId: string) => Promise<void>,
 	) {
 		this.disposables.push(
+			this.pinsChanged,
 			vscode.commands.registerCommand('arkestra.artifacts.open', () => this.show()),
+			vscode.commands.registerCommand('arkestra.artifacts.reveal', (key: unknown) => typeof key === 'string' ? this.reveal(key) : this.show()),
 			vscode.window.registerWebviewPanelSerializer('arkestra.artifacts', { deserializeWebviewPanel: async panel => this.adopt(panel) }),
 		);
 	}
@@ -42,6 +49,24 @@ export class ArtifactGallery implements vscode.Disposable {
 
 	private pinned(): Set<string> {
 		return new Set(this.context.globalState.get<string[]>(PINNED) ?? []);
+	}
+
+	/** The pinned artifacts, newest first. */
+	async pinnedArtifacts(): Promise<{ key: string; title: string; kind: string }[]> {
+		const pinned = this.pinned();
+		return filterArtifacts(await this.collect(), { query: '', kinds: [], agents: [] }, pinned, false)
+			.filter(a => pinned.has(a.key)).map(a => ({ key: a.key, title: a.title, kind: a.kind }));
+	}
+
+	/** Shows the gallery with one artifact selected. */
+	async reveal(key: string): Promise<void> {
+		this.selectNext = key;
+		if (this.panel) {
+			this.panel.reveal();
+			await this.render();
+		} else {
+			await this.show();
+		}
 	}
 
 	/** Rebuilds the list when the gallery is open (a thread changed). */
@@ -108,7 +133,9 @@ export class ArtifactGallery implements vscode.Disposable {
 				versions: await Promise.all(a.versions.map(async v => ({ n: v.n, at: v.at, language: v.language ?? '', content: v.content.slice(0, PREVIEW_LIMIT), src: a.kind === 'image' ? this.imageSrc(panel.webview, v) : undefined, svg: a.kind === 'diagram' ? diagramSvg(v.content) : undefined }))),
 			}))),
 			labels: this.labels(),
+			select: this.selectNext,
 		};
+		this.selectNext = undefined;
 		if (full || !panel.webview.html) {
 			panel.webview.html = galleryHtml(panel.webview.cspSource);
 		}
@@ -181,6 +208,7 @@ export class ArtifactGallery implements vscode.Disposable {
 					pinned.add(a.key);
 				}
 				await this.context.globalState.update(PINNED, [...pinned]);
+				this.pinsChanged.fire();
 				return this.render();
 			}
 			case 'copy':
@@ -323,7 +351,11 @@ function galleryHtml(cspSource: string): string {
 	document.addEventListener('change', e => { if (e.target.id === 'pf') { st.pinnedFirst = e.target.checked; save(); draw(); } });
 	window.addEventListener('message', e => {
 		const m = e.data;
-		if (m.type === 'data') { data = m.data; draw(); }
+		if (m.type === 'data') {
+			data = m.data;
+			if (data.select) { Object.assign(st, { sel: data.select, ver: undefined, query: '', project: '', kinds: [], agents: [] }); }
+			draw();
+		}
 		if (m.type === 'rendered') { rendered.set(m.key + '#' + m.n, m.html); drawDetail(); }
 	});
 </script></body></html>`;

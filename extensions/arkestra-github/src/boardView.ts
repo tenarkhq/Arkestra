@@ -48,6 +48,8 @@ export interface BoardHost {
 	/** Which board to open: undefined = cancelled, { ref: undefined } = the workspace's project. */
 	pick(): Promise<{ ref: string | undefined } | undefined>;
 	isPinned(ref: string): boolean;
+	/** Whether "owner/number" is the workspace's own project (its board follows the setting). */
+	isWorkspace(ref: string): boolean;
 	setPinned(ref: string, pinned: boolean): Promise<void>;
 }
 
@@ -87,6 +89,9 @@ export class ProjectBoards implements vscode.Disposable {
 
 	/** Opens the board of a project, or shows it when it is already open. */
 	open(ref: string | undefined): void {
+		if (ref && this.host.isWorkspace(ref)) {
+			ref = undefined;
+		}
 		const open = [...this.panels].find(p => p.ref === ref);
 		if (open) {
 			open.panel.reveal();
