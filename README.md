@@ -26,6 +26,10 @@ system language and can be switched with one click.
 1. **Any agent joins any thread, even mid-run.** For example, an OpenAI agent
    can be attached to a running Claude thread. It receives the thread so far
    and works in the same conversation. The running agent does not stop.
+   This holds for every thread, a plain one-to-one chat included, not only
+   template rooms. The invite list shows every agent that is ready now
+   (installed, signed in or keyed, quota left, its machine reachable), and
+   each one that is not, with the reason and the fix (install, sign in, retry).
 2. **2ARK room templates.** The room types defined in 2ARK (coding, audit,
    brief check) start from the IDE. The template brings the roles, the order
    and the output; you only choose the target (file, branch, PR, brief).
