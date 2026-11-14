@@ -1,0 +1,107 @@
+name: Build
+
+# AR02: Arkestra for macOS, Windows and Linux from one code base, on every
+# pull request that touches the build, on main, once a day and by hand.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * *"
+  push:
+    branches: [main]
+    paths-ignore: ["**/*.md"]
+  pull_request:
+    paths-ignore: ["**/*.md"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI_BUILD: "no"            # VSCodium's build.sh packs the app itself
+  SHOULD_BUILD: "yes"
+  SHOULD_BUILD_CLI: "no"    # the tunnel CLI is not part of Arkestra yet
+  SHOULD_BUILD_REH: "no"
+  SHOULD_BUILD_REH_WEB: "no"
+  ARKESTRA_SKIP_PREPARE: "yes"  # build.sh runs prepare_vscode.sh itself
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            runner: ubuntu-22.04
+            os_name: linux
+            vscode_arch: x64
+            out: VSCode-linux-x64
+          - name: macOS arm64
+            runner: macos-14
+            os_name: osx
+            vscode_arch: arm64
+            out: VSCode-darwin-arm64
+          - name: Windows x64
+            runner: windows-2022
+            os_name: windows
+            vscode_arch: x64
+            out: VSCode-win32-x64
+    defaults:
+      run:
+        shell: bash
+    env:
+      OS_NAME: ${{ matrix.os_name }}
+      VSCODE_ARCH: ${{ matrix.vscode_arch }}
+      npm_config_arch: ${{ matrix.vscode_arch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: vendor/vscodium/.nvmrc
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Linux build dependencies
+        if: matrix.os_name == 'linux'
+        run: sudo apt-get update -y && sudo apt-get install -y libkrb5-dev libx11-dev libxkbfile-dev libsecret-1-dev fakeroot rpm
+
+      - name: Work copy and VS Code source
+        run: scripts/prepare.sh "${GITHUB_WORKSPACE}/build/work"
+
+      - name: Build
+        working-directory: build/work
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./build.sh
+
+      - name: Check the build carries the Arkestra identity
+        working-directory: build/work
+        run: |
+          set -e
+          if [[ "${OS_NAME}" == "osx" ]]; then
+            P="${{ matrix.out }}/Arkestra.app/Contents/Resources/app/product.json"
+          else
+            P="${{ matrix.out }}/resources/app/product.json"
+          fi
+          jq -e '.nameShort == "Arkestra" and .applicationName == "arkestra" and .dataFolderName == ".arkestra" and (.updateUrl == null)' "$P"
+          ls "${{ matrix.out }}"
+
+      - name: Pack
+        working-directory: build/work
+        run: tar -czf "../arkestra-${OS_NAME}-${VSCODE_ARCH}.tar.gz" -C "${{ matrix.out }}" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arkestra-${{ matrix.os_name }}-${{ matrix.vscode_arch }}
+          path: build/arkestra-${{ matrix.os_name }}-${{ matrix.vscode_arch }}.tar.gz
+          retention-days: 7
