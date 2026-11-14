@@ -127,6 +127,52 @@
         "title": "%command.newTemplateRoom%",
         "category": "Arkestra",
         "icon": "$(rocket)"
+      },
+      {
+        "command": "arkestra.changes.keep",
+        "title": "%changes.keep%",
+        "category": "Arkestra",
+        "icon": "$(check)"
+      },
+      {
+        "command": "arkestra.changes.discard",
+        "title": "%changes.discard%",
+        "category": "Arkestra",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "arkestra.changes.keepAll",
+        "title": "%changes.keepAll%",
+        "category": "Arkestra",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "arkestra.changes.discardAll",
+        "title": "%changes.discardAll%",
+        "category": "Arkestra",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "arkestra.changes.open",
+        "title": "%changes.open%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.checkpoints.restore",
+        "title": "%checkpoints.restore%",
+        "category": "Arkestra",
+        "icon": "$(history)"
+      },
+      {
+        "command": "arkestra.checkpoints.show",
+        "title": "%checkpoints.show%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.checkpoints.refresh",
+        "title": "%checkpoints.refresh%",
+        "category": "Arkestra",
+        "icon": "$(refresh)"
       }
     ],
     "chatSessions": [
@@ -185,6 +231,16 @@
           "id": "arkestra.threads",
           "name": "%threads.view%",
           "icon": "media/threads.svg"
+        },
+        {
+          "id": "arkestra.changes",
+          "name": "%changes.view%",
+          "icon": "media/threads.svg"
+        },
+        {
+          "id": "arkestra.checkpoints",
+          "name": "%checkpoints.view%",
+          "icon": "media/threads.svg"
         }
       ]
     },
@@ -192,6 +248,14 @@
       {
         "view": "arkestra.threads",
         "contents": "%threads.empty%"
+      },
+      {
+        "view": "arkestra.changes",
+        "contents": "%changes.empty%"
+      },
+      {
+        "view": "arkestra.checkpoints",
+        "contents": "%checkpoints.empty%"
       }
     ],
     "menus": {
@@ -205,6 +269,21 @@
           "command": "arkestra.rooms.newTemplateRoom",
           "when": "view == arkestra.threads",
           "group": "navigation@2"
+        },
+        {
+          "command": "arkestra.changes.keepAll",
+          "when": "view == arkestra.changes",
+          "group": "navigation@1"
+        },
+        {
+          "command": "arkestra.changes.discardAll",
+          "when": "view == arkestra.changes",
+          "group": "navigation@2"
+        },
+        {
+          "command": "arkestra.checkpoints.refresh",
+          "when": "view == arkestra.checkpoints",
+          "group": "navigation"
         }
       ],
       "view/item/context": [
@@ -242,6 +321,26 @@
           "command": "arkestra.rooms.unpin",
           "when": "view == arkestra.threads && viewItem == thread.pinned",
           "group": "2_edit@3"
+        },
+        {
+          "command": "arkestra.changes.keep",
+          "when": "view == arkestra.changes && viewItem == change",
+          "group": "inline@1"
+        },
+        {
+          "command": "arkestra.changes.discard",
+          "when": "view == arkestra.changes && viewItem == change",
+          "group": "inline@2"
+        },
+        {
+          "command": "arkestra.checkpoints.restore",
+          "when": "view == arkestra.checkpoints && viewItem == checkpoint",
+          "group": "inline"
+        },
+        {
+          "command": "arkestra.checkpoints.show",
+          "when": "view == arkestra.checkpoints && viewItem == checkpoint",
+          "group": "1_show"
         }
       ],
       "commandPalette": [
@@ -267,6 +366,26 @@
         },
         {
           "command": "arkestra.rooms.showLane",
+          "when": "false"
+        },
+        {
+          "command": "arkestra.changes.keep",
+          "when": "false"
+        },
+        {
+          "command": "arkestra.changes.discard",
+          "when": "false"
+        },
+        {
+          "command": "arkestra.changes.open",
+          "when": "false"
+        },
+        {
+          "command": "arkestra.checkpoints.restore",
+          "when": "false"
+        },
+        {
+          "command": "arkestra.checkpoints.show",
           "when": "false"
         }
       ]

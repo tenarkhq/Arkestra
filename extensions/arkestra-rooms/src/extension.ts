@@ -13,6 +13,7 @@ import { RoomStore } from './store';
 import { laneAgent, laneEntries, type LaneEntry } from './lanes';
 import { copyFile, mkdir, stat } from 'node:fs/promises';
 import { templateForm } from './templateForm';
+import { ChangesUi } from './changesView';
 import { GitTemplateIO, createWorkTrees } from './templates/gitio';
 import { TemplateRun } from './templates/run';
 import type { Role } from './templates/signals';
@@ -31,6 +32,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	const store = new RoomStore(path.join(context.globalStorageUri.fsPath, 'rooms'));
 	// One Room object per room: a running round and a mid-run invite must share it.
 	const loaded = new Map<string, Room>();
+	/** The Changes and Checkpoints views; set once the views exist. */
+	let changesUi: ChangesUi | undefined;
 	/** Untitled native sessions (a new session before its first item exists) and their rooms. */
 	const untitledSessions = new Map<string, string>();
 	/** The room of the thread used last; the palette commands and the Agents tile follow it. */
@@ -40,6 +43,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 
 	const track = (room: Room): Room => {
 		loaded.set(room.id, room);
+		room.afterTurn = agent => changesUi?.take(room.id, vscode.l10n.t('After {0}', agent.name)) ?? Promise.resolve();
 		room.onDidChange(() => {
 			void store.save(room.state);
 			refreshThreadsLater();
@@ -149,6 +153,9 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 
 	const inviteButton = (stream: vscode.ChatResponseStream, room: Room) =>
 		stream.button({ command: 'arkestra.rooms.invite', arguments: [room.id], title: vscode.l10n.t('Invite an agent') });
+
+	changesUi = new ChangesUi(context.globalStorageUri.fsPath, async () => (await currentRoom())?.id);
+	context.subscriptions.push(changesUi, currentChanged.event(() => changesUi?.refresh()));
 
 	// ---- 2ARK template rooms (review, coding, audit) ----------------------------------------
 	const runs = new Map<string, TemplateRun>();
@@ -301,6 +308,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		const abort = new AbortController();
 		const cancel = token.onCancellationRequested(() => abort.abort());
 		activity.queue(room.id, room.roster);
+		await changesUi?.take(room.id, vscode.l10n.t('Before: {0}', titleFrom(request.prompt, vscode.l10n.t('Room'))));
 		try {
 			await room.say(request.prompt, (agent, event) => {
 				switch (event.kind) {

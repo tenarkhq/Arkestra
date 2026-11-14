@@ -51,6 +51,8 @@ const newId = () => `${Date.now().toString(36)}-${(counter++).toString(36)}`;
 
 export class Room {
 	private readonly listeners = new Set<() => void>();
+	/** Runs after every agent turn, before the next one starts (checkpoints). */
+	afterTurn?: (agent: Agent) => Promise<void>;
 
 	constructor(readonly state: RoomState, private readonly registry: AgentRegistry, private readonly now: () => Date = () => new Date()) { }
 
@@ -162,6 +164,7 @@ export class Room {
 		if (reply) {
 			this.append({ kind: 'agent', id: agent.id, name: agent.name }, reply);
 		}
+		await this.afterTurn?.(agent).catch(() => undefined);
 		return reply;
 	}
 

@@ -26,5 +26,17 @@
   "command.template": "New room from a 2ARK template (coding, code audit, brief check)",
   "command.continue": "Continue a template room (after its limit or a pause)",
   "command.approve": "Approve the slice plan",
-  "command.newTemplateRoom": "New room from a 2ARK template"
+  "command.newTemplateRoom": "New room from a 2ARK template",
+  "changes.view": "Changes",
+  "checkpoints.view": "Checkpoints",
+  "changes.empty": "No changes since the last accepted state. What agents change in the workspace shows up here to keep or discard.",
+  "checkpoints.empty": "No checkpoints yet. One is taken before every round and after every agent's turn when the workspace changed.",
+  "changes.keep": "Keep",
+  "changes.discard": "Discard",
+  "changes.keepAll": "Keep all",
+  "changes.discardAll": "Discard all",
+  "changes.open": "Open change",
+  "checkpoints.restore": "Restore this checkpoint",
+  "checkpoints.show": "Show what it changed",
+  "checkpoints.refresh": "Refresh"
 }
