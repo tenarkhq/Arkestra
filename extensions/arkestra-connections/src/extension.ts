@@ -127,6 +127,11 @@ export function activate(context: vscode.ExtensionContext): ArkestraConnectionsA
 		new MachinesView(machines, ssh, changed.event),
 		vscode.commands.registerCommand('arkestra.connections.show', show),
 		vscode.commands.registerCommand('arkestra.connections.add', add),
+		// Right click on a machine in the Machines view, or an id.
+		vscode.commands.registerCommand('arkestra.connections.remove', (node?: { machine?: Machine } | string) => {
+			const id = typeof node === 'string' ? node : node?.machine?.id;
+			return id ? remove(id) : undefined;
+		}),
 		// For sign-in flows: an interactive terminal running a command on a machine ('local' or an SSH machine).
 		vscode.commands.registerCommand('arkestra.connections.runInTerminal', (machineId: string, command: string, args: string[] = [], title?: string) => {
 			const machine = machines().find(m => m.id === machineId);

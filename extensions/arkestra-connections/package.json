@@ -80,6 +80,11 @@
         "icon": "$(add)"
       },
       {
+        "command": "arkestra.connections.remove",
+        "title": "%remove%",
+        "category": "Arkestra"
+      },
+      {
         "command": "arkestra.connections.openTerminal",
         "title": "%openTerminal%",
         "category": "Arkestra",
@@ -141,11 +146,20 @@
           "command": "arkestra.connections.refreshMachines",
           "when": "view == arkestra.machines && viewItem =~ /^(machine|folder)$/",
           "group": "9_refresh"
+        },
+        {
+          "command": "arkestra.connections.remove",
+          "when": "view == arkestra.machines && viewItem == machine",
+          "group": "z_remove"
         }
       ],
       "commandPalette": [
         {
           "command": "arkestra.connections.refreshMachines",
+          "when": "false"
+        },
+        {
+          "command": "arkestra.connections.remove",
           "when": "false"
         }
       ]
