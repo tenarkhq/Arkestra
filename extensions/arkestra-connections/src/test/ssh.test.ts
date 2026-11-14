@@ -123,3 +123,16 @@ test('machine list: broken entries skipped, ids unique, ssh config aliases read'
 	assert.equal(newMachineId('Építő gép', []), 'epito-gep');
 	assert.deepEqual(sshConfigHosts('Host *\nHost dev prod\n  HostName 10.0.0.1\nhost 2ark\nHost !x *.lan'), ['dev', 'prod', '2ark']);
 });
+
+test('a CLI installed per user (~/.local/bin) is found although a non-interactive SSH shell lacks it on PATH', async () => {
+	const { dir, ssh } = await setup();
+	const local = path.join(dir, 'home', '.local', 'bin');
+	await mkdir(local, { recursive: true });
+	await writeFile(path.join(local, 'gemini'), '#!/bin/sh\necho "user-installed gemini"\n');
+	await chmod(path.join(local, 'gemini'), 0o755);
+	const { code, out } = await run(remoteSpawn({ id: 'dev', name: 'dev', host: 'dev' }, { ssh })('gemini', [], { env: {}, stdio: ['ignore', 'pipe', 'pipe'] }));
+	assert.equal(code, 0);
+	assert.ok(out.includes('user-installed gemini'), out);
+	const found = await probe({ id: 'dev', name: 'dev', host: 'dev' }, { ssh });
+	assert.ok(found.clis.includes('gemini'), JSON.stringify(found));
+});

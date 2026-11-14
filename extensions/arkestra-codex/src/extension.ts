@@ -107,6 +107,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				apiKeyHome: { value: '~/.arkestra/codex-home' },
 				identity: { value: { id: `codex@${machine.id}`, name: `Codex · ${machine.name}`, where: machine.name } },
 				permissions: { value: permissionsFor(machine.id, `Codex · ${machine.name}`) },
+				// The machine's own Codex login, unless an API key is asked for outright.
+				auth: { value: async () => config().get<string>('auth') === 'apiKey' ? { mode: 'apiKey', key: await context.secrets.get(KEY) } : { mode: 'subscription' } },
 			});
 			const remoteAgent = new CodexAgent(options);
 			return [api.registerAgent(withActions(remoteAgent, actions(machine.id))), { dispose: () => remoteAgent.dispose() }];
