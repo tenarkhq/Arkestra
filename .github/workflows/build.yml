@@ -1,0 +1,75 @@
+name: Build
+
+# AR02, pre-alpha: one macOS build (Apple Silicon) for trying Arkestra out.
+# Unminified dev build to keep the run short; Linux and Windows builds and
+# the minified release build come with the release (AR33).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore: ["**/*.md"]
+  pull_request:
+    paths-ignore: ["**/*.md"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    name: macOS arm64
+    runs-on: macos-14
+    timeout-minutes: 120
+    env:
+      CI_BUILD: "no"
+      OS_NAME: osx
+      VSCODE_ARCH: arm64
+      npm_config_arch: arm64
+      ARKESTRA_SKIP_PREPARE: "yes"
+      MAX_OLD_SPACE_SIZE: "8192"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: vendor/vscodium/.nvmrc
+
+      - name: Work copy and VS Code source
+        run: scripts/prepare.sh "${GITHUB_WORKSPACE}/build/work"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-osx-arm64-${{ hashFiles('build/work/vscode/package-lock.json') }}
+          restore-keys: npm-osx-arm64-
+
+      - name: Patch and install
+        working-directory: build/work
+        run: . ./prepare_vscode.sh
+
+      - name: Compile and package (dev build)
+        working-directory: build/work/vscode
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: npm run gulp vscode-darwin-arm64
+
+      - name: Check the app carries the Arkestra identity
+        working-directory: build/work
+        run: |
+          jq -e '.nameShort == "Arkestra" and .applicationName == "arkestra" and .dataFolderName == ".arkestra" and (.updateUrl == null)' \
+            VSCode-darwin-arm64/Arkestra.app/Contents/Resources/app/product.json
+
+      - name: Pack
+        working-directory: build/work/VSCode-darwin-arm64
+        run: ditto -c -k --keepParent Arkestra.app "${GITHUB_WORKSPACE}/build/Arkestra-macos-arm64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Arkestra-macos-arm64
+          path: build/Arkestra-macos-arm64.zip
+          retention-days: 7
