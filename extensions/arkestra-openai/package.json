@@ -1,0 +1,74 @@
+{
+  "name": "arkestra-openai",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "0.1.0",
+  "publisher": "vscode",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "AI"
+  ],
+  "extensionDependencies": [
+    "vscode.arkestra-rooms"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension",
+  "capabilities": {
+    "virtualWorkspaces": false,
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Arkestra · OpenAI",
+      "properties": {
+        "arkestra.openai.model": {
+          "type": "string",
+          "default": "gpt-6-astra",
+          "description": "%model%"
+        },
+        "arkestra.openai.baseUrl": {
+          "type": "string",
+          "default": "https://api.openai.com/v1",
+          "description": "%baseUrl%"
+        },
+        "arkestra.openai.reasoningEffort": {
+          "type": "string",
+          "enum": [
+            "default",
+            "low",
+            "medium",
+            "high"
+          ],
+          "default": "default",
+          "description": "%reasoningEffort%"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "arkestra.openai.setApiKey",
+        "title": "%setApiKey%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.openai.clearApiKey",
+        "title": "%clearApiKey%",
+        "category": "Arkestra"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "gulp compile-extension:arkestra-openai",
+    "watch": "gulp watch-extension:arkestra-openai"
+  },
+  "devDependencies": {
+    "@types/node": "24.x"
+  }
+}
