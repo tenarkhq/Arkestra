@@ -55,8 +55,34 @@ for EXT in ../arkestra-extensions/*/; do
     grep -q "'extensions/${NAME}'," build/npm/dirs.ts || \
       sed -i "s#^\(\s*\)'extensions/merge-conflict',#&\n\1'extensions/${NAME}',#" build/npm/dirs.ts
     grep -q "'extensions/${NAME}'," build/npm/dirs.ts
+    # VSCodium's npm ci ran before this step, so the extension installs its own.
+    (cd "extensions/${NAME}" && npm ci --no-audit --no-fund)
   fi
 done
+
+# The built-in Copilot extension stays (VS Code's Agent Host, see skip-patches.txt).
+# Microsoft's own build downloads it as a ready VSIX; the desktop build here compiles
+# it from source, as VS Code's server build already does (gulpfile.reh.ts).
+# Both the desktop prepack (what build.sh runs) and core-ci get it.
+if ! perl -ne '$f=1 if /^\t\t\tcompileCopilotExtensionBuildTask,$/; END { exit !$f }' build/gulpfile.vscode.ts; then
+  perl -0pi -e 's/(\n(\t+)compileNonNativeExtensionsBuildTask,\n)(\t+compileExtensionMediaBuildTask,)/$1$2compileCopilotExtensionBuildTask,\n$3/g' build/gulpfile.vscode.ts
+fi
+perl -ne '$f=1 if /^\t\t\tcompileCopilotExtensionBuildTask,$/; END { exit !$f }' build/gulpfile.vscode.ts
+
+# build/.moduleignore strips @github/copilot from every node_modules, which is right for
+# the app's own modules but takes the Copilot CLI SDK out of the extension. Its packaging
+# adds the package back (the packing step then prunes the other platforms' binaries).
+if ! grep -q "extensions/copilot/node_modules/@github/copilot/\*\*" build/lib/extensions.ts; then
+  perl -0pi -e 's/(export function packageCopilotExtensionStream\(\)[\s\S]*?return es\.merge\(\n(\t+)localExtensionsStream,\n)/$1$2gulp.src(["extensions\/copilot\/node_modules\/\@github\/copilot\/**", "!extensions\/copilot\/node_modules\/\@github\/copilot\/**\/{test,tests}\/**"], { base: ".", dot: true, allowEmpty: true }),\n/' build/lib/extensions.ts
+fi
+grep -q "extensions/copilot/node_modules/@github/copilot/\*\*" build/lib/extensions.ts
+
+# The Copilot CLI ships native modules for every platform (e.g. its clipboard module);
+# the Windows version stamping (rcedit) can only open Windows binaries.
+if ! grep -q "Arkestra: other platforms" build/gulpfile.vscode.ts; then
+  perl -0pi -e "s#glob\('\*\*/\*\.node', \{ cwd, ignore: 'extensions/node_modules/\@parcel/watcher/\*\*' \}\)#glob('**/*.node', { cwd, ignore: ['extensions/node_modules/\@parcel/watcher/**', '**/*.{darwin,linux,linuxmusl}-*.node', '**/{darwin,linux,linuxmusl}-*/**/*.node'] /* Arkestra: other platforms */ })#" build/gulpfile.vscode.ts
+fi
+grep -q "Arkestra: other platforms" build/gulpfile.vscode.ts
 
 # AR03 · Removed: built-in extensions Arkestra does not ship.
 #   microsoft-authentication, tunnel-forwarding: Microsoft sign-in and relay.
