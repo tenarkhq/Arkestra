@@ -55,6 +55,8 @@ for EXT in ../arkestra-extensions/*/; do
     grep -q "'extensions/${NAME}'," build/npm/dirs.ts || \
       sed -i "s#^\(\s*\)'extensions/merge-conflict',#&\n\1'extensions/${NAME}',#" build/npm/dirs.ts
     grep -q "'extensions/${NAME}'," build/npm/dirs.ts
+    # VSCodium's npm ci ran before this step, so the extension installs its own.
+    (cd "extensions/${NAME}" && npm ci --no-audit --no-fund)
   fi
 done
 
