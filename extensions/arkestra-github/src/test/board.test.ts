@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { boardModel, roomFor, toCard, type RoomInfo } from '../board';
-import { boardHtml } from '../boardHtml';
+import { boardHtml, fontFaces } from '../boardHtml';
 import type { ProjectItem, ProjectSnapshot } from '../project';
 
 const item = (id: string, n: number, over: Partial<ProjectItem> = {}): ProjectItem => ({
@@ -86,4 +86,15 @@ test('the page: script and style only with the nonce', () => {
 	assert.doesNotMatch(html, /unsafe-inline|unsafe-eval/);
 	assert.equal((html.match(/<script nonce="NONCE">/g) ?? []).length, 1);
 	assert.doesNotMatch(html, /innerHTML/);
+});
+
+test('the page: the bundled Inter with a font source only when the font folder is given', () => {
+	const plain = boardHtml('NONCE', 'https://res.test');
+	assert.doesNotMatch(plain, /font-src|@font-face/);
+	assert.match(plain, /font: 400 13px\/1\.4 "Inter", -apple-system/);
+	const html = boardHtml('NONCE', 'https://res.test', {}, 'https://res.test/media/fonts/');
+	assert.match(html, /style-src https:\/\/res\.test 'nonce-NONCE'; font-src https:\/\/res\.test; script-src 'nonce-NONCE';/);
+	assert.ok(html.includes('url("https://res.test/media/fonts/inter-latin-wght-normal.woff2") format("woff2")'));
+	assert.ok(html.includes('inter-latin-ext-wght-normal.woff2'));
+	assert.equal(fontFaces('a"b'), fontFaces('a%22b'), 'a quote cannot end the url');
 });

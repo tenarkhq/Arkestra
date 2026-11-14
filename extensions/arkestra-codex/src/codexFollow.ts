@@ -4,9 +4,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { promises as fs } from 'node:fs';
+import { homedir } from 'node:os';
 import * as path from 'node:path';
 import { EntryAssembler, LineSplitter, type Piece } from './follow';
 import type { SessionEntry, SessionHistory } from './rooms';
+import { dataUrlImage, folderStore, withImages, type ImageStore, type SessionImage } from './sessionImages';
 
 const THREAD_ID = /^[0-9A-Za-z][0-9A-Za-z_-]{1,79}$/;
 
@@ -16,8 +18,44 @@ const THREAD_ID = /^[0-9A-Za-z][0-9A-Za-z_-]{1,79}$/;
  */
 const CODEX_PREAMBLE = /^(<environment_context>|<user_instructions>|<INSTRUCTIONS>|# AGENTS\.md instructions for )/;
 
+/** Where the pictures of Codex sessions are kept on this machine (beside its own sessions). */
+let imageStore: ImageStore = folderStore(path.join(process.env.CODEX_HOME || path.join(homedir(), '.codex'), 'arkestra-images'));
+
+/** Another store (tests). */
+export function setImageStore(store: ImageStore): void {
+	imageStore = store;
+}
+
 function textOf(content: unknown): string {
 	return (Array.isArray(content) ? content : []).map((c: any) => typeof c?.text === 'string' ? c.text : '').join('\n').trim();
+}
+
+/** A picture as Codex names it: a data: URL, a web address or a file on its machine. */
+function codexImage(value: unknown): SessionImage | undefined {
+	if (typeof value !== 'string' || !value.trim()) {
+		return undefined;
+	}
+	const v = value.trim();
+	return /^data:/i.test(v) ? dataUrlImage(v) : /^https:\/\//i.test(v) ? { url: v } : /^(\/|~\/|[A-Za-z]:[\\/])/.test(v) ? { path: v.startsWith('~/') ? path.join(homedir(), v.slice(2)) : v } : undefined;
+}
+
+/**
+ * The pictures in a user message's content: rollout items (`image` / `input_image` with a URL,
+ * `local_image` with a path) and the app server's (`image` with `url`, `localImage` with `path`).
+ */
+export function codexImages(content: unknown): SessionImage[] {
+	return (Array.isArray(content) ? content : []).flatMap((c: any): SessionImage[] => {
+		const type = typeof c?.type === 'string' ? c.type : '';
+		const image = /^(image|input_image)$/.test(type) ? codexImage(c.image_url ?? c.url ?? c.imageUrl)
+			: /^(local_image|localImage)$/.test(type) ? codexImage(c.path)
+				: undefined;
+		return image ? [image] : [];
+	});
+}
+
+/** A user message's text with its pictures under it as markdown images (kept once on this machine). */
+export function codexUserText(text: string, images: readonly SessionImage[]): string {
+	return withImages(text, images, imageStore);
 }
 
 /**
@@ -40,12 +78,24 @@ export function codexPiece(line: string): Piece {
 	if (p.type === 'item_completed') {
 		const item = p.item;
 		const kind = item?.type === 'UserMessage' ? 'user' : item?.type === 'AgentMessage' ? 'agent' : undefined;
-		const text = kind ? textOf(item.content) : '';
-		return kind && text && !(kind === 'user' && CODEX_PREAMBLE.test(text)) ? { kind, text, ...(typeof item.id === 'string' ? { id: item.id } : {}), ...at } : undefined;
+		const raw = kind ? textOf(item.content) : '';
+		if (kind === 'user' && CODEX_PREAMBLE.test(raw)) {
+			return undefined;
+		}
+		const text = kind === 'user' ? codexUserText(raw, codexImages(item.content)) : raw;
+		return kind && text ? { kind, text, ...(typeof item.id === 'string' ? { id: item.id } : {}), ...at } : undefined;
 	}
-	if ((p.type === 'user_message' || p.type === 'agent_message') && typeof p.message === 'string' && p.message.trim()) {
-		const kind = p.type === 'user_message' ? 'user' : 'agent';
-		return kind === 'user' && CODEX_PREAMBLE.test(p.message.trim()) ? undefined : { kind, text: p.message.trim(), ...at };
+	if (p.type === 'user_message') {
+		const raw = typeof p.message === 'string' ? p.message.trim() : '';
+		if (CODEX_PREAMBLE.test(raw)) {
+			return undefined;
+		}
+		const images = [...(Array.isArray(p.images) ? p.images : []), ...(Array.isArray(p.local_images) ? p.local_images : [])].map(codexImage).filter((i): i is SessionImage => !!i);
+		const text = codexUserText(raw, images);
+		return text ? { kind: 'user', text, ...at } : undefined;
+	}
+	if (p.type === 'agent_message' && typeof p.message === 'string' && p.message.trim()) {
+		return { kind: 'agent', text: p.message.trim(), ...at };
 	}
 	return undefined;
 }

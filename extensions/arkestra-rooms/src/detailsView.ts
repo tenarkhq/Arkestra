@@ -15,6 +15,7 @@ import type { Room } from './room';
 import { ICONS, detailsPage, escapeHtml } from './threadHtml';
 import { detailsModel, folderLabel, machineOf } from './threadModel';
 import { tone } from './usage';
+import { FONT_ROOT, pageFonts } from './webviewFonts';
 import { TURN_TEXT } from './work';
 
 export const DETAILS_VIEW_ID = 'arkestra.details';
@@ -54,8 +55,8 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 
 	resolveWebviewView(view: vscode.WebviewView): void {
 		this.view = view;
-		view.webview.options = { enableScripts: true, localResourceRoots: [] };
-		view.webview.html = detailsPage(randomBytes(16).toString('base64'));
+		view.webview.options = { enableScripts: true, localResourceRoots: [FONT_ROOT] };
+		view.webview.html = detailsPage(randomBytes(16).toString('base64'), pageFonts(view.webview));
 		view.webview.onDidReceiveMessage(async (message: { type?: string; index?: unknown }) => {
 			if (message.type === 'ready') {
 				this.schedule(0);

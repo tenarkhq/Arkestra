@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import type { Agent, AgentChoices, AgentEvent, ExistingSession, Message, PermissionRequest, Readiness, SessionEntry, SessionHistory, TurnInput, Usage, WorkUpdate } from './rooms';
 import { RpcClient, type Notification } from './rpc';
 import { followLocal, followRemote } from './follow';
-import { RolloutHistory, checkThreadId, codexPiece, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript } from './codexFollow';
+import { RolloutHistory, checkThreadId, codexImages, codexPiece, codexUserText, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript } from './codexFollow';
 
 export type CodexAuth = { readonly mode: 'subscription' } | { readonly mode: 'apiKey'; readonly key: string | undefined };
 
@@ -93,7 +93,8 @@ export function codexHistory(thread: unknown, limit = 300): SessionEntry[] {
 			// The item ids are the rollout's own: the live follow (AR39) knows the same entries by them.
 			const id = typeof item?.id === 'string' ? { id: item.id } : {};
 			if (item?.type === 'userMessage') {
-				const text = (Array.isArray(item.content) ? item.content : []).filter((c: any) => c?.type === 'text' && typeof c.text === 'string').map((c: any) => c.text).join('\n').trim();
+				const words = (Array.isArray(item.content) ? item.content : []).filter((c: any) => c?.type === 'text' && typeof c.text === 'string').map((c: any) => c.text).join('\n').trim();
+				const text = codexUserText(words, codexImages(item.content));
 				if (text) {
 					entries.push({ role: 'user', text, ...id });
 				}

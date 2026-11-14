@@ -8,7 +8,7 @@
 import * as vscode from 'vscode';
 import { execFile } from 'node:child_process';
 import type { RoomState } from './room';
-import { LIMITS, cap, completionKinds, fileTarget, htmlToText, parseReferences, stripAnsi, withAttachments, withoutAttachments, type Attachment, type Reference } from './references';
+import { LIMITS, cap, completionKinds, fileTarget, htmlToText, imageAttachment, parseReferences, stripAnsi, withAttachments, withoutAttachments, type Attachment, type Reference } from './references';
 
 interface Command {
 	readonly line: string;
@@ -128,6 +128,10 @@ export class References implements vscode.Disposable {
 			const entries = await vscode.workspace.fs.readDirectory(uri);
 			const list = entries.sort((a, b) => a[0].localeCompare(b[0])).map(([name, type]) => `${name}${type & vscode.FileType.Directory ? '/' : ''}`).join('\n');
 			return { label: `${ref.token} (mappa)`, text: list };
+		}
+		const picture = imageAttachment(ref.token, uri.scheme === 'file' ? uri.fsPath : uri.toString());
+		if (picture) {
+			return picture;
 		}
 		const doc = await vscode.workspace.openTextDocument(uri);
 		const text = target.from

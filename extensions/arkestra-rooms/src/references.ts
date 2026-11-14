@@ -68,6 +68,16 @@ export function fileTarget(arg: string): { path: string; from?: number; to?: num
 	return { path: m[1], from: Math.min(from, to), to: Math.max(from, to) };
 }
 
+const PICTURE = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
+
+/**
+ * A picture named with @file: (pasted into the composer, say) is not text to attach: the agent
+ * gets where it is and opens it with its own tool. Undefined: not a picture.
+ */
+export function imageAttachment(token: string, file: string): Attachment | undefined {
+	return PICTURE.test(file) ? { label: `${token} (kép)`, text: `Képfájl: ${file}\nNyisd meg a saját fájlolvasó eszközöddel (Claude Code: Read, Codex: view_image).` } : undefined;
+}
+
 /** Cuts a text to `limit` characters at a line end, saying so. */
 export function cap(text: string, limit: number): { text: string; truncated: boolean } {
 	if (text.length <= limit) {

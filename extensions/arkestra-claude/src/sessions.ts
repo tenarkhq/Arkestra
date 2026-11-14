@@ -5,9 +5,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { promises as fs } from 'node:fs';
+import { homedir } from 'node:os';
 import * as path from 'node:path';
 import type { ExistingSession, SessionEntry } from './rooms';
 import { assemble, type Piece } from './follow';
+import { folderStore, withImages, type ImageStore, type SessionImage } from './sessionImages';
 
 const MARK = '\u001eFILE ';
 /** How many sessions a machine lists, newest first. */
@@ -189,7 +191,32 @@ export function taskNotice(text: string): string | undefined {
 	return summaries.join(' · ') || 'Background task finished';
 }
 
-/** One line of a session file as the thread sees it: what the user wrote, Claude's text, a task report. */
+/** Where the pictures of Claude Code sessions are kept on this machine (beside its own sessions). */
+let imageStore: ImageStore = folderStore(path.join(homedir(), '.claude', 'arkestra-images'));
+
+/** Another store (tests). */
+export function setImageStore(store: ImageStore): void {
+	imageStore = store;
+}
+
+/** The pictures of a user message: image blocks with base64 bytes or a web address. */
+export function claudeImages(content: unknown): SessionImage[] {
+	if (!Array.isArray(content)) {
+		return [];
+	}
+	return content.flatMap((b: any): SessionImage[] => {
+		const source = b?.type === 'image' ? b.source : undefined;
+		if (source?.type === 'base64' && typeof source.data === 'string' && typeof source.media_type === 'string') {
+			return [{ data: source.data, mime: source.media_type }];
+		}
+		if (source?.type === 'url' && typeof source.url === 'string') {
+			return [{ url: source.url }];
+		}
+		return [];
+	});
+}
+
+/** One line of a session file as the thread sees it: what the user wrote (with its pictures), Claude's text, a task report. */
 export function claudePiece(line: string): Piece {
 	let data: any;
 	try {
@@ -210,6 +237,11 @@ export function claudePiece(line: string): Piece {
 			return { kind: 'notice', text: notice, ...base };
 		}
 		const text = userText(content);
+		const images = Array.isArray(content) && !content.some((b: any) => b?.type === 'tool_result') ? claudeImages(content) : [];
+		if (images.length && (text || !raw.trim())) {
+			// Claude Code's own placeholders ([Image #1]) give way to the pictures.
+			return { kind: 'user', text: withImages((text ?? '').replace(/\[Image #\d+\]/g, '').replace(/[ \t]{2,}/g, ' ').trim(), images, imageStore), ...base };
+		}
 		return text ? { kind: 'user', text, ...base } : undefined;
 	}
 	if (data.type === 'assistant' && Array.isArray(data.message?.content)) {
