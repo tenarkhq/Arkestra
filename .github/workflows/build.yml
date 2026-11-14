@@ -1,4 +1,4 @@
-# AR02 · Arkestra builds for macOS (arm64, x64), Windows (x64) and Linux (x64): every
+# AR02 · Arkestra builds for macOS (arm64), Windows (x64) and Linux (x64): every
 # night from main, by hand from any branch, and on pull requests that touch the build.
 # Each job prepares the VS Code source with scripts/prepare.sh, builds and packs it with
 # VSCodium's build.sh, and keeps the packed app as a workflow artifact. Installers,
@@ -34,7 +34,6 @@ jobs:
         include:
           - { runner: ubuntu-22.04, os_name: linux, arch: x64, platform: linux }
           - { runner: macos-15, os_name: osx, arch: arm64, platform: darwin }
-          - { runner: macos-15-intel, os_name: osx, arch: x64, platform: darwin }
           - { runner: windows-2022, os_name: windows, arch: x64, platform: win32 }
     defaults:
       run:
