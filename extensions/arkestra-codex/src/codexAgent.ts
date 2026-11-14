@@ -8,10 +8,10 @@ import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:c
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
-import type { Agent, AgentChoices, AgentEvent, ExistingSession, Message, PermissionRequest, Readiness, SessionEntry, TurnInput, Usage, WorkUpdate } from './rooms';
+import type { Agent, AgentChoices, AgentEvent, ExistingSession, Message, PermissionRequest, Readiness, SessionEntry, SessionHistory, TurnInput, Usage, WorkUpdate } from './rooms';
 import { RpcClient, type Notification } from './rpc';
 import { followLocal, followRemote } from './follow';
-import { checkThreadId, codexPiece, localRollout, locateRolloutScript } from './codexFollow';
+import { RolloutHistory, checkThreadId, codexPiece, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript } from './codexFollow';
 
 export type CodexAuth = { readonly mode: 'subscription' } | { readonly mode: 'apiKey'; readonly key: string | undefined };
 
@@ -280,11 +280,65 @@ export class CodexAgent implements Agent {
 		return codexSessions(await client.request('thread/list', { limit: 60 }));
 	}
 
-	async sessionHistory(sessionId: string): Promise<readonly SessionEntry[]> {
-		const client = await this.ensureServer(await this.options.auth());
-		const read = await client.request<{ thread: unknown }>('thread/read', { threadId: sessionId, includeTurns: true })
-			.catch(() => client.request<{ thread: unknown }>('thread/resume', { threadId: sessionId })); // an older Codex
-		return codexHistory(read?.thread);
+	/**
+	 * A thread's messages from its rollout file, read as the live follow reads it (same ids, the
+	 * room's own turns left out), with the cursor the follow goes on from. The server's own
+	 * thread/read only when there is no file to read: Codex 0.163 gives no turns there.
+	 */
+	async sessionHistory(sessionId: string): Promise<SessionHistory> {
+		checkThreadId(sessionId);
+		const fromFile = await this.readRollout(sessionId, await this.rolloutPath(sessionId)).catch(() => undefined);
+		if (fromFile?.entries.length) {
+			return fromFile;
+		}
+		try {
+			const client = await this.ensureServer(await this.options.auth());
+			const read = await client.request<{ thread: unknown }>('thread/read', { threadId: sessionId, includeTurns: true })
+				.catch(() => client.request<{ thread: unknown }>('thread/resume', { threadId: sessionId })); // an older Codex
+			const entries = codexHistory(read?.thread);
+			if (entries.length || !fromFile) {
+				return { entries };
+			}
+		} catch (error) {
+			if (!fromFile) {
+				throw error;
+			}
+		}
+		return fromFile; // a thread with nothing said yet: the follow starts after what is there
+	}
+
+	/** The Codex homes on this machine: the user's own, and the API-key one. */
+	private localHomes(): string[] {
+		return [process.env.CODEX_HOME || path.join(homedir(), '.codex'), this.options.apiKeyHome];
+	}
+
+	/** The thread's rollout file read whole, here or on the SSH machine; undefined: no such file. */
+	private async readRollout(threadId: string, known: string | undefined): Promise<Required<SessionHistory> | undefined> {
+		if (!this.options.spawn) {
+			const file = known ?? await localRollout(this.localHomes(), threadId);
+			return file ? readLocalRollout(file) : undefined;
+		}
+		const spawn = this.options.spawn;
+		return new Promise((resolve, reject) => {
+			const child = spawn('sh', ['-c', readRolloutScript(locateRolloutScript(threadId, known, ['~/.codex', this.options.apiKeyHome]))], { stdio: ['ignore', 'pipe', 'pipe'] });
+			const history = new RolloutHistory();
+			let err = '';
+			const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('timeout')); }, 180_000);
+			child.stdout?.on('data', (chunk: Buffer) => history.push(chunk));
+			child.stderr?.setEncoding('utf8');
+			child.stderr?.on('data', (c: string) => { err = (err + c).slice(-2000); });
+			child.on('error', e => { clearTimeout(timer); reject(e); });
+			child.on('close', code => {
+				clearTimeout(timer);
+				if (code === 0) {
+					resolve(history.result());
+				} else if (code === 3) {
+					resolve(undefined);
+				} else {
+					reject(new Error(err.trim().split('\n').at(-1) || `could not read the rollout file (exit ${code})`));
+				}
+			});
+		});
 	}
 
 	adoptSession(roomId: string, session: { readonly id: string; readonly cwd?: string }, seen: readonly string[]): void {
@@ -303,8 +357,7 @@ export class CodexAgent implements Agent {
 		const options = { classify: codexPiece, onEntries, ...(cursor !== undefined ? { cursor } : {}) };
 		let known: Promise<string | undefined> | undefined;
 		if (!this.options.spawn) {
-			const homes = [process.env.CODEX_HOME || path.join(homedir(), '.codex'), this.options.apiKeyHome];
-			return followLocal(async () => await (known ??= this.rolloutPath(sessionId)) ?? localRollout(homes, sessionId), options);
+			return followLocal(async () => await (known ??= this.rolloutPath(sessionId)) ?? localRollout(this.localHomes(), sessionId), options);
 		}
 		const spawn = this.options.spawn;
 		let inner: { dispose(): void } | undefined;

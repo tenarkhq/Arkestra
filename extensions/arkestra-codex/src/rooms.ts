@@ -79,8 +79,11 @@ export interface Agent {
 	choices?(): Promise<AgentChoices>;
 	/** The sessions its CLI already has on its machine (AR39); an agent without it has none to offer. */
 	existingSessions?(): Promise<readonly ExistingSession[]>;
-	/** The messages of one of those sessions. */
-	sessionHistory?(sessionId: string): Promise<readonly SessionEntry[]>;
+	/**
+	 * The messages of one of those sessions. With a cursor (the one `watchSession` takes), the
+	 * live follow goes on exactly after what was read, so nothing written in between is lost.
+	 */
+	sessionHistory?(sessionId: string): Promise<readonly SessionEntry[] | SessionHistory>;
 	/**
 	 * Binds the room to an existing session: the next turn continues it (in its folder) and sends
 	 * only the messages not in `seen`. Does nothing while the room already has a session here.
@@ -102,6 +105,12 @@ export interface ExistingSession {
 	readonly cwd?: string;
 	/** ISO time of its last activity. */
 	readonly updatedAt: string;
+}
+
+/** A session's messages as read, and where the live follow goes on from. */
+export interface SessionHistory {
+	readonly entries: readonly SessionEntry[];
+	readonly cursor?: string;
 }
 
 /** One message of an existing session, as the thread shows it. */

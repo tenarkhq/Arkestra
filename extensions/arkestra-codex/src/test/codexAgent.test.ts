@@ -4,7 +4,8 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { spawn as nodeSpawn } from 'node:child_process';
+import { appendFile, chmod, copyFile, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { CodexAgent, ROOM_PREAMBLE, codexHistory, codexSessions, codexLimits, codexModels, codexPlan, codexUsage, codexWork, describeItem, modelOverride, type CodexAuth } from '../codexAgent';
@@ -78,13 +79,14 @@ const msg = (kind: 'user' | 'agent' | 'system', id: string, text: string): Messa
 
 const never = () => new AbortController().signal;
 
-async function setup(auth: CodexAuth = { mode: 'subscription' }) {
+async function setup(auth: CodexAuth = { mode: 'subscription' }, remote = false) {
 	const dir = await mkdtemp(path.join(tmpdir(), 'arkestra-codex-'));
 	const cli = path.join(dir, 'codex');
 	await writeFile(cli, FAKE);
 	await chmod(cli, 0o755);
 	process.env.FAKE_LOG = path.join(dir, 'log');
-	const agent = new CodexAgent({ command: cli, sandbox: 'workspace-write', cwd: () => dir, auth: async () => auth, apiKeyHome: path.join(dir, 'key-home') });
+	// `remote`: through a spawn, as on an SSH machine (here the spawn runs on this machine).
+	const agent = new CodexAgent({ command: cli, sandbox: 'workspace-write', cwd: () => dir, auth: async () => auth, apiKeyHome: path.join(dir, 'key-home'), ...(remote ? { spawn: nodeSpawn } : {}) });
 	const log = async () => (await readFile(process.env.FAKE_LOG!, 'utf8')).trim().split('\n').map(l => JSON.parse(l));
 	const requests = async (method: string) => (await log()).filter(m => m.method === method);
 	return { agent, dir, log, requests };
@@ -335,4 +337,64 @@ test('following a thread here: the rollout file its server names, appended items
 		agent.dispose();
 	}
 	assert.throws(() => agent.watchSession('x; rm -rf ~', () => { }), /not a Codex thread id/);
+});
+
+const FIXTURE = path.join(__dirname, '..', '..', 'src', 'test', 'fixtures', 'rollout-2026-11-14T10-00-00-01a1e000-0000-7000-8000-00000000c0de.jsonl');
+
+test('a paginated thread\'s history (Codex 0.163: thread/read gives no turns) comes from its rollout file, here and over SSH', async () => {
+	for (const remote of [false, true]) {
+		const { agent, dir } = await setup({ mode: 'subscription' }, remote);
+		const file = path.join(dir, path.basename(FIXTURE));
+		await copyFile(FIXTURE, file);
+		process.env.FAKE_ROLLOUT = file;
+		try {
+			const history = await agent.sessionHistory('01a1e000-0000-7000-8000-00000000c0de');
+			assert.deepEqual(history.entries.map(e => [e.role, e.text]), [
+				['user', 'Add a health check endpoint.'],
+				['agent', 'I will look at the server first.\n\nAdded GET /health to src/server.ts.'],
+				['user', 'Thanks. A test for it too.'],
+				['agent', 'Added test/health.test.ts; it passes.'],
+			], remote ? 'over SSH' : 'here');
+			assert.equal(history.cursor, `${(await readFile(file)).length}m`);
+		} finally {
+			delete process.env.FAKE_ROLLOUT;
+			agent.dispose();
+		}
+	}
+});
+
+test('history without a rollout file: the server\'s thread/read, as before', async () => {
+	const { agent } = await setup();
+	try {
+		assert.deepEqual(await agent.sessionHistory('01a1e000-0000-7000-8000-0000000000ff'), { entries: [] });
+	} finally {
+		agent.dispose();
+	}
+	await assert.rejects(agent.sessionHistory('x; rm -rf ~'), /not a Codex thread id/);
+});
+
+test('import then follow: what the thread wrote between the history read and the follow comes in, once', async () => {
+	const { agent, dir } = await setup();
+	const file = path.join(dir, path.basename(FIXTURE));
+	await copyFile(FIXTURE, file);
+	process.env.FAKE_ROLLOUT = file;
+	const item = (type: string, id: string, text: string) => JSON.stringify({ timestamp: '2026-11-14T11:00:00Z', type: 'event_msg', payload: { type: 'item_completed', item: { type, id, content: [{ type: type === 'UserMessage' ? 'text' : 'Text', text }] } } });
+	try {
+		const history = await agent.sessionHistory('01a1e000-0000-7000-8000-00000000c0de');
+		await appendFile(file, [item('UserMessage', 'u9', 'written in the terminal meanwhile'), item('AgentMessage', 'm9', 'Seen.')].join('\n') + '\n');
+		const got: { id?: string; text: string }[] = [];
+		await new Promise<void>((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error('timed out')), 5000);
+			const follow = agent.watchSession('01a1e000-0000-7000-8000-00000000c0de', entries => {
+				got.push(...entries);
+				clearTimeout(timer);
+				follow.dispose();
+				resolve();
+			}, history.cursor);
+		});
+		assert.deepEqual(got.map(e => [e.id, e.text]), [['u9', 'written in the terminal meanwhile'], ['m9', 'Seen.']]);
+	} finally {
+		delete process.env.FAKE_ROLLOUT;
+		agent.dispose();
+	}
 });
