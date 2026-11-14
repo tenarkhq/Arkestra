@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { newMachineId, readMachines, sshConfigHosts } from './machines';
 import { probe, probeLocal, remoteSpawn, sshTerminalArgs, type Machine, type ProbeResult, type SpawnFn } from './ssh';
+import { MachinesView } from './machinesView';
 
 /** What the agent adapters receive. */
 export interface ArkestraConnectionsApi {
@@ -122,6 +123,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraConnectionsA
 
 	context.subscriptions.push(
 		changed,
+		// The Machines view: folders of every SSH machine, drag and drop uploads (AR27).
+		new MachinesView(machines, ssh, changed.event),
 		vscode.commands.registerCommand('arkestra.connections.show', show),
 		vscode.commands.registerCommand('arkestra.connections.add', add),
 		// For sign-in flows: an interactive terminal running a command on a machine ('local' or an SSH machine).
