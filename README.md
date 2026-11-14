@@ -96,8 +96,12 @@ Next-edit prediction (Cursor Tab) is left for later.
 
 ## VS Code base
 
-Removed: telemetry, Microsoft account and sync, the Copilot surface, the
-welcome page and walkthroughs, Live Share, tips and notification noise.
+Removed: telemetry, Microsoft account and sync, the welcome page and
+walkthroughs, Live Share, tips and notification noise.
+
+Other agents stay usable: GitHub Copilot and any other AI extension (Cline,
+Continue, Roo Code, the Claude Code and Codex extensions) can be installed
+and used beside Arkestra's own agents. None of them ships by default.
 
 Hidden but restorable: the activity bar, minimap, breadcrumbs bar, debug panel,
 extension recommendations and the menu bar.
@@ -108,7 +112,7 @@ key bindings and extensions.
 Extensions come from [Open VSX](https://open-vsx.org), as in Cursor and
 VSCodium. Microsoft's own extensions cannot be used in a fork; open
 equivalents or built-in features replace them (for example basedpyright for
-Pylance, the built-in SSH connection for Remote-SSH).
+Pylance, clangd for C/C++, Open Remote - SSH for Remote-SSH).
 
 ## Not decided yet
 
