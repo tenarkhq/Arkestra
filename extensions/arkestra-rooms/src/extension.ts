@@ -14,6 +14,7 @@ import { laneAgent, laneEntries, type LaneEntry } from './lanes';
 import { copyFile, mkdir, stat } from 'node:fs/promises';
 import { templateForm } from './templateForm';
 import { ChangesUi } from './changesView';
+import { InlineEdits } from './inlineEditUi';
 import { GitTemplateIO, createWorkTrees } from './templates/gitio';
 import { TemplateRun } from './templates/run';
 import type { Role } from './templates/signals';
@@ -154,6 +155,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	const inviteButton = (stream: vscode.ChatResponseStream, room: Room) =>
 		stream.button({ command: 'arkestra.rooms.invite', arguments: [room.id], title: vscode.l10n.t('Invite an agent') });
 
+	context.subscriptions.push(new InlineEdits(context, registry));
 	changesUi = new ChangesUi(context.globalStorageUri.fsPath, async () => (await currentRoom())?.id);
 	context.subscriptions.push(changesUi, currentChanged.event(() => changesUi?.refresh()));
 
