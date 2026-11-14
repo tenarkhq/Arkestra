@@ -1,0 +1,93 @@
+{
+  "name": "arkestra-acp",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "0.1.0",
+  "publisher": "vscode",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "AI"
+  ],
+  "extensionDependencies": [
+    "vscode.arkestra-rooms"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension",
+  "capabilities": {
+    "virtualWorkspaces": false,
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Arkestra · ACP",
+      "properties": {
+        "arkestra.acp.agents": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "%agents%",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "command"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9-]+$",
+                "description": "%agent.id%"
+              },
+              "name": {
+                "type": "string",
+                "description": "%agent.name%"
+              },
+              "command": {
+                "type": "string",
+                "description": "%agent.command%"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "%agent.args%"
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "%agent.env%"
+              },
+              "machine": {
+                "type": "string",
+                "description": "%agent.machine%"
+              }
+            }
+          }
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "arkestra.acp.add",
+        "title": "%add%",
+        "category": "Arkestra"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "gulp compile-extension:arkestra-acp",
+    "watch": "gulp watch-extension:arkestra-acp"
+  },
+  "devDependencies": {
+    "@types/node": "24.x"
+  }
+}
