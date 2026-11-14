@@ -69,6 +69,14 @@ if ! perl -ne '$f=1 if /^\t\t\tcompileCopilotExtensionBuildTask,$/; END { exit !
 fi
 perl -ne '$f=1 if /^\t\t\tcompileCopilotExtensionBuildTask,$/; END { exit !$f }' build/gulpfile.vscode.ts
 
+# build/.moduleignore strips @github/copilot from every node_modules, which is right for
+# the app's own modules but takes the Copilot CLI SDK out of the extension. Its packaging
+# adds the package back (the packing step then prunes the other platforms' binaries).
+if ! grep -q "extensions/copilot/node_modules/@github/copilot/\*\*" build/lib/extensions.ts; then
+  perl -0pi -e 's/(export function packageCopilotExtensionStream\(\)[\s\S]*?return es\.merge\(\n(\t+)localExtensionsStream,\n)/$1$2gulp.src(["extensions\/copilot\/node_modules\/\@github\/copilot\/**", "!extensions\/copilot\/node_modules\/\@github\/copilot\/**\/{test,tests}\/**"], { base: ".", dot: true, allowEmpty: true }),\n/' build/lib/extensions.ts
+fi
+grep -q "extensions/copilot/node_modules/@github/copilot/\*\*" build/lib/extensions.ts
+
 # AR03 · Removed: built-in extensions Arkestra does not ship.
 #   microsoft-authentication, tunnel-forwarding: Microsoft sign-in and relay.
 #   grunt, gulp, jake: outdated task runners; available from Open VSX.
