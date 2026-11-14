@@ -30,6 +30,9 @@ export const ARKESTRA_DEFAULTS: { readonly [key: string]: unknown } = {
 	'workbench.welcomePage.walkthroughs.openOnInstall': false,
 	'update.showReleaseNotes': false,
 	'workbench.activity.showAccounts': false,            // accounts live under Settings › Accounts
+
+	// No Microsoft service on the way (AR04)
+	'github-authentication.preferDeviceCodeFlow': true,  // GitHub sign-in without the vscode.dev redirect
 };
 
 /** Views of the "Hidden" and "Removed" rows; hidden until someone shows them. */
