@@ -92,6 +92,31 @@ export function parseProjectRef(text: string): { owner: string; number: number }
 	return m ? { owner: m[1], number: Number(m[2]) } : undefined;
 }
 
+/** The projects the signed-in user can open: their own, then their organizations'. */
+export const PROJECT_LIST_QUERY = `query{ viewer{ login
+	projectsV2(first:50, orderBy:{field:UPDATED_AT, direction:DESC}){ nodes{ number title closed } }
+	organizations(first:50){ nodes{ login projectsV2(first:50, orderBy:{field:UPDATED_AT, direction:DESC}){ nodes{ number title closed } } } } } }`;
+
+export interface ProjectChoice {
+	readonly owner: string;
+	readonly number: number;
+	readonly title: string;
+	readonly closed: boolean;
+}
+
+/** The project list's answer: open projects first, the user's own before the organizations'. */
+export function parseProjectList(data: any): ProjectChoice[] {
+	const viewer = data?.viewer;
+	const of = (owner: unknown, nodes: unknown): ProjectChoice[] => typeof owner === 'string' && Array.isArray(nodes)
+		? nodes.filter((p: any) => typeof p?.number === 'number').map((p: any) => ({ owner, number: p.number, title: typeof p.title === 'string' && p.title ? p.title : `#${p.number}`, closed: !!p.closed }))
+		: [];
+	const all = [
+		...of(viewer?.login, viewer?.projectsV2?.nodes),
+		...(Array.isArray(viewer?.organizations?.nodes) ? viewer.organizations.nodes.flatMap((o: any) => of(o?.login, o?.projectsV2?.nodes)) : []),
+	];
+	return [...all.filter(p => !p.closed), ...all.filter(p => p.closed)];
+}
+
 const FIELD_ID = 'field{ ... on ProjectV2FieldCommon{ id } }';
 const CI = 'commits(last:1){ nodes{ commit{ oid statusCheckRollup{ state } } } }';
 
