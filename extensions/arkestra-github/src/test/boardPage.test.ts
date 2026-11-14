@@ -9,6 +9,7 @@ import * as assert from 'node:assert/strict';
 import { boardHtml } from '../boardHtml';
 import { boardModel } from '../board';
 import { planModel } from '../plan';
+import { graphModel } from '../graph';
 
 test('the board page draws and posts what the user does', async () => {
 const html = boardHtml('n', 'c');
@@ -31,8 +32,9 @@ const posted: any[] = [];
 const listeners: any = {};
 const body = new El('body');
 g.Node = Node_;
-g.document = { createElement: (t: string) => new El(t), createTextNode: (t: string) => new Text_(t), body };
-g.window = { addEventListener: (k: string, f: any) => { listeners[k] = f; } };
+g.document = { createElement: (t: string) => new El(t), createElementNS: (_ns: string, t: string) => new El(t), createTextNode: (t: string) => new Text_(t), body };
+g.__win = {};
+g.window = { addEventListener: (k: string, f: any) => { listeners[k] = f; (g.__win[k] ??= []).push(f); }, removeEventListener: (k: string, f: any) => { g.__win[k] = (g.__win[k] ?? []).filter((x: any) => x !== f); } };
 let state: any;
 g.acquireVsCodeApi = () => ({ getState: () => state, setState: (s: any) => { state = s; }, postMessage: (m: any) => posted.push(m) });
 
@@ -76,12 +78,27 @@ title.value = 'New task';
 find(body, (e: any) => e.tag === 'button' && text(e) === 'Create')[0].fire('click');
 assert.ok(posted.some((m: any) => m.type === 'createIssue' && m.title === 'New task' && m.repository === 'o/r'), 'create posted');
 const plan = planModel({ snapshot: snap, rooms: [], git: { base: 'main', baseHead: 'abc1234', tags: ['v1.0'], log: [{ sha: 'abc1234', subject: 'Board (#70)', refs: [] }], branches: new Map() } });
-listeners.message({ data: { type: 'model', model: { ...model, plan } } });
+const graph = graphModel(snap, [], plan);
+listeners.message({ data: { type: 'model', model: { ...model, plan, graph } } });
 find(body, (e: any) => e.tag === 'button' && text(e) === 'Plan')[0].fire('click');
 const t3 = text(body);
 assert.ok(t3.includes('Release lanes') && t3.includes('Dependency staircase') && t3.includes('abc1234') && t3.includes('#70') && t3.includes('Live: v1.0'), 'plan drawn');
 find(body, (e: any) => String(e.className ?? '').startsWith('cell') && text(e).includes('Board view'))[0].fire('click');
 assert.ok(posted.some((m: any) => m.type === 'open' && m.url === 'https://github.com/o/r/issues/1'), 'cell opens the task');
+find(body, (e: any) => e.tag === 'button' && text(e) === 'Graph')[0].fire('click');
+const t4 = text(body);
+assert.ok(t4.includes('Draw prerequisite') && t4.includes('Auto layout') && t4.includes('Release'), 'graph drawn');
+const node = find(body, (e: any) => e.tag === 'g' && e.attrs['data-node'] === 'I1')[0];
+node.fire('pointerdown', { clientX: 10, clientY: 10 });
+for (const f of [...(g.__win.pointerup ?? [])]) f({ clientX: 10, clientY: 10 });
+assert.ok(text(body).includes('Prerequisites') && text(body).includes('Add prerequisite'), 'node selected');
+find(body, (e: any) => e.tag === 'button' && text(e) === 'Add prerequisite')[0].fire('click');
+const other = find(body, (e: any) => e.tag === 'g' && e.attrs['data-node'] === 'D0')[0];
+other.fire('pointerdown', { clientX: 0, clientY: 0 });
+for (const f of [...(g.__win.pointerup ?? [])]) f({ clientX: 0, clientY: 0 });
+assert.ok(posted.some((m: any) => m.type === 'addDependency' && m.blocking === 'D0' && m.blocked === 'I1'), 'prerequisite posted');
+find(body, (e: any) => e.tag === 'button' && text(e) === 'Auto layout')[0].fire('click');
+assert.ok(posted.some((m: any) => m.type === 'autoLayout'), 'auto layout posted');
 listeners.message({ data: { type: 'screen', screen: { title: 'No GitHub Project for this workspace', text: 'x', actions: [{ label: 'Follow a project…', command: 'setProject' }] } } });
 assert.ok(text(body).includes('No GitHub Project'), 'empty screen');
 

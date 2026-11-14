@@ -89,6 +89,35 @@ footer summary { cursor: pointer; font-weight: 600; font-size: 12px; }
 .cell.startable { box-shadow: inset 3px 0 0 var(--vscode-testing-iconPassed, #3fb950); }
 .cell.running { box-shadow: inset 3px 0 0 var(--vscode-progressBar-background, #3794ff); }
 .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 6px; }
+.graph-top { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.graph-top button.on { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.graph-body { display: flex; gap: 12px; align-items: flex-start; }
+.canvas { flex: 1; min-width: 0; overflow: auto; border: 1px solid var(--vscode-panel-border); border-radius: var(--radius); max-height: calc(100vh - 190px); background: var(--vscode-editor-background); }
+.canvas svg { display: block; touch-action: none; }
+.node rect { fill: var(--vscode-editorWidget-background); stroke: var(--vscode-panel-border); stroke-width: 1; }
+.node.milestone rect { fill: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 12%, var(--vscode-editor-background)); }
+.node.done rect { opacity: .7; }
+.node.critical rect { stroke: var(--vscode-testing-iconFailed, #f85149); stroke-width: 2; }
+.node.sel rect { stroke: var(--vscode-focusBorder); stroke-width: 2.5; }
+.node text { fill: var(--vscode-foreground); font-size: 12px; pointer-events: none; }
+.node text.sub { fill: var(--vscode-descriptionForeground); font-size: 11px; }
+.node .stripe-ok { fill: var(--vscode-testing-iconPassed, #3fb950); }
+.node .stripe-bad { fill: var(--vscode-testing-iconFailed, #f85149); }
+.node .stripe-run { fill: var(--vscode-progressBar-background, #3794ff); }
+.node .stripe-warn { fill: var(--vscode-editorWarning-foreground, #cca700); }
+.node { cursor: grab; }
+.drawing .node { cursor: crosshair; }
+.edge { fill: none; stroke: var(--vscode-descriptionForeground); stroke-width: 1.5; cursor: pointer; }
+.edge.loose { stroke-dasharray: 5 4; }
+.edge.release { stroke-dasharray: 2 4; stroke-width: 1; }
+.edge.critical { stroke: var(--vscode-testing-iconFailed, #f85149); stroke-width: 2.5; }
+.edge.sel { stroke: var(--vscode-focusBorder); stroke-width: 3; }
+.edge-hit { fill: none; stroke: transparent; stroke-width: 12; cursor: pointer; }
+.ghost { stroke: var(--vscode-focusBorder); stroke-width: 2; stroke-dasharray: 4 3; fill: none; pointer-events: none; }
+.side { flex: 0 0 280px; border: 1px solid var(--vscode-panel-border); border-radius: var(--radius); padding: 10px; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.side h4 { margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--vscode-descriptionForeground); }
+.side ul { margin: 0; padding-left: 16px; }
+@media (max-width: 760px) { .graph-body { flex-direction: column; } .side { flex-basis: auto; width: 100%; } }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; border: 1px solid var(--vscode-panel-border); }
 `;
 
@@ -98,7 +127,7 @@ const saved = vscode.getState() || {};
 const ui = { tab: saved.tab || 'board', filters: saved.filters || {}, search: saved.search || '', open: saved.open || {}, sort: saved.sort || null, form: false };
 let model = null;
 let screen = null;
-const save = () => vscode.setState({ tab: ui.tab, filters: ui.filters, search: ui.search, open: ui.open, sort: ui.sort });
+const save = () => vscode.setState(Object.assign({}, vscode.getState(), { tab: ui.tab, filters: ui.filters, search: ui.search, open: ui.open, sort: ui.sort }));
 const post = (m) => vscode.postMessage(m);
 
 function h(tag, attrs, ...kids) {
@@ -254,7 +283,7 @@ function headerEl() {
 			h('span', { class: 'muted' }, 'GitHub Project ' + model.project.ref + ' · two-way sync'),
 			chip(model.sync.text, model.sync.tone),
 			h('span', { class: 'spacer' }),
-			h('div', { class: 'tabs' }, ['board', 'table', 'plan'].map(t => h('button', { class: ui.tab === t ? 'on' : '', onclick: () => { ui.tab = t; save(); draw(); } }, { board: 'Board', table: 'Table', plan: 'Plan' }[t]))),
+			h('div', { class: 'tabs' }, ['board', 'table', 'plan', 'graph'].map(t => h('button', { class: ui.tab === t ? 'on' : '', onclick: () => { ui.tab = t; save(); draw(); } }, { board: 'Board', table: 'Table', plan: 'Plan', graph: 'Graph' }[t]))),
 			h('button', { title: 'Read the project again', onclick: () => post({ type: 'refresh' }) }, '↻'),
 			h('button', { class: 'primary', onclick: () => { ui.form = !ui.form; draw(); } }, '+ New issue')),
 		ui.form ? newIssueForm() : null,
@@ -305,10 +334,175 @@ function planEl() {
 	return h('div', { class: 'plan' }, lanes, rails, stairs);
 }
 
+const NS = 'http://www.w3.org/2000/svg';
+function s(tag, attrs, ...kids) {
+	const el = document.createElementNS(NS, tag);
+	for (const [k, v] of Object.entries(attrs || {})) {
+		if (v === undefined || v === null || v === false) continue;
+		if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+		else el.setAttribute(k, String(v));
+	}
+	for (const kid of kids.flat(Infinity)) {
+		if (kid === undefined || kid === null || kid === false) continue;
+		el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+	}
+	return el;
+}
+const W = 200, H = 64;
+ui.graph = Object.assign({ mode: 'select', critical: true, zoom: 1 }, saved.graph || {}, { selected: null, target: null });
+const saveGraph = () => vscode.setState(Object.assign({}, vscode.getState(), { graph: { mode: ui.graph.mode === 'pick' ? 'select' : ui.graph.mode, critical: ui.graph.critical, zoom: ui.graph.zoom } }));
+const cut = (text, n) => text.length > n ? text.slice(0, n - 1) + '…' : text;
+
+function edgePath(a, b) {
+	const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x, y2 = b.y + H / 2;
+	const back = x2 < x1 + 20;
+	const dx = back ? 80 : Math.max(40, (x2 - x1) / 2);
+	return 'M' + x1 + ',' + y1 + ' C' + (x1 + dx) + ',' + y1 + ' ' + (x2 - dx) + ',' + y2 + ' ' + x2 + ',' + y2;
+}
+const edgeKey = (e) => e.kind + ':' + e.from + '>' + e.to;
+
+function graphEl() {
+	const g = model.graph;
+	if (!g) return h('div', { class: 'muted' }, 'No graph yet.');
+	const nodes = new Map(g.nodes.map(n => [n.id, Object.assign({}, n)]));
+	const z = ui.graph.zoom;
+	const svg = s('svg', { width: Math.round(g.width * z), height: Math.round(g.height * z), viewBox: '0 0 ' + g.width + ' ' + g.height, class: ui.graph.mode !== 'select' ? 'drawing' : '' },
+		s('defs', {}, s('marker', { id: 'arrow', viewBox: '0 0 10 10', refX: '10', refY: '5', markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' }, s('path', { d: 'M0,0 L10,5 L0,10 z', fill: 'context-stroke' }))));
+	const edgeLayer = s('g', {});
+	const nodeLayer = s('g', {});
+	svg.append(edgeLayer, nodeLayer);
+	const pointIn = (ev) => {
+		const r = svg.getBoundingClientRect ? svg.getBoundingClientRect() : { left: 0, top: 0 };
+		return { x: (ev.clientX - r.left) / z, y: (ev.clientY - r.top) / z };
+	};
+	const drawEdges = () => {
+		edgeLayer.replaceChildren(...g.edges.filter(e => nodes.has(e.from) && nodes.has(e.to)).map(e => {
+			const d = edgePath(nodes.get(e.from), nodes.get(e.to));
+			const key = edgeKey(e);
+			const crit = ui.graph.critical && e.critical;
+			const select = (ev) => { ev.stopPropagation(); ui.graph.selected = { edge: e }; drawMain(); };
+			return s('g', {}, s('path', { class: 'edge-hit', d, onclick: select }),
+				s('path', { class: 'edge ' + e.kind + (crit ? ' critical' : '') + (ui.graph.selected && ui.graph.selected.edge && edgeKey(ui.graph.selected.edge) === key ? ' sel' : ''), d, 'marker-end': 'url(#arrow)', onclick: select }));
+		}));
+	};
+	for (const n of nodes.values()) {
+		const sel = ui.graph.selected && ui.graph.selected.node === n.id;
+		const el = s('g', { class: 'node ' + n.kind + (n.done ? ' done' : '') + (ui.graph.critical && n.critical ? ' critical' : '') + (sel ? ' sel' : ''), transform: 'translate(' + n.x + ',' + n.y + ')', 'data-node': n.id },
+			s('rect', { width: W, height: H, rx: n.kind === 'milestone' ? 18 : 6 }),
+			n.tone ? s('rect', { class: 'stripe-' + n.tone, width: 4, height: H, rx: 2 }) : null,
+			s('text', { x: 12, y: 18 }, cut(n.label + (n.status ? ' · ' + n.status : ''), 30)),
+			s('text', { x: 12, y: 36 }, cut(n.title, 30)),
+			n.sub ? s('text', { class: 'sub', x: 12, y: 54 }, cut(n.sub, 32)) : null);
+		el.addEventListener('pointerdown', (ev) => {
+			ev.stopPropagation();
+			const start = pointIn(ev);
+			const ox = n.x, oy = n.y;
+			let moved = false;
+			const drawing = ui.graph.mode === 'draw' || ui.graph.mode === 'loose';
+			const ghost = drawing ? s('path', { class: 'ghost' }) : null;
+			if (ghost) svg.append(ghost);
+			const move = (e2) => {
+				const p = pointIn(e2);
+				if (Math.abs(p.x - start.x) + Math.abs(p.y - start.y) > 4) moved = true;
+				if (drawing) { ghost.setAttribute('d', 'M' + (ox + W) + ',' + (oy + H / 2) + ' L' + p.x + ',' + p.y); return; }
+				if (ui.graph.mode !== 'select') return;
+				n.x = Math.max(0, ox + p.x - start.x); n.y = Math.max(0, oy + p.y - start.y);
+				el.setAttribute('transform', 'translate(' + n.x + ',' + n.y + ')');
+				drawEdges();
+			};
+			const up = (e2) => {
+				window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
+				if (ghost) ghost.remove();
+				if (drawing) {
+					const p = pointIn(e2);
+					const hit = [...nodes.values()].find(m => p.x >= m.x && p.x <= m.x + W && p.y >= m.y && p.y <= m.y + H);
+					if (hit && hit.id !== n.id) linkNodes(n, hit, ui.graph.mode);
+					return;
+				}
+				if (moved) post({ type: 'savePosition', id: n.id, x: n.x, y: n.y });
+				else clickNode(n);
+			};
+			window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+		});
+		nodeLayer.append(el);
+	}
+	drawEdges();
+	svg.addEventListener('pointerdown', () => { if (ui.graph.selected) { ui.graph.selected = null; drawMain(); } });
+	const mode = (m, text, title) => h('button', { class: ui.graph.mode === m ? 'on' : '', title, onclick: () => { ui.graph.mode = m; ui.graph.target = null; saveGraph(); drawMain(); } }, text);
+	const top = h('div', { class: 'graph-top' },
+		mode('select', 'Select', 'Click to select, drag to move'),
+		mode('draw', 'Draw prerequisite', 'Drag from one task to another: the first becomes the prerequisite of the second, on GitHub too'),
+		mode('loose', 'Draw loose link', 'A link that blocks nothing; kept in this workspace'),
+		h('button', { onclick: () => post({ type: 'autoLayout' }) }, 'Auto layout'),
+		h('button', { class: ui.graph.critical ? 'on' : '', onclick: () => { ui.graph.critical = !ui.graph.critical; saveGraph(); drawMain(); } }, 'Critical path'),
+		h('button', { title: 'Zoom out', onclick: () => { ui.graph.zoom = Math.max(0.4, ui.graph.zoom - 0.15); saveGraph(); drawMain(); } }, '−'),
+		h('button', { title: 'Zoom in', onclick: () => { ui.graph.zoom = Math.min(1.8, ui.graph.zoom + 0.15); saveGraph(); drawMain(); } }, '+'),
+		h('span', { class: 'muted' }, ui.graph.mode === 'pick' ? 'Click the task that has to come first.' : ui.graph.mode === 'draw' ? 'Drag a line from one task to another: it becomes its prerequisite, on GitHub too.' : ui.graph.mode === 'loose' ? 'Drag a line between two tasks: a loose link, it blocks nothing.' : 'Drag to move · click for details'));
+	return h('div', {}, top, h('div', { class: 'graph-body' }, h('div', { class: 'canvas' }, svg), sideEl(g, nodes)),
+		h('div', { class: 'legend' }, h('span', {}, h('i', { style: 'border:2px solid var(--vscode-testing-iconFailed, #f85149)' }), 'critical path'), h('span', {}, '── prerequisite'), h('span', {}, '- - loose link (blocks nothing)'), h('span', {}, '··· leads to the release')));
+}
+
+function linkNodes(a, b, mode) {
+	if (a.kind === 'milestone' || b.kind === 'milestone') return;
+	if (mode === 'loose') { post({ type: 'addLoose', a: a.id, b: b.id }); return; }
+	if (!a.linkable || !b.linkable) { post({ type: 'notice', text: 'Prerequisites link issues only.' }); return; }
+	post({ type: 'addDependency', blocking: a.id, blocked: b.id });
+}
+function clickNode(n) {
+	if (ui.graph.mode === 'pick' && ui.graph.target) {
+		const target = model.graph.nodes.find(x => x.id === ui.graph.target);
+		if (target && n.id !== target.id) linkNodes(n, target, 'draw');
+		ui.graph.mode = 'select'; ui.graph.target = null; drawMain(); return;
+	}
+	ui.graph.selected = { node: n.id }; drawMain();
+}
+
+function sideEl(g, nodes) {
+	const sel = ui.graph.selected;
+	if (!sel) return h('aside', { class: 'side' }, h('div', { class: 'muted' }, 'Select a task to see what it waits for and what waits for it. When every prerequisite of a task is done, it is startable, and one click starts a room on it.'));
+	if (sel.edge) {
+		const e = sel.edge, a = nodes.get(e.from), b = nodes.get(e.to);
+		const what = e.kind === 'blocks' ? a.label + ' must come before ' + b.label : e.kind === 'loose' ? a.label + ' and ' + b.label + ' are loosely linked' : a.label + ' leads to ' + b.title;
+		return h('aside', { class: 'side' }, h('div', { class: 'title' }, what),
+			e.kind === 'blocks' ? h('div', { class: 'muted' }, 'A GitHub "blocked by" link.') : e.kind === 'loose' ? h('div', { class: 'muted' }, 'Kept in this workspace; blocks nothing.') : null,
+			e.kind === 'blocks' ? h('button', { onclick: () => { post({ type: 'removeDependency', blocking: e.from, blocked: e.to }); ui.graph.selected = null; } }, 'Remove the prerequisite')
+				: e.kind === 'loose' ? h('button', { onclick: () => { post({ type: 'removeLoose', a: e.from, b: e.to }); ui.graph.selected = null; } }, 'Remove the loose link') : null);
+	}
+	const n = nodes.get(sel.node);
+	if (!n) return h('aside', { class: 'side' });
+	const before = g.edges.filter(e => e.to === n.id && e.kind === 'blocks').map(e => nodes.get(e.from));
+	const after = g.edges.filter(e => e.from === n.id && e.kind !== 'loose').map(e => nodes.get(e.to));
+	const loose = g.edges.filter(e => e.kind === 'loose' && (e.from === n.id || e.to === n.id)).map(e => nodes.get(e.from === n.id ? e.to : e.from));
+	const item = (m, state) => h('li', {}, h('a', { onclick: () => { ui.graph.selected = { node: m.id }; drawMain(); } }, m.label + ' ' + cut(m.title, 34)), state ? h('span', { class: 'muted' }, ' · ' + state) : null);
+	const crit = g.critical.find(c => c.lane === n.lane);
+	return h('aside', { class: 'side' },
+		h('div', { class: 'muted' }, n.label + (n.status ? ' · ' + n.status : '') + (n.kind === 'task' ? ' · ' + n.lane : '')),
+		h('div', { class: 'title' }, n.title),
+		n.sub ? chip(n.sub, n.tone) : null,
+		n.kind === 'task' ? [h('h4', {}, 'Prerequisites'), before.length ? h('ul', {}, before.map(m => item(m, m.done ? 'done' : 'open'))) : h('div', { class: 'muted' }, 'None')] : [h('h4', {}, 'Waits for'), h('ul', {}, g.edges.filter(e => e.to === n.id).map(e => item(nodes.get(e.from), nodes.get(e.from).done ? 'done' : 'open')))],
+		n.kind === 'task' && after.length ? [h('h4', {}, 'It blocks'), h('ul', {}, after.map(m => item(m, m.kind === 'milestone' ? 'release' : 'waits for it')))] : null,
+		loose.length ? [h('h4', {}, 'Loose links'), h('ul', {}, loose.map(m => item(m, '')))] : null,
+		n.critical && crit ? [h('h4', {}, 'Critical path to ' + crit.lane), h('div', {}, crit.path.join(' → ')), h('div', { class: 'muted' }, 'A slip of ' + n.label + ' pushes the whole release.')] : null,
+		h('div', { class: 'row' },
+			n.roomId ? h('button', { class: 'primary', onclick: () => post({ type: 'openRoom', roomId: n.roomId }) }, 'Go to the running room') : null,
+			n.startable && !n.roomId ? h('button', { class: 'primary', onclick: () => post({ type: 'startRoom', itemId: n.id }) }, 'Start room ▸') : null,
+			n.linkable ? h('button', { onclick: () => { ui.graph.mode = 'pick'; ui.graph.target = n.id; drawMain(); } }, 'Add prerequisite') : null,
+			n.url ? h('button', { onclick: () => post({ type: 'open', url: n.url }) }, 'Open on GitHub') : null));
+}
+window.addEventListener('keydown', (e) => {
+	if (ui.tab !== 'graph' || !ui.graph.selected || !ui.graph.selected.edge) return;
+	if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+	if (document.activeElement && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName || '')) return;
+	const ed = ui.graph.selected.edge;
+	if (ed.kind === 'blocks') post({ type: 'removeDependency', blocking: ed.from, blocked: ed.to });
+	if (ed.kind === 'loose') post({ type: 'removeLoose', a: ed.from, b: ed.to });
+	ui.graph.selected = null; drawMain();
+});
+
 let mainEl = null;
 function drawMain() {
 	if (!mainEl) return;
-	mainEl.replaceChildren(ui.tab === 'table' ? tableEl() : ui.tab === 'plan' ? planEl() : boardEl());
+	mainEl.replaceChildren(ui.tab === 'table' ? tableEl() : ui.tab === 'plan' ? planEl() : ui.tab === 'graph' ? graphEl() : boardEl());
 }
 function draw() {
 	if (screen) { document.body.replaceChildren(emptyEl(screen)); return; }
