@@ -160,6 +160,16 @@ jobs:
           . ../../branding/arkestra.env
           bash ./build.sh
 
+      # Apple Silicon runs no binary without a signature, and the build changed Electron's own.
+      # Until the Apple certificate is set, the app gets an ad-hoc signature: it starts after
+      # the first "Open Anyway", but cannot update itself or pass Gatekeeper on its own.
+      - name: Ad-hoc signature (macOS, without the Apple certificate)
+        if: matrix.os_name == 'osx' && env.CERTIFICATE_OSX_P12_DATA == ''
+        working-directory: build/work
+        run: |
+          codesign --force --deep --sign - "VSCode-darwin-${VSCODE_ARCH}"/*.app
+          codesign --verify --deep --strict --verbose=2 "VSCode-darwin-${VSCODE_ARCH}"/*.app
+
       - name: Installers and checksums
         working-directory: build/work
         run: |
