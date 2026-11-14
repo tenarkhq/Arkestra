@@ -4,7 +4,7 @@
 
 import type { TemplateState } from './templates/types';
 import type { BestRun } from './best';
-import type { Agent, AgentEvent, AgentRegistry, Readiness } from './agent';
+import type { Agent, AgentEvent, AgentRegistry, ExistingSession, Readiness, SessionEntry } from './agent';
 
 export type AuthorKind = 'user' | 'agent' | 'system';
 
@@ -43,6 +43,11 @@ export interface RoomState {
 	best?: BestRun[];
 	/** The model and effort chosen per agent in this thread (AR38). */
 	choices?: Record<string, { model?: string; effort?: string }>;
+	/**
+	 * Existing CLI sessions this thread continues (AR39), per agent: the session, its folder, and
+	 * the last message that came from it (everything up to there the session already holds).
+	 */
+	adopted?: Record<string, { readonly session: string; readonly cwd?: string; readonly upTo: string }>;
 }
 
 export class AgentNotReadyError extends Error {
@@ -159,6 +164,10 @@ export class Room {
 		const shared = await this.shared?.().catch(() => undefined);
 		sink(agent, { kind: 'start' });
 		try {
+			const adopted = this.state.adopted?.[agent.id];
+			if (adopted && agent.adoptSession) {
+				agent.adoptSession(this.id, { id: adopted.session, ...(adopted.cwd ? { cwd: adopted.cwd } : {}) }, seenBy(this.state.messages, agent.id, adopted.upTo));
+			}
 			const choice = this.state.choices?.[agent.id];
 			await agent.turn({ roomId: this.id, transcript: [...this.state.messages], ...(this.state.mode === 'plan' ? { mode: 'plan' as const } : {}), ...(shared ? { shared } : {}), ...(choice?.model ? { model: choice.model } : {}), ...(choice?.effort ? { effort: choice.effort } : {}) }, event => {
 				if (event.kind === 'text') {
@@ -189,4 +198,27 @@ export class Room {
 
 export function newRoomState(title: string, project?: string): RoomState {
 	return { id: newId(), title, ...(project ? { project } : {}), roster: [], messages: [] };
+}
+
+/**
+ * What an adopted session already holds: every message up to the later of the last one it came
+ * with and the agent's own last answer (after an IDE restart the agent has to be told again).
+ */
+export function seenBy(messages: readonly Message[], agentId: string, upTo: string): string[] {
+	let last = messages.findIndex(m => m.id === upTo);
+	messages.forEach((m, i) => { if (m.author.kind === 'agent' && m.author.id === agentId) { last = Math.max(last, i); } });
+	return messages.slice(0, last + 1).map(m => m.id);
+}
+
+/** A thread that continues an existing CLI session (AR39): its messages, then the agent goes on in it. */
+export function importedRoomState(agent: { id: string; name: string }, session: ExistingSession, entries: readonly SessionEntry[], project?: string, now: () => Date = () => new Date()): RoomState {
+	const state = newRoomState(session.title, project);
+	const at = (e: SessionEntry) => e.at && !Number.isNaN(Date.parse(e.at)) ? new Date(e.at).toISOString() : now().toISOString();
+	state.roster.push(agent.id);
+	state.messages.push({ id: newId(), at: entries[0] ? at(entries[0]) : now().toISOString(), author: { kind: 'system', id: 'system', name: 'Arkestra' }, text: `${agent.name} session continued here${session.cwd ? ` (${session.cwd})` : ''}.` });
+	for (const e of entries) {
+		state.messages.push({ id: newId(), at: at(e), author: e.role === 'user' ? { kind: 'user', id: 'user', name: 'You' } : { kind: 'agent', id: agent.id, name: agent.name }, text: e.text });
+	}
+	state.adopted = { [agent.id]: { session: session.id, ...(session.cwd ? { cwd: session.cwd } : {}), upTo: state.messages.at(-1)!.id } };
+	return state;
 }

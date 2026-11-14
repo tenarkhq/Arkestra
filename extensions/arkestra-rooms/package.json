@@ -258,6 +258,17 @@
         "title": "%chooseModel%",
         "category": "Arkestra",
         "icon": "$(settings)"
+      },
+      {
+        "command": "arkestra.rooms.continueSession",
+        "title": "%command.continueSession%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.rooms.refreshSessions",
+        "title": "%command.refreshSessions%",
+        "category": "Arkestra",
+        "icon": "$(refresh)"
       }
     ],
     "chatSessions": [
@@ -457,6 +468,16 @@
           "command": "arkestra.rooms.chooseModel",
           "when": "view == arkestra.threads && viewItem =~ /^thread/",
           "group": "2_agents@1"
+        },
+        {
+          "command": "arkestra.rooms.refreshSessions",
+          "when": "view == arkestra.threads && viewItem =~ /^(machines|sessionAgent)$/",
+          "group": "inline"
+        },
+        {
+          "command": "arkestra.rooms.continueSession",
+          "when": "view == arkestra.threads && viewItem == session",
+          "group": "1_open"
         }
       ],
       "commandPalette": [
@@ -523,6 +544,10 @@
         {
           "command": "arkestra.inline.edit",
           "when": "editorIsOpen && !editorReadonly"
+        },
+        {
+          "command": "arkestra.rooms.continueSession",
+          "when": "false"
         }
       ],
       "editor/context": [

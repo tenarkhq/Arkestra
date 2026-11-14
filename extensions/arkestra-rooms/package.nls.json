@@ -58,5 +58,7 @@
   "bestOfN.testCommand": "Test command run in every Best-of-N attempt's work tree after it finishes (empty: none), for example `npm test`.",
   "artifacts.open": "Artifacts: every agent's output in one place",
   "activity.view": "Activity",
-  "chooseModel": "Choose an agent's model and effort in this thread…"
+  "chooseModel": "Choose an agent's model and effort in this thread…",
+  "command.continueSession": "Continue this session here",
+  "command.refreshSessions": "Refresh the sessions"
 }

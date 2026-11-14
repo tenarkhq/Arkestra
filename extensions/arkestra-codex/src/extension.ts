@@ -34,6 +34,10 @@ function withActions<T extends Agent>(agent: T, actionsFor: (readiness: Readines
 			return readiness.ready ? readiness : { ...readiness, reason: localizeReason(readiness.reason), actions: actionsFor(readiness) };
 		},
 		turn: (input, onEvent, signal) => agent.turn(input, onEvent, signal),
+		...(agent.choices ? { choices: () => agent.choices!() } : {}),
+		...(agent.existingSessions ? { existingSessions: () => agent.existingSessions!() } : {}),
+		...(agent.sessionHistory ? { sessionHistory: (id: string) => agent.sessionHistory!(id) } : {}),
+		...(agent.adoptSession ? { adoptSession: (roomId: string, session: { readonly id: string; readonly cwd?: string }, seen: readonly string[]) => agent.adoptSession!(roomId, session, seen) } : {}),
 	};
 }
 

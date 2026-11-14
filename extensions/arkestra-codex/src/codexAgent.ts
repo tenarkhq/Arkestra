@@ -6,7 +6,7 @@
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
-import type { Agent, AgentChoices, AgentEvent, Message, PermissionRequest, Readiness, TurnInput, Usage, WorkUpdate } from './rooms';
+import type { Agent, AgentChoices, AgentEvent, ExistingSession, Message, PermissionRequest, Readiness, SessionEntry, TurnInput, Usage, WorkUpdate } from './rooms';
 import { RpcClient, type Notification } from './rpc';
 
 export type CodexAuth = { readonly mode: 'subscription' } | { readonly mode: 'apiKey'; readonly key: string | undefined };
@@ -59,6 +59,47 @@ interface RoomThread {
 	tokens?: TokenBreakdown;
 	/** The model and effort this thread was last told to use (Codex keeps an override for later turns). */
 	override?: { model?: string; effort?: string };
+	/** An adopted thread's folder (AR39): it goes on where it worked. */
+	cwd?: string;
+}
+
+/** A first message Arkestra wrote (`[Author]` and the text): that thread is already a room. */
+const ARKESTRA_FIRST = /^\[[^\]\n]{1,60}\]\n/;
+
+const isoTime = (t: unknown): string | undefined => typeof t === 'number' ? new Date(t < 1e12 ? t * 1000 : t).toISOString()
+	: typeof t === 'string' && !Number.isNaN(Date.parse(t)) ? new Date(t).toISOString() : undefined;
+
+/** Codex's thread list (thread/list) as existing sessions, newest first; the rooms' own threads left out. */
+export function codexSessions(data: unknown): ExistingSession[] {
+	const list = Array.isArray((data as any)?.data) ? (data as any).data : [];
+	return list.filter((t: any) => typeof t?.id === 'string' && !(typeof t.preview === 'string' && ARKESTRA_FIRST.test(t.preview))).map((t: any) => {
+		const first = typeof t.preview === 'string' ? t.preview.trim().split('\n')[0].trim() : '';
+		const title = first ? (first.length > 80 ? first.slice(0, 79).trimEnd() + '…' : first) : t.id.slice(0, 8);
+		return { id: t.id, title, ...(typeof t.cwd === 'string' && t.cwd ? { cwd: t.cwd } : {}), updatedAt: isoTime(t.updatedAt) ?? isoTime(t.createdAt) ?? new Date(0).toISOString() };
+	}).sort((a: ExistingSession, b: ExistingSession) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/** A Codex thread's turns as thread messages: what the user wrote and Codex's answers. */
+export function codexHistory(thread: unknown, limit = 300): SessionEntry[] {
+	const entries: SessionEntry[] = [];
+	for (const turn of Array.isArray((thread as any)?.turns) ? (thread as any).turns : []) {
+		for (const item of Array.isArray(turn?.items) ? turn.items : []) {
+			if (item?.type === 'userMessage') {
+				const text = (Array.isArray(item.content) ? item.content : []).filter((c: any) => c?.type === 'text' && typeof c.text === 'string').map((c: any) => c.text).join('\n').trim();
+				if (text) {
+					entries.push({ role: 'user', text });
+				}
+			} else if (item?.type === 'agentMessage' && typeof item.text === 'string' && item.text.trim()) {
+				const last = entries.at(-1);
+				if (last?.role === 'agent') {
+					entries[entries.length - 1] = { role: 'agent', text: `${last.text}\n\n${item.text.trim()}` };
+				} else {
+					entries.push({ role: 'agent', text: item.text.trim() });
+				}
+			}
+		}
+	}
+	return entries.slice(-limit);
 }
 
 type CodexModel = AgentChoices['models'][number] & { readonly isDefault?: boolean };
@@ -225,10 +266,30 @@ export class CodexAgent implements Agent {
 		}
 	}
 
+	/** The threads Codex has on this agent's machine (AR39). */
+	async existingSessions(): Promise<readonly ExistingSession[]> {
+		const client = await this.ensureServer(await this.options.auth());
+		return codexSessions(await client.request('thread/list', { limit: 60 }));
+	}
+
+	async sessionHistory(sessionId: string): Promise<readonly SessionEntry[]> {
+		const client = await this.ensureServer(await this.options.auth());
+		const read = await client.request<{ thread: unknown }>('thread/read', { threadId: sessionId, includeTurns: true })
+			.catch(() => client.request<{ thread: unknown }>('thread/resume', { threadId: sessionId })); // an older Codex
+		return codexHistory(read?.thread);
+	}
+
+	adoptSession(roomId: string, session: { readonly id: string; readonly cwd?: string }, seen: readonly string[]): void {
+		if (!this.threads.has(roomId)) {
+			// No server yet: the next turn resumes the thread first.
+			this.threads.set(roomId, { threadId: session.id, seen: new Set(seen), ...(session.cwd ? { cwd: session.cwd } : {}) });
+		}
+	}
+
 	async turn(input: TurnInput, onEvent: (event: AgentEvent) => void, signal: AbortSignal): Promise<void> {
 		const client = await this.ensureServer(await this.options.auth());
 		const room = this.threads.get(input.roomId) ?? { seen: new Set<string>() };
-		const threadParams = { cwd: input.cwd ?? this.options.cwd() ?? null, sandbox: this.options.sandbox, approvalPolicy: 'never', model: this.options.model ?? null };
+		const threadParams = { cwd: input.cwd ?? room.cwd ?? this.options.cwd() ?? null, sandbox: this.options.sandbox, approvalPolicy: 'never', model: this.options.model ?? null };
 
 		if (room.threadId && room.server !== client) {
 			// The app-server restarted (crash, auth change): load the room's thread again.
