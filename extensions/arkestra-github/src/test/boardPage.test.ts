@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { boardHtml } from '../boardHtml';
 import { boardModel } from '../board';
+import { planModel } from '../plan';
 
 test('the board page draws and posts what the user does', async () => {
 const html = boardHtml('n', 'c');
@@ -74,6 +75,13 @@ const title = find(body, (e: any) => e.tag === 'input' && e.attrs.placeholder ==
 title.value = 'New task';
 find(body, (e: any) => e.tag === 'button' && text(e) === 'Create')[0].fire('click');
 assert.ok(posted.some((m: any) => m.type === 'createIssue' && m.title === 'New task' && m.repository === 'o/r'), 'create posted');
+const plan = planModel({ snapshot: snap, rooms: [], git: { base: 'main', baseHead: 'abc1234', tags: ['v1.0'], log: [{ sha: 'abc1234', subject: 'Board (#70)', refs: [] }], branches: new Map() } });
+listeners.message({ data: { type: 'model', model: { ...model, plan } } });
+find(body, (e: any) => e.tag === 'button' && text(e) === 'Plan')[0].fire('click');
+const t3 = text(body);
+assert.ok(t3.includes('Release lanes') && t3.includes('Dependency staircase') && t3.includes('abc1234') && t3.includes('#70') && t3.includes('Live: v1.0'), 'plan drawn');
+find(body, (e: any) => String(e.className ?? '').startsWith('cell') && text(e).includes('Board view'))[0].fire('click');
+assert.ok(posted.some((m: any) => m.type === 'open' && m.url === 'https://github.com/o/r/issues/1'), 'cell opens the task');
 listeners.message({ data: { type: 'screen', screen: { title: 'No GitHub Project for this workspace', text: 'x', actions: [{ label: 'Follow a project…', command: 'setProject' }] } } });
 assert.ok(text(body).includes('No GitHub Project'), 'empty screen');
 

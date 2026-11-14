@@ -17,6 +17,9 @@ export interface RoomInfo {
 	readonly phase: string;
 	readonly agents: number;
 	readonly progress?: { readonly done: number; readonly total: number };
+	readonly items?: readonly { readonly text: string; readonly done: boolean }[];
+	readonly base?: string;
+	readonly branches?: readonly string[];
 }
 
 export type Tone = 'ok' | 'bad' | 'run' | 'muted' | 'warn';
