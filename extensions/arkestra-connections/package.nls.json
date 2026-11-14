@@ -14,5 +14,6 @@
   "machines.empty": "No SSH machine yet.\n[Add an SSH connection](command:arkestra.connections.add)\nDrop local files or folders on a machine or one of its folders to upload them.",
   "openTerminal": "Open a terminal here (drop files into it to upload)",
   "upload": "Upload files here…",
-  "refreshMachines": "Refresh"
+  "refreshMachines": "Refresh",
+  "remove": "Remove this connection"
 }
