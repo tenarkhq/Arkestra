@@ -1,0 +1,70 @@
+{
+  "name": "arkestra-github",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "0.1.0",
+  "publisher": "vscode",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension",
+  "capabilities": {
+    "virtualWorkspaces": false,
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Arkestra · GitHub",
+      "properties": {
+        "arkestra.github.relayUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "%relayUrl%"
+        },
+        "arkestra.github.appSlug": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "%appSlug%"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "arkestra.github.connect",
+        "title": "%connect%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.github.disconnect",
+        "title": "%disconnect%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.github.install",
+        "title": "%install%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.github.log",
+        "title": "%log%",
+        "category": "Arkestra"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "gulp compile-extension:arkestra-github",
+    "watch": "gulp watch-extension:arkestra-github"
+  },
+  "devDependencies": {
+    "@types/node": "24.x"
+  }
+}

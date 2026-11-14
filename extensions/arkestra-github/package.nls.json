@@ -1,0 +1,10 @@
+{
+  "displayName": "Arkestra · GitHub",
+  "description": "The Arkestra GitHub App's events live in the IDE, through the webhook relay: CI, pull requests, reviews, issues and the project board.",
+  "relayUrl": "The webhook relay's address on the edge server, for example `https://edge.example.com/arkestra`. The client token is stored with **Arkestra: Connect to the GitHub relay**.",
+  "appSlug": "The Arkestra GitHub App's slug (from its page on GitHub), for the install link.",
+  "connect": "Connect to the GitHub relay…",
+  "disconnect": "Disconnect from the GitHub relay",
+  "install": "Install the Arkestra GitHub App on a repository…",
+  "log": "Show the GitHub event log"
+}
