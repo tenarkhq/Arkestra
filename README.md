@@ -32,6 +32,10 @@ system language and can be switched with one click.
 3. **Local and remote CLIs.** Every agent runs through a CLI, on the local
    machine or on a server over SSH. A room can mix them, for example a local
    Claude with a Codex running on a server.
+   Files move over SSH by drag and drop: drop files or folders from the
+   desktop onto a remote folder to upload them (SFTP), drag them out to
+   download, with progress and cancel, for any connection, even without
+   opening that project.
 4. **Projects and categories.** Threads are grouped into projects (a project is
    a folder or repository, local or over SSH) and tagged with categories
    (coding, audit, brief, idea). Threads can be pinned.
