@@ -22,5 +22,9 @@
   "command.unpin": "Unpin thread",
   "command.setCategory": "Set category…",
   "command.rename": "Rename thread…",
-  "showLane": "Show an agent lane"
+  "showLane": "Show an agent lane",
+  "command.template": "New room from a 2ARK template (coding, code audit, brief check)",
+  "command.continue": "Continue a template room (after its limit or a pause)",
+  "command.approve": "Approve the slice plan",
+  "command.newTemplateRoom": "New room from a 2ARK template"
 }

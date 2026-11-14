@@ -7,6 +7,8 @@ export interface Message {
 	readonly at: string;
 	readonly author: { readonly kind: 'user' | 'agent' | 'system'; readonly id: string; readonly name: string };
 	readonly text: string;
+	/** Agent ids this message is for (a template's instruction); absent: everyone. */
+	readonly to?: readonly string[];
 }
 
 export interface Readiness {

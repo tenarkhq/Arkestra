@@ -135,10 +135,14 @@ test('cancelling a turn interrupts it', async () => {
 
 test('a server that dies mid-turn ends the turn; the next turn restarts it and resumes the room thread', async () => {
 	const { agent, log, requests } = await setup();
-	await agent.turn({ roomId: 'r', transcript: [msg('user', 'user', 'hello')] }, () => { }, never());
-	await assert.rejects(agent.turn({ roomId: 'r', transcript: [msg('user', 'user', 'hello'), msg('agent', 'codex', 'Done.'), msg('user', 'user', 'DIE')] }, () => { }, never()), /exited with 3/);
+	// The room keeps its messages (and their ids) from turn to turn.
+	const t: Message[] = [msg('user', 'user', 'hello')];
+	await agent.turn({ roomId: 'r', transcript: [...t] }, () => { }, never());
+	t.push(msg('agent', 'codex', 'Done.'), msg('user', 'user', 'DIE'));
+	await assert.rejects(agent.turn({ roomId: 'r', transcript: [...t] }, () => { }, never()), /exited with 3/);
 	// The room keeps the failed request and records the error as Codex's reply.
-	await agent.turn({ roomId: 'r', transcript: [msg('user', 'user', 'hello'), msg('agent', 'codex', 'Done.'), msg('user', 'user', 'DIE'), msg('agent', 'codex', '[error] codex app-server exited with 3'), msg('user', 'user', 'again')] }, () => { }, never());
+	t.push(msg('agent', 'codex', '[error] codex app-server exited with 3'), msg('user', 'user', 'again'));
+	await agent.turn({ roomId: 'r', transcript: [...t] }, () => { }, never());
 	assert.equal((await log()).filter(m => m.spawn).length, 2);
 	assert.deepEqual((await requests('thread/resume')).map(m => m.params.threadId), ['th1']);
 	assert.equal((await requests('turn/start')).at(-1).params.input[0].text, '[You]\nDIE\n\n[You]\nagain');

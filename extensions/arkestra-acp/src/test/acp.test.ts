@@ -169,3 +169,21 @@ test('on an SSH machine: files through commands there, terminals change folder a
 	terminals.release(terminalId);
 	assert.throws(() => terminals.output(terminalId), /No terminal/);
 });
+
+test('by id, not by count: a message written during the turn comes next time; another agent\'s instruction never', async () => {
+	const { agent, log } = await setup();
+	try {
+		const m1 = msg(1, 'user', 'me', 'start');
+		await turn(agent, 'r1', [m1]);
+		// While Fake worked, Codex wrote; Fake's answer came after it.
+		const during = msg(2, 'agent', 'codex', 'meanwhile');
+		const own = msg(3, 'agent', 'fake', 'answer');
+		const forCodex: Message = { ...msg(4, 'system', 'room', 'only for codex'), to: ['codex'] };
+		const forMe: Message = { ...msg(5, 'system', 'room', 'only for fake'), to: ['fake'] };
+		await turn(agent, 'r1', [m1, during, own, forCodex, forMe]);
+		const last = (await log()).filter(l => l.startsWith('prompt')).at(-1)!;
+		assert.ok(last.endsWith(': "[codex (agent)]\\nmeanwhile\\n\\n[room] only for fake"'), last);
+	} finally {
+		agent.dispose();
+	}
+});

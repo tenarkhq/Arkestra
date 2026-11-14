@@ -21,7 +21,7 @@ export const ROOM_INSTRUCTIONS = 'You are GPT in an Arkestra room: a thread shar
 
 /** The thread as Responses API input: GPT's own messages as assistant turns, everyone else labelled. */
 export function toInput(messages: readonly Message[], selfId: string): { role: 'user' | 'assistant'; content: string }[] {
-	return messages.map(m => m.author.kind === 'agent' && m.author.id === selfId
+	return messages.filter(m => !m.to || m.to.includes(selfId)).map(m => m.author.kind === 'agent' && m.author.id === selfId
 		? { role: 'assistant', content: m.text }
 		: {
 			role: 'user', content: m.author.kind === 'user' ? `[${m.author.name}]\n${m.text}`

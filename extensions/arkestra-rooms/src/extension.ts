@@ -11,6 +11,12 @@ import { AgentRegistry, type Agent, type InviteEntry } from './agent';
 import { AgentNotReadyError, Room, newRoomState } from './room';
 import { RoomStore } from './store';
 import { laneAgent, laneEntries, type LaneEntry } from './lanes';
+import { copyFile, mkdir, stat } from 'node:fs/promises';
+import { templateForm } from './templateForm';
+import { GitTemplateIO, createWorkTrees } from './templates/gitio';
+import { TemplateRun } from './templates/run';
+import type { Role } from './templates/signals';
+import type { CodeState, ReviewState, TemplateState } from './templates/types';
 import { ROOM_ID_KEY, ROOM_SCHEME, groupThreads, historyTurns, projectName, roomIdFromHistory, roomIdFromSessionPath, summarize, titleFrom, type ProjectThreads, type ThreadSummary } from './threads';
 
 /** What adapter extensions (Claude Code, Codex, OpenAI, ACP) receive. */
@@ -144,6 +150,94 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	const inviteButton = (stream: vscode.ChatResponseStream, room: Room) =>
 		stream.button({ command: 'arkestra.rooms.invite', arguments: [room.id], title: vscode.l10n.t('Invite an agent') });
 
+	// ---- 2ARK template rooms (review, coding, audit) ----------------------------------------
+	const runs = new Map<string, TemplateRun>();
+	const ensureRun = (room: Room): TemplateRun | undefined => {
+		const state = room.state.template;
+		if (!state) {
+			return undefined;
+		}
+		let run = runs.get(room.id);
+		if (!run) {
+			const io = new GitTemplateIO(() => state.code ? { dirs: state.code.dirs, branches: state.code.branches, coordinator: state.code.coordinator } : undefined);
+			run = new TemplateRun(room, state, io, (_role, agentId, event) => {
+				switch (event.kind) {
+					case 'start': activity.start(room.id, agentId); break;
+					case 'tool': activity.tool(room.id, agentId, event.text); break;
+					case 'error': activity.error(room.id, agentId, event.text); break;
+					case 'end': activity.end(room.id, agentId); break;
+				}
+			});
+			runs.set(room.id, run);
+		}
+		return run;
+	};
+
+	/** Streams a template room into a chat response until nobody works; `pauseOnCancel`: the stop button pauses the room. */
+	const streamRun = async (run: TemplateRun, stream: vscode.ChatResponseStream, token: vscode.CancellationToken, pauseOnCancel: boolean) => {
+		const quote = (text: string) => text.replace(/\n/g, '\n> ');
+		const sub = run.on(e => {
+			switch (e.kind) {
+				case 'start': stream.progress(vscode.l10n.t('{0} is working…', e.name)); break;
+				case 'agent':
+					if (e.event.kind === 'tool') {
+						stream.progress(`${e.name}: ${e.event.text}`);
+					}
+					break;
+				case 'answer': if (e.text.trim()) { stream.markdown(`**${e.name}**\n\n${e.text}\n\n`); } break;
+				case 'notice': stream.markdown(`_${e.text}_\n\n`); break;
+				case 'wait': stream.markdown(`> **${vscode.l10n.t('Your decision is needed')}** · ${e.name}\n>\n> ${quote(e.question)}\n\n`); break;
+				case 'end': stream.markdown(`**${vscode.l10n.t('Done')}:** ${e.reason}\n\n`); break;
+				case 'paused': stream.markdown(`**${vscode.l10n.t('Paused')}:** ${e.reason}\n\n`); break;
+			}
+		});
+		const cancel = token.onCancellationRequested(() => { if (pauseOnCancel) { run.pause(vscode.l10n.t('stopped by you')); } });
+		try {
+			const outcome = await Promise.race([run.settled(), new Promise<'cancelled'>(resolve => token.onCancellationRequested(() => resolve('cancelled')))]);
+			if (outcome === 'ended' && run.state.pending) {
+				stream.markdown(vscode.l10n.t('The room reached its limit of {0} hand-overs. Type /continue to go on.', run.state.max) + '\n\n');
+			} else if (outcome === 'waiting' && run.state.code?.planState === 'waiting') {
+				stream.markdown(vscode.l10n.t('Approve the slice plan with /approve, or write what to change.') + '\n\n');
+			} else if (outcome === 'paused') {
+				stream.markdown(vscode.l10n.t('Write into the room or type /continue to resume.') + '\n\n');
+			}
+		} finally {
+			sub.dispose();
+			cancel.dispose();
+		}
+	};
+
+	/** The user's word in a template room goes to the template, not to a plain round. */
+	const templateTurn = async (room: Room, request: vscode.ChatRequest, stream: vscode.ChatResponseStream, token: vscode.CancellationToken) => {
+		const run = ensureRun(room)!;
+		run.unpause();
+		if (request.command === 'continue') {
+			if (run.state.pending) {
+				run.engine.resume();
+			} else if (request.prompt.trim()) {
+				room.addUser(request.prompt);
+				await run.engine.user(request.prompt, run.addressed(request.prompt));
+			} else {
+				run.state.ended = undefined;
+				for (const role of ['A', 'B'] as Role[]) {
+					if (run.state.waiting[role] === undefined) {
+						continue;
+					}
+					await run.engine.user(vscode.l10n.t('Continue.'), [role]);
+				}
+			}
+		} else if (request.command === 'approve') {
+			if (request.prompt.trim()) {
+				room.addUser(request.prompt);
+			}
+			run.engine.approvePlan(request.prompt.trim());
+		} else {
+			room.addUser(request.prompt);
+			await run.engine.user(request.prompt, run.addressed(request.prompt));
+		}
+		await streamRun(run, stream, token, true);
+	};
+
 	const handler: vscode.ChatRequestHandler = async (request, chatContext, stream, token): Promise<vscode.ChatResult> => {
 		// This thread's room: a native Arkestra session carries it in its URI, an @room chat in
 		// its history; a thread without one (a new chat) gets a new room.
@@ -183,6 +277,16 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 				stream.markdown(`- **${entry.agent.name}** · ${entry.agent.detail} · ${describe(entry)}\n`);
 			}
 			inviteButton(stream, room);
+			return result;
+		}
+
+		if (request.command === 'template') {
+			await vscode.commands.executeCommand('arkestra.rooms.newTemplateRoom');
+			return result;
+		}
+
+		if (room.state.template) {
+			await templateTurn(room, request, stream, token);
 			return result;
 		}
 
@@ -349,7 +453,14 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			const history = historyTurns(room?.messages ?? []).map(turn => turn.kind === 'request'
 				? new RequestTurn(turn.prompt, undefined, [], ROOM_SCHEME, [])
 				: new vscode.ChatResponseTurn2([new vscode.ChatResponseMarkdownPart(turn.markdown)], { metadata: room ? { [ROOM_ID_KEY]: room.id } : {} }, ROOM_SCHEME));
-			return { ...(room ? { title: room.state.title } : {}), history, requestHandler: handler };
+			const run = room && runs.get(room.id);
+			return {
+				...(room ? { title: room.state.title } : {}),
+				history,
+				requestHandler: handler,
+				// A template room still working streams on in the opened thread.
+				...(run?.busy ? { activeResponseCallback: (stream: vscode.ChatResponseStream, token: vscode.CancellationToken) => streamRun(run, stream, token, false) } : {}),
+			};
 		},
 	};
 
@@ -433,6 +544,54 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			const id = threadId(arg) ?? (await currentRoom())?.id;
 			if (id) {
 				await vscode.commands.executeCommand('vscode.open', sessionUri(id), typeof column === 'number' ? { viewColumn: column } : undefined);
+			}
+		}),
+		vscode.commands.registerCommand('arkestra.rooms.newTemplateRoom', async () => {
+			const req = await templateForm(registry, (await currentRoom())?.roster);
+			if (!req) {
+				return;
+			}
+			try {
+				const room = await createRoom(req.title);
+				for (const role of ['A', 'B'] as Role[]) {
+					await room.invite(req.members[role].id);
+				}
+				const folder = path.join(context.globalStorageUri.fsPath, 'room-files', room.id);
+				await mkdir(folder, { recursive: true });
+				let review: ReviewState | undefined;
+				if (req.review) {
+					const project = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+					const local = req.review.source && !/^https?:/.test(req.review.source) ? path.resolve(project, req.review.source) : undefined;
+					const isFile = local ? await stat(local).then(st => st.isFile(), () => false) : false;
+					if (local && isFile) {
+						await copyFile(local, path.join(folder, 'v1.md'));
+					}
+					review = {
+						reviewer: req.review.reviewer,
+						prompt: req.review.source && !isFile ? `${req.review.prompt}\n\nAz anyag: ${req.review.source}` : req.review.prompt,
+						...(req.review.source ? { source: req.review.source } : {}),
+						version: isFile ? 1 : 0,
+						strict: req.review.strict,
+					};
+				}
+				let code: CodeState | undefined;
+				if (req.code) {
+					const trees = await createWorkTrees(req.code.repo, req.code.base, room.id, { A: req.members.A.name, B: req.members.B.name });
+					code = { ...req.code, ...trees };
+				}
+				const state: TemplateState = {
+					type: req.type, members: req.members, folder, rounds: 0, max: req.max, briefed: {}, waiting: {},
+					...(review ? { review } : {}),
+					...(code ? { code } : {}),
+					...(req.audit ? { audit: { ...req.audit, phase: 'audit' as const, done: {} } } : {}),
+				};
+				room.state.template = state;
+				await store.save(room.state);
+				ensureRun(room)!.engine.start();
+				refreshThreads();
+				await vscode.commands.executeCommand('vscode.open', sessionUri(room.id));
+			} catch (error) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('The template room could not start: {0}', error instanceof Error ? error.message : String(error)));
 			}
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.newThread', async () => {

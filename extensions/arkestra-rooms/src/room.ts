@@ -2,6 +2,7 @@
  *  Arkestra. A room: one thread that any number of agents share, joinable mid-run.
  *--------------------------------------------------------------------------------------------*/
 
+import type { TemplateState } from './templates/types';
 import type { Agent, AgentEvent, AgentRegistry, Readiness } from './agent';
 
 export type AuthorKind = 'user' | 'agent' | 'system';
@@ -17,6 +18,8 @@ export interface Message {
 	readonly at: string;
 	readonly author: Author;
 	readonly text: string;
+	/** Agent ids this message is for (a template's instruction); absent: everyone. */
+	readonly to?: readonly string[];
 }
 
 export interface RoomState {
@@ -31,6 +34,8 @@ export interface RoomState {
 	category?: string;
 	/** Pinned threads come first in their project. */
 	pinned?: boolean;
+	/** A 2ARK template room's state (review, coding, audit), when the room runs one. */
+	template?: TemplateState;
 }
 
 export class AgentNotReadyError extends Error {
@@ -112,13 +117,39 @@ export class Room {
 		}
 	}
 
-	private async runTurn(agent: Agent, sink: TurnSink, signal: AbortSignal): Promise<void> {
+	/** The user's message without a round: a template room routes it itself. */
+	addUser(text: string): void {
+		this.append({ kind: 'user', id: 'user', name: 'You' }, text);
+	}
+
+	/** A room line, for everyone or only for the agents in `to` (a template's instruction). */
+	post(text: string, to?: readonly string[], name = 'Arkestra'): void {
+		this.append({ kind: 'system', id: 'room', name }, text, to);
+	}
+
+	/** One turn of one agent with the transcript; resolves to what it wrote. */
+	async turnOf(agentId: string, sink: TurnSink, signal: AbortSignal): Promise<string> {
+		const agent = this.registry.get(agentId);
+		if (!agent) {
+			throw new Error(`unknown agent: ${agentId}`);
+		}
+		return this.runTurn(agent, sink, signal);
+	}
+
+	/** The room saved the template state in place; listeners save the room. */
+	touch(): void {
+		for (const listener of this.listeners) {
+			listener();
+		}
+	}
+
+	private async runTurn(agent: Agent, sink: TurnSink, signal: AbortSignal): Promise<string> {
 		let reply = '';
 		sink(agent, { kind: 'start' });
 		try {
 			await agent.turn({ roomId: this.id, transcript: [...this.state.messages] }, event => {
 				if (event.kind === 'text') {
-					reply += event.text;
+					reply += reply ? `\n\n${event.text}` : event.text;
 				}
 				sink(agent, event);
 			}, signal);
@@ -131,10 +162,11 @@ export class Room {
 		if (reply) {
 			this.append({ kind: 'agent', id: agent.id, name: agent.name }, reply);
 		}
+		return reply;
 	}
 
-	private append(author: Author, text: string): void {
-		this.state.messages.push({ id: newId(), at: this.now().toISOString(), author, text });
+	private append(author: Author, text: string, to?: readonly string[]): void {
+		this.state.messages.push({ id: newId(), at: this.now().toISOString(), author, text, ...(to?.length ? { to: [...to] } : {}) });
 		for (const listener of this.listeners) {
 			listener();
 		}

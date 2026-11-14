@@ -59,11 +59,20 @@ export function historyTurns(messages: readonly Message[]): HistoryTurn[] {
 			}
 			continue;
 		}
-		const part = m.author.kind === 'agent' ? `**${m.author.name}**\n\n${m.text}` : `_${m.text}_`;
+		const part = m.author.kind === 'agent' ? `**${m.author.name}**\n\n${m.text}`
+			: m.to ? `_${m.author.name}: ${instructionLine(m.text)}_`
+				: `_${m.text}_`;
 		(turns.length ? response : leading).push(part);
 	}
 	flush();
 	return turns;
+}
+
+/** A template's instruction in the thread: its own part (after the briefing), first line. */
+export function instructionLine(text: string): string {
+	const own = text.split(/\n---\n/).at(-1)!.trim();
+	const first = own.split('\n').find(l => l.trim())?.trim() ?? '';
+	return first.length > 160 ? `${first.slice(0, 157)}…` : first;
 }
 
 export interface ThreadSummary {

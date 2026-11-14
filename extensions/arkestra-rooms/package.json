@@ -46,6 +46,18 @@
           {
             "name": "new",
             "description": "%command.new%"
+          },
+          {
+            "name": "template",
+            "description": "%command.template%"
+          },
+          {
+            "name": "continue",
+            "description": "%command.continue%"
+          },
+          {
+            "name": "approve",
+            "description": "%command.approve%"
           }
         ]
       }
@@ -109,6 +121,12 @@
         "command": "arkestra.rooms.showLane",
         "title": "%showLane%",
         "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.rooms.newTemplateRoom",
+        "title": "%command.newTemplateRoom%",
+        "category": "Arkestra",
+        "icon": "$(rocket)"
       }
     ],
     "chatSessions": [
@@ -136,6 +154,18 @@
           {
             "name": "new",
             "description": "%command.new%"
+          },
+          {
+            "name": "template",
+            "description": "%command.template%"
+          },
+          {
+            "name": "continue",
+            "description": "%command.continue%"
+          },
+          {
+            "name": "approve",
+            "description": "%command.approve%"
           }
         ]
       }
@@ -170,6 +200,11 @@
           "command": "arkestra.rooms.newThread",
           "when": "view == arkestra.threads",
           "group": "navigation"
+        },
+        {
+          "command": "arkestra.rooms.newTemplateRoom",
+          "when": "view == arkestra.threads",
+          "group": "navigation@2"
         }
       ],
       "view/item/context": [
