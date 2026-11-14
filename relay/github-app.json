@@ -4,7 +4,7 @@
 	"description": "Arkestra agent IDE: live CI, pull requests, reviews, issues and project board events in the IDE, and changes made in the IDE written back.",
 	"public": false,
 	"hook_attributes": {
-		"url": "https://EDGE_HOST/github/webhook",
+		"url": "https://EDGE_HOST/arkestra/github/webhook",
 		"active": true
 	},
 	"request_oauth_on_install": false,
