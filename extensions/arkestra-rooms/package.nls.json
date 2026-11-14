@@ -21,5 +21,6 @@
   "command.pin": "Pin thread",
   "command.unpin": "Unpin thread",
   "command.setCategory": "Set category…",
-  "command.rename": "Rename thread…"
+  "command.rename": "Rename thread…",
+  "showLane": "Show an agent lane"
 }

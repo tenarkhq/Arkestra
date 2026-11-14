@@ -10,6 +10,7 @@ import { ActivityBoard, type AgentActivity } from './activity';
 import { AgentRegistry, type Agent, type InviteEntry } from './agent';
 import { AgentNotReadyError, Room, newRoomState } from './room';
 import { RoomStore } from './store';
+import { laneAgent, laneEntries, type LaneEntry } from './lanes';
 import { ROOM_ID_KEY, ROOM_SCHEME, groupThreads, historyTurns, projectName, roomIdFromHistory, roomIdFromSessionPath, summarize, titleFrom, type ProjectThreads, type ThreadSummary } from './threads';
 
 /** What adapter extensions (Claude Code, Codex, OpenAI, ACP) receive. */
@@ -252,6 +253,59 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		activity.onDidChange(roomId => { if (roomId === current?.id) { void renderAgents(); } }),
 		vscode.window.registerWebviewPanelSerializer('arkestra.agents', { deserializeWebviewPanel: async panel => adoptAgentsPanel(panel) }),
 		vscode.commands.registerCommand('arkestra.rooms.showAgents', showAgents),
+	);
+
+	// Pult lanes: one tile per agent slot of the current room (slot n = the room's n-th agent).
+	const lanes = new Map<number, vscode.WebviewPanel>();
+	const renderLane = async (slot: number) => {
+		const panel = lanes.get(slot);
+		if (!panel) {
+			return;
+		}
+		const room = await currentRoom();
+		const agentId = room ? laneAgent(room.roster, slot) : undefined;
+		const agent = agentId ? registry.get(agentId) : undefined;
+		panel.title = agentId ? agent?.name ?? agentId : vscode.l10n.t('Free lane');
+		panel.webview.html = laneHtml(slot, room && agentId ? {
+			name: agent?.name ?? agentId,
+			detail: agent?.detail ?? vscode.l10n.t('not available now'),
+			activity: activity.get(room.id, agentId),
+			entries: laneEntries(room.messages, agentId),
+		} : undefined, !!room);
+	};
+	const renderLanes = () => { for (const slot of lanes.keys()) { void renderLane(slot); } };
+	const adoptLane = (panel: vscode.WebviewPanel, slot: number) => {
+		lanes.get(slot)?.dispose();
+		lanes.set(slot, panel);
+		panel.iconPath = new vscode.ThemeIcon('person');
+		panel.webview.options = { enableScripts: true };
+		panel.onDidDispose(() => { if (lanes.get(slot) === panel) { lanes.delete(slot); } });
+		panel.webview.onDidReceiveMessage(async (message: { type?: string }) => {
+			if (message.type === 'invite') {
+				await vscode.commands.executeCommand('arkestra.rooms.invite', (await currentRoom())?.id);
+			}
+		});
+		void renderLane(slot);
+	};
+	const showLane = async (slot?: unknown, column?: unknown) => {
+		const n = typeof slot === 'number' && Number.isInteger(slot) && slot >= 0 ? slot : 0;
+		const viewColumn = typeof column === 'number' && column > 0 ? column : vscode.ViewColumn.Beside;
+		const existing = lanes.get(n);
+		if (existing) {
+			existing.reveal(viewColumn, true);
+			return;
+		}
+		adoptLane(vscode.window.createWebviewPanel('arkestra.lane', vscode.l10n.t('Lane'), { viewColumn, preserveFocus: true }, { enableScripts: true }), n);
+	};
+	context.subscriptions.push(
+		currentChanged.event(renderLanes),
+		activity.onDidChange(roomId => { if (roomId === current?.id) { renderLanes(); } }),
+		vscode.window.registerWebviewPanelSerializer('arkestra.lane', {
+			deserializeWebviewPanel: async (panel, state: { slot?: unknown } | undefined) => adoptLane(panel, typeof state?.slot === 'number' ? state.slot : 0),
+		}),
+		vscode.commands.registerCommand('arkestra.rooms.showLane', showLane),
+		// The agents of the current room in answer order; Pult sizes its lanes from it.
+		vscode.commands.registerCommand('arkestra.rooms.roster', async () => [...(await currentRoom())?.roster ?? []]),
 	);
 
 	const participant = vscode.chat.createChatParticipant('arkestra.room', handler);
@@ -504,6 +558,62 @@ function agentsHtml(rows: readonly AgentRow[] | undefined): string {
 	<script nonce="${nonce}">
 		const vscode = acquireVsCodeApi();
 		document.getElementById('invite').addEventListener('click', () => vscode.postMessage({ type: 'invite' }));
+	</script>
+</body></html>`;
+}
+
+interface LaneView {
+	readonly name: string;
+	readonly detail: string;
+	readonly activity: AgentActivity;
+	readonly entries: readonly LaneEntry[];
+}
+
+function laneHtml(slot: number, lane: LaneView | undefined, hasRoom: boolean): string {
+	const nonce = randomBytes(16).toString('base64');
+	const time = (iso: string) => iso ? new Date(iso).toLocaleTimeString(vscode.env.language, { hour: '2-digit', minute: '2-digit' }) : '';
+	let body: string;
+	if (!lane) {
+		body = `<div class="free"><p class="mut">${escapeHtml(hasRoom ? vscode.l10n.t('No agent in this lane yet.') : vscode.l10n.t('No room yet. Start one in the chat with @room.'))}</p>
+			${hasRoom ? `<button id="invite">+ ${escapeHtml(vscode.l10n.t('Invite an agent'))}</button>` : ''}</div>`;
+	} else {
+		const a = lane.activity;
+		const cls = a.state === 'answering' ? 'busy' : a.state === 'queued' ? 'wait' : 'idle';
+		const state = a.state === 'answering' ? vscode.l10n.t('working') : a.state === 'queued' ? vscode.l10n.t('waiting for its turn') : vscode.l10n.t('idle');
+		const entries = lane.entries.map(e => `<div class="entry"><div class="mut when">${escapeHtml(time(e.at))}</div><div class="text">${escapeHtml(e.text)}</div></div>`).join('');
+		body = `<header><div class="top"><span class="dot ${cls}"></span><b>${escapeHtml(lane.name)}</b><span class="${cls} state">${escapeHtml(state)}</span></div>
+			<div class="mut">${escapeHtml(lane.detail)}</div></header>
+			<main>${entries || `<p class="mut">${escapeHtml(vscode.l10n.t('Nothing written in this thread yet.'))}</p>`}
+			${a.state === 'answering' && a.tool ? `<div class="entry live"><div class="mut when">${escapeHtml(time(a.since))}</div><div class="text">${escapeHtml(a.tool)}</div></div>` : ''}
+			${a.error ? `<div class="entry err">${escapeHtml(a.error)}</div>` : ''}</main>`;
+	}
+	return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+<style nonce="${nonce}">
+	body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); padding: 0; margin: 0; }
+	header { position: sticky; top: 0; padding: 10px 12px 8px; background: var(--vscode-editor-background); border-bottom: 1px solid var(--vscode-panel-border); display: grid; gap: 2px; }
+	.top { display: flex; align-items: center; gap: 8px; }
+	.state { margin-left: auto; font-size: .9em; }
+	.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--vscode-descriptionForeground); flex: none; }
+	.dot.busy { background: var(--vscode-progressBar-background); }
+	.dot.wait { background: var(--vscode-editorWarning-foreground); }
+	main, .free { padding: 6px 12px 16px; }
+	.entry { padding: 8px 0; border-bottom: 1px solid var(--vscode-panel-border); display: grid; gap: 3px; }
+	.entry.live .text { color: var(--vscode-progressBar-background); }
+	.text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
+	.when { font-size: .85em; }
+	.mut { color: var(--vscode-descriptionForeground); }
+	.wait { color: var(--vscode-editorWarning-foreground); }
+	.err { color: var(--vscode-errorForeground); }
+	button { font: inherit; padding: 4px 12px; border: 0; border-radius: 4px; cursor: pointer; background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+	button:hover { background: var(--vscode-button-hoverBackground); }
+</style></head><body>
+	${body}
+	<script nonce="${nonce}">
+		const vscode = acquireVsCodeApi();
+		vscode.setState({ slot: ${slot} });
+		document.getElementById('invite')?.addEventListener('click', () => vscode.postMessage({ type: 'invite' }));
+		scrollTo(0, document.body.scrollHeight);
 	</script>
 </body></html>`;
 }

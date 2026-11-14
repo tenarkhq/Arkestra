@@ -16,7 +16,8 @@
     "onChatParticipant:arkestra.room",
     "onChatSession:arkestra-room",
     "onView:arkestra.threads",
-    "onWebviewPanel:arkestra.agents"
+    "onWebviewPanel:arkestra.agents",
+    "onWebviewPanel:arkestra.lane"
   ],
   "main": "./out/extension",
   "capabilities": {
@@ -102,6 +103,11 @@
       {
         "command": "arkestra.rooms.rename",
         "title": "%command.rename%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.rooms.showLane",
+        "title": "%showLane%",
         "category": "Arkestra"
       }
     ],
@@ -222,6 +228,10 @@
         },
         {
           "command": "arkestra.rooms.rename",
+          "when": "false"
+        },
+        {
+          "command": "arkestra.rooms.showLane",
           "when": "false"
         }
       ]

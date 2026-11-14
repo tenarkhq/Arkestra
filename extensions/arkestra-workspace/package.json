@@ -32,6 +32,11 @@
         "category": "Arkestra"
       },
       {
+        "command": "arkestra.workspace.pult",
+        "title": "%pult%",
+        "category": "Arkestra"
+      },
+      {
         "command": "arkestra.workspace.layout",
         "title": "%layout%",
         "category": "Arkestra"
@@ -46,7 +51,25 @@
         "title": "%deleteLayout%",
         "category": "Arkestra"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "%config.title%",
+      "properties": {
+        "arkestra.workspace.defaultLayout": {
+          "type": "string",
+          "enum": [
+            "mozaik",
+            "pult"
+          ],
+          "enumDescriptions": [
+            "%config.mozaik%",
+            "%config.pult%"
+          ],
+          "default": "mozaik",
+          "description": "%config.defaultLayout%"
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "gulp compile-extension:arkestra-workspace",
