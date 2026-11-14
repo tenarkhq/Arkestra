@@ -17,7 +17,8 @@
     "onChatSession:arkestra-room",
     "onView:arkestra.threads",
     "onWebviewPanel:arkestra.agents",
-    "onWebviewPanel:arkestra.lane"
+    "onWebviewPanel:arkestra.lane",
+    "onWebviewPanel:arkestra.artifacts"
   ],
   "main": "./out/extension",
   "capabilities": {
@@ -245,6 +246,12 @@
         "command": "arkestra.shared.remember",
         "title": "%shared.remember%",
         "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.artifacts.open",
+        "title": "%artifacts.open%",
+        "category": "Arkestra",
+        "icon": "$(layers)"
       }
     ],
     "chatSessions": [
@@ -372,6 +379,11 @@
           "command": "arkestra.checkpoints.refresh",
           "when": "view == arkestra.checkpoints",
           "group": "navigation"
+        },
+        {
+          "command": "arkestra.artifacts.open",
+          "when": "view == arkestra.threads",
+          "group": "navigation@5"
         }
       ],
       "view/item/context": [
