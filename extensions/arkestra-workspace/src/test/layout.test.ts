@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { capture, leafCount, mosaic, readLayout, tileFromTab } from '../layout';
+import { PULT_MAX_LANES, capture, leafCount, mosaic, pult, readLayout, tileFromTab } from '../layout';
 
 test('the default Mozaik has four tiles: room, agents, code, terminal', () => {
 	const m = mosaic();
@@ -41,4 +41,21 @@ test('tabs that a layout cannot bring back are left out', () => {
 	assert.equal(tileFromTab({ type: 'other' }), undefined);
 	assert.equal(tileFromTab({ type: 'webview', viewType: 'mainThreadWebview-markdown.preview' }), undefined);
 	assert.deepEqual(tileFromTab({ type: 'diff', original: 'git:/a', modified: 'file:///a' }), { kind: 'diff', original: 'git:/a', modified: 'file:///a' });
+});
+
+test('Pult: one lane per agent on top, then room, code and terminal; one to four lanes', () => {
+	const p = pult(3);
+	assert.equal(p.layout.orientation, 1);
+	assert.equal(leafCount(p.layout), 6);
+	assert.deepEqual(p.tiles, [[{ kind: 'lane', slot: 0 }], [{ kind: 'lane', slot: 1 }], [{ kind: 'lane', slot: 2 }], [{ kind: 'room' }], [], [{ kind: 'terminal' }]]);
+	assert.equal(leafCount(pult(0).layout), 4, 'an empty room still gets one lane to invite into');
+	assert.equal(leafCount(pult(9).layout), PULT_MAX_LANES + 3);
+	assert.deepEqual(readLayout(JSON.parse(JSON.stringify(pult(2)))), pult(2));
+});
+
+test('lanes are captured in grid order and a bad lane slot is dropped', () => {
+	const grid = { orientation: 0 as const, groups: [{}, {}, {}] };
+	const lane = { type: 'webview' as const, viewType: 'mainThreadWebview-arkestra.lane' };
+	assert.deepEqual(capture('x', grid, [[lane], [{ type: 'chat' }], [lane]]).tiles, [[{ kind: 'lane', slot: 0 }], [{ kind: 'room' }], [{ kind: 'lane', slot: 1 }]]);
+	assert.deepEqual(readLayout({ name: 'x', layout: grid, tiles: [[{ kind: 'lane', slot: -1 }], [{ kind: 'lane', slot: 1.5 }], [{ kind: 'lane', slot: 2 }]] })?.tiles, [[], [], [{ kind: 'lane', slot: 2 }]]);
 });

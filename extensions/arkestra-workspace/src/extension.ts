@@ -1,14 +1,16 @@
 /*---------------------------------------------------------------------------------------------
- *  Arkestra. Mozaik workspace: every part (room, agents, code, terminal) is a tile in the
- *  editor grid, so each can be dragged, split and maximised like an editor. The default
- *  Mozaik opens on first start; layouts can be saved by name and brought back.
+ *  Arkestra. Mozaik and Pult workspaces: every part (room, agents, lanes, code, terminal) is
+ *  a tile in the editor grid, so each can be dragged, split and maximised like an editor.
+ *  The default layout (Mozaik unless set to Pult) opens on first start; layouts can be saved
+ *  by name and brought back, and the status bar switcher shows and changes the current one.
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { capture, mosaic, readLayout, type EditorLayout, type SavedLayout, type TabDescriptor, type Tile } from './layout';
+import { capture, mosaic, pult, readLayout, type EditorLayout, type SavedLayout, type TabDescriptor, type Tile } from './layout';
 
 const LAYOUTS = 'arkestra.workspace.layouts';
 const INITIALIZED = 'arkestra.workspace.initialized';
+const CURRENT = 'arkestra.workspace.current';
 const FOCUS_GROUP = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth'].map(n => `workbench.action.focus${n}EditorGroup`);
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -50,6 +52,9 @@ export function activate(context: vscode.ExtensionContext): void {
 			case 'agents':
 				await vscode.commands.executeCommand('arkestra.rooms.showAgents', column);
 				break;
+			case 'lane':
+				await vscode.commands.executeCommand('arkestra.rooms.showLane', tile.slot, column);
+				break;
 			case 'terminal':
 				if (!has(column, 'terminal')) {
 					vscode.window.createTerminal({ location: { viewColumn: column } });
@@ -64,34 +69,66 @@ export function activate(context: vscode.ExtensionContext): void {
 		}
 	};
 
+	const mosaicLayout = () => mosaic(vscode.l10n.t('Mozaik'));
+	const pultLayout = async () => pult((await vscode.commands.executeCommand<string[] | undefined>('arkestra.rooms.roster'))?.length ?? 0, vscode.l10n.t('Pult · per agent'));
+
+	// The switcher: the current layout's name in the status bar; a click offers the others.
+	const switcher = vscode.window.createStatusBarItem('arkestra.workspace.layout', vscode.StatusBarAlignment.Right, 100);
+	switcher.name = vscode.l10n.t('Layout');
+	switcher.command = 'arkestra.workspace.layout';
+	switcher.tooltip = vscode.l10n.t('Layout: click to switch');
+	const showCurrent = () => {
+		switcher.text = `$(layout) ${context.workspaceState.get<string>(CURRENT) ?? vscode.l10n.t('Layout')}`;
+		switcher.show();
+	};
+
 	const apply = async (layout: SavedLayout) => {
-		// Editors already open stay; the grid takes the new shape and the tiles are filled in.
+		// Arkestra tiles the new layout does not have are closed, not squeezed into its groups;
+		// lanes are reopened in their new places. Other editors already open stay.
+		const kinds = new Set(layout.tiles.flat().map(t => t.kind));
+		const stale = vscode.window.tabGroups.all.flatMap(g => g.tabs).filter(tab => {
+			const d = describe(tab);
+			return d.type === 'webview' && (/(^|-)arkestra\.lane$/.test(d.viewType) || (!kinds.has('agents') && /(^|-)arkestra\.agents$/.test(d.viewType)));
+		});
+		if (stale.length) {
+			await vscode.window.tabGroups.close(stale, true);
+		}
 		await vscode.commands.executeCommand('vscode.setEditorLayout', layout.layout);
 		for (let i = 0; i < layout.tiles.length; i++) {
 			for (const tile of layout.tiles[i]) {
 				await openTile(tile, i + 1);
 			}
 		}
-		await context.workspaceState.update('arkestra.workspace.current', layout.name);
+		await context.workspaceState.update(CURRENT, layout.name);
+		showCurrent();
 	};
 
 	const save = async () => {
-		const name = (await vscode.window.showInputBox({ title: vscode.l10n.t('Save layout'), prompt: vscode.l10n.t('Name of this layout'), value: context.workspaceState.get<string>('arkestra.workspace.current') ?? '' }))?.trim();
+		const name = (await vscode.window.showInputBox({ title: vscode.l10n.t('Save layout'), prompt: vscode.l10n.t('Name of this layout'), value: context.workspaceState.get<string>(CURRENT) ?? '' }))?.trim();
 		if (!name) {
 			return;
 		}
 		const grid = await vscode.commands.executeCommand<EditorLayout>('vscode.getEditorLayout');
 		const layout = capture(name, grid, groupsByColumn().map(g => g.tabs.map(describe)));
 		await context.globalState.update(LAYOUTS, [...saved().filter(l => l.name !== name), layout]);
-		await context.workspaceState.update('arkestra.workspace.current', name);
+		await context.workspaceState.update(CURRENT, name);
+		showCurrent();
 		void vscode.window.showInformationMessage(vscode.l10n.t('Layout “{0}” saved.', name));
 	};
 
 	const choose = async () => {
-		const builtin = mosaic(vscode.l10n.t('Mozaik (default)'));
-		const items = [builtin, ...saved()].map(layout => ({ label: layout.name, description: vscode.l10n.t('{0} tiles', layout.tiles.length), layout }));
+		const current = context.workspaceState.get<string>(CURRENT);
+		const builtins = [
+			{ layout: mosaicLayout(), detail: vscode.l10n.t('The room beside the agents, the code and a terminal') },
+			{ layout: await pultLayout(), detail: vscode.l10n.t('One lane per agent on top; the room, the code and a terminal below') },
+		];
+		const items: (vscode.QuickPickItem & { layout?: SavedLayout })[] = [
+			...builtins.map(b => ({ label: b.layout.name, detail: b.detail, description: b.layout.name === current ? vscode.l10n.t('current') : undefined, layout: b.layout })),
+			...(saved().length ? [{ label: vscode.l10n.t('Saved'), kind: vscode.QuickPickItemKind.Separator }] : []),
+			...saved().map(layout => ({ label: layout.name, description: [vscode.l10n.t('{0} tiles', layout.tiles.length), layout.name === current ? vscode.l10n.t('current') : ''].filter(Boolean).join(' · '), layout })),
+		];
 		const pick = await vscode.window.showQuickPick(items, { title: vscode.l10n.t('Layout') });
-		if (pick) {
+		if (pick?.layout) {
 			await apply(pick.layout);
 		}
 	};
@@ -104,15 +141,20 @@ export function activate(context: vscode.ExtensionContext): void {
 	};
 
 	context.subscriptions.push(
-		vscode.commands.registerCommand('arkestra.workspace.mosaic', () => apply(mosaic(vscode.l10n.t('Mozaik (default)')))),
+		switcher,
+		vscode.commands.registerCommand('arkestra.workspace.mosaic', () => apply(mosaicLayout())),
+		vscode.commands.registerCommand('arkestra.workspace.pult', async () => apply(await pultLayout())),
 		vscode.commands.registerCommand('arkestra.workspace.layout', choose),
 		vscode.commands.registerCommand('arkestra.workspace.saveLayout', save),
 		vscode.commands.registerCommand('arkestra.workspace.deleteLayout', remove),
 	);
 
-	// Mozaik is the default: the first start opens it; afterwards VS Code restores the grid itself.
+	// The first start opens the default layout (Mozaik unless set to Pult); afterwards VS Code
+	// restores the grid itself and the switcher shows the name last applied.
+	showCurrent();
 	if (!context.globalState.get<boolean>(INITIALIZED)) {
-		void context.globalState.update(INITIALIZED, true).then(() => apply(mosaic(vscode.l10n.t('Mozaik (default)'))));
+		const first = vscode.workspace.getConfiguration('arkestra.workspace').get<string>('defaultLayout') === 'pult' ? pultLayout() : Promise.resolve(mosaicLayout());
+		void context.globalState.update(INITIALIZED, true).then(() => first).then(apply);
 	}
 }
 
