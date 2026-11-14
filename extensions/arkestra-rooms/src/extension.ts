@@ -12,7 +12,7 @@ import { AgentNotReadyError, Room, newRoomState } from './room';
 import { RoomStore } from './store';
 import { laneAgent, laneEntries, type LaneEntry } from './lanes';
 import { copyFile, mkdir, readFile, stat } from 'node:fs/promises';
-import { progressFromMarkdown, taskRooms, type TaskRoom } from './tasks';
+import { progressItems, taskRooms, type TaskRoom } from './tasks';
 import { templateForm } from './templateForm';
 import { ChangesUi } from './changesView';
 import { InlineEdits } from './inlineEditUi';
@@ -668,13 +668,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	context.subscriptions.push(tasksChanged, changedThreads.event(() => tasksChanged.fire()));
 	const tasks = async (): Promise<TaskRoom[]> => {
 		const states = (await store.list()).map(state => loaded.get(state.id)?.state ?? state);
-		const progress = new Map<string, { done: number; total: number }>();
+		const progress = new Map<string, { text: string; done: boolean }[]>();
 		await Promise.all(states.filter(s => s.template).map(async s => {
 			try {
-				const p = progressFromMarkdown(await readFile(path.join(context.globalStorageUri.fsPath, 'room-files', s.id, 'haladas.md'), 'utf8'));
-				if (p) {
-					progress.set(s.id, p);
-				}
+				progress.set(s.id, progressItems(await readFile(path.join(context.globalStorageUri.fsPath, 'room-files', s.id, 'haladas.md'), 'utf8')));
 			} catch {
 				// no progress list yet
 			}

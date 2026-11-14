@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import type { RoomState } from '../room';
-import { progressFromMarkdown, roomPhase, taskRefs, taskRooms } from '../tasks';
+import { progressFromMarkdown, progressItems, roomPhase, taskRefs, taskRooms } from '../tasks';
 
 const room = (over: Omit<Partial<RoomState>, 'template'> & { template?: any }): RoomState => ({ id: 'r1', title: 'Thread', roster: ['a', 'b'], messages: [], ...over } as RoomState);
 const coding = (code: any, extra: any = {}) => ({ type: 'coding', members: {}, folder: '/f', rounds: 0, max: 60, briefed: {}, waiting: {}, code, ...extra });
@@ -29,11 +29,14 @@ test('phase: coding, plan approval, verifying, waiting for the user, ended, roun
 
 test('progress list: ticked of all checklist items', () => {
 	assert.deepEqual(progressFromMarkdown('# Szeletek\n- [x] A\n- [ ] B\n  * [X] C\nnot an item [x]'), { done: 2, total: 3 });
+	assert.deepEqual(progressItems('- [x] **Séma** ellenőrzés\n- [ ] `Tesztek`'), [{ text: 'Séma ellenőrzés', done: true }, { text: 'Tesztek', done: false }]);
 	assert.equal(progressFromMarkdown('no list'), undefined);
 });
 
 test('task rooms: only rooms with a reference, with progress', () => {
-	const rooms = taskRooms([room({ id: 'a', title: 'Coding · #5', template: coding({ issue: '#5' }) }), room({ id: 'b', title: 'chat' })], id => id === 'a', id => id === 'a' ? { done: 1, total: 4 } : undefined);
+	const list = [{ text: 'Schema', done: true }, { text: 'Tests', done: false }, { text: 'UI', done: false }, { text: 'Review', done: false }];
+	const rooms = taskRooms([room({ id: 'a', title: 'Coding · #5', template: coding({ issue: '#5', base: 'main', branches: { A: 'arkestra/a', B: 'arkestra/b' } }) }), room({ id: 'b', title: 'chat' })], id => id === 'a', id => id === 'a' ? list : undefined);
 	assert.equal(rooms.length, 1);
 	assert.deepEqual([rooms[0].roomId, rooms[0].refs, rooms[0].status, rooms[0].progress], ['a', ['#5'], 'running', { done: 1, total: 4 }]);
+	assert.deepEqual([rooms[0].base, rooms[0].branches, rooms[0].items?.[0]], ['main', ['arkestra/a', 'arkestra/b'], { text: 'Schema', done: true }]);
 });

@@ -50,6 +50,18 @@
           "default": [],
           "scope": "resource",
           "markdownDescription": "%cardFields%"
+        },
+        "arkestra.github.laneField": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "%laneField%"
+        },
+        "arkestra.github.weightField": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "%weightField%"
         }
       }
     },

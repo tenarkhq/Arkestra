@@ -20,6 +20,11 @@ export interface TaskRoom {
 	readonly agents: number;
 	/** Ticked and all items of the room's progress list (haladas.md), when it has one. */
 	readonly progress?: { readonly done: number; readonly total: number };
+	/** The progress list's items, in order (at most 20). */
+	readonly items?: readonly { readonly text: string; readonly done: boolean }[];
+	/** A coding room's base branch and the agents' branches. */
+	readonly base?: string;
+	readonly branches?: readonly string[];
 }
 
 const REF = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(?:issues|pull)\/\d+|(?<![\w/])#\d+\b/g;
@@ -60,32 +65,39 @@ export function roomPhase(state: RoomState, busy: boolean): Pick<TaskRoom, 'stat
 	return { type: t.type, status: busy ? 'running' : waiting.length ? 'waiting' : 'idle', phase: waiting.length && !busy ? `waits for you · ${phase}` : phase };
 }
 
-/** Ticked and all checklist items of a Markdown progress list (`- [x]` / `- [ ]`). */
-export function progressFromMarkdown(text: string): { done: number; total: number } | undefined {
-	let done = 0;
-	let total = 0;
+/** The checklist items of a Markdown progress list (`- [x] text` / `- [ ] text`). */
+export function progressItems(text: string): { text: string; done: boolean }[] {
+	const items: { text: string; done: boolean }[] = [];
 	for (const line of text.split('\n')) {
-		const m = /^\s*[-*+]\s+\[([ xX])\]/.exec(line);
+		const m = /^\s*[-*+]\s+\[([ xX])\]\s*(.*)$/.exec(line);
 		if (m) {
-			total++;
-			if (m[1] !== ' ') {
-				done++;
-			}
+			items.push({ text: m[2].replace(/\*\*|__|`/g, '').trim(), done: m[1] !== ' ' });
 		}
 	}
-	return total ? { done, total } : undefined;
+	return items;
+}
+
+/** Ticked and all checklist items of a Markdown progress list. */
+export function progressFromMarkdown(text: string): { done: number; total: number } | undefined {
+	const items = progressItems(text);
+	return items.length ? { done: items.filter(i => i.done).length, total: items.length } : undefined;
 }
 
 /** The task rooms among all rooms: those with a task reference. */
-export function taskRooms(states: readonly RoomState[], busy: (id: string) => boolean, progress: (id: string) => { done: number; total: number } | undefined): TaskRoom[] {
+export function taskRooms(states: readonly RoomState[], busy: (id: string) => boolean, progress: (id: string) => readonly { text: string; done: boolean }[] | undefined): TaskRoom[] {
 	const out: TaskRoom[] = [];
 	for (const state of states) {
 		const refs = taskRefs(state);
 		if (!refs.length) {
 			continue;
 		}
-		const p = progress(state.id);
-		out.push({ roomId: state.id, title: state.title, refs, agents: state.roster.length, ...roomPhase(state, busy(state.id)), ...(p ? { progress: p } : {}) });
+		const items = progress(state.id) ?? [];
+		const code = state.template?.code;
+		out.push({
+			roomId: state.id, title: state.title, refs, agents: state.roster.length, ...roomPhase(state, busy(state.id)),
+			...(items.length ? { progress: { done: items.filter(i => i.done).length, total: items.length }, items: items.slice(0, 20) } : {}),
+			...(code ? { base: code.base, branches: [...new Set(Object.values(code.branches ?? {}).filter(Boolean))] } : {}),
+		});
 	}
 	return out;
 }

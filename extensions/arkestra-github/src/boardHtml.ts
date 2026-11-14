@@ -57,6 +57,39 @@ footer { border-top: 1px solid var(--vscode-panel-border); margin-top: 12px; pad
 footer summary { cursor: pointer; font-weight: 600; font-size: 12px; }
 .log { display: grid; grid-template-columns: auto auto 1fr; gap: 2px 10px; font-size: 12px; margin-top: 6px; }
 .log .err { color: var(--vscode-errorForeground); }
+.plan { display: flex; flex-direction: column; gap: 18px; }
+.plan h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin: 0 0 4px; color: var(--vscode-descriptionForeground); }
+.plan .hint { font-size: 12px; color: var(--vscode-descriptionForeground); margin: 0 0 8px; max-width: 70ch; }
+.lanes { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--gap); }
+.lane { border: 1px solid var(--vscode-panel-border); border-radius: var(--radius); padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+.lane.development { border-color: var(--vscode-focusBorder); }
+.lane .name { font-weight: 600; font-size: 14px; }
+.bar { height: 6px; border-radius: 3px; background: var(--vscode-editorWidget-background); overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--vscode-progressBar-background, #3794ff); }
+.rails { display: flex; flex-direction: column; gap: 10px; }
+.rail { border: 1px solid var(--vscode-panel-border); border-radius: var(--radius); padding: 8px 10px; min-width: 0; }
+.rail .head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.rail .branch { font-family: var(--vscode-editor-font-family); font-weight: 600; }
+.steps { display: flex; gap: 0; overflow-x: auto; margin-top: 8px; padding-bottom: 4px; }
+.step { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 0 14px 0 0; position: relative; max-width: 220px; }
+.step::before { content: ''; position: absolute; left: 0; right: 0; top: 5px; height: 2px; background: var(--vscode-panel-border); }
+.step .pin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--vscode-panel-border); background: var(--vscode-editor-background); position: relative; }
+.step.done .pin { background: var(--vscode-testing-iconPassed, #3fb950); border-color: var(--vscode-testing-iconPassed, #3fb950); }
+.step.now .pin { border-color: var(--vscode-focusBorder); background: var(--vscode-focusBorder); }
+.step .lbl { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px; }
+.step .sub { font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px; }
+.stairs-wrap { overflow-x: auto; }
+.stairs { display: grid; gap: 4px 6px; align-items: center; min-width: 560px; }
+.stairs .lv { font-size: 11px; color: var(--vscode-descriptionForeground); text-align: center; }
+.stairs .lanehead { grid-column: 1 / -1; font-weight: 600; font-size: 12px; margin-top: 8px; }
+.cell { border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 3px 6px; font-size: 12px; position: relative; overflow: hidden; cursor: pointer; white-space: nowrap; text-overflow: ellipsis; }
+.cell > .fill { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--vscode-progressBar-background, #3794ff) 22%, transparent); }
+.cell > span { position: relative; }
+.cell.critical { border-color: var(--vscode-testing-iconFailed, #f85149); border-width: 2px; }
+.cell.startable { box-shadow: inset 3px 0 0 var(--vscode-testing-iconPassed, #3fb950); }
+.cell.running { box-shadow: inset 3px 0 0 var(--vscode-progressBar-background, #3794ff); }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; border: 1px solid var(--vscode-panel-border); }
 `;
 
 const SCRIPT = String.raw`
@@ -221,7 +254,7 @@ function headerEl() {
 			h('span', { class: 'muted' }, 'GitHub Project ' + model.project.ref + ' · two-way sync'),
 			chip(model.sync.text, model.sync.tone),
 			h('span', { class: 'spacer' }),
-			h('div', { class: 'tabs' }, ['board', 'table'].map(t => h('button', { class: ui.tab === t ? 'on' : '', onclick: () => { ui.tab = t; save(); draw(); } }, t === 'board' ? 'Board' : 'Table'))),
+			h('div', { class: 'tabs' }, ['board', 'table', 'plan'].map(t => h('button', { class: ui.tab === t ? 'on' : '', onclick: () => { ui.tab = t; save(); draw(); } }, { board: 'Board', table: 'Table', plan: 'Plan' }[t]))),
 			h('button', { title: 'Read the project again', onclick: () => post({ type: 'refresh' }) }, '↻'),
 			h('button', { class: 'primary', onclick: () => { ui.form = !ui.form; draw(); } }, '+ New issue')),
 		ui.form ? newIssueForm() : null,
@@ -238,10 +271,44 @@ function footerEl() {
 	return h('footer', {}, d);
 }
 
+function planEl() {
+	const p = model.plan;
+	if (!p) return h('div', { class: 'muted' }, 'No plan yet.');
+	const stateText = { released: 'Released', development: 'In development', next: 'Next', later: 'Later' };
+	const lanes = h('section', {},
+		h('h2', {}, 'Release lanes'),
+		h('p', { class: 'hint' }, (p.live ? 'Live: ' + p.live + ' · ' : '') + (p.laneField ? 'lanes from the ' + p.laneField + ' field' : 'no lane field (Line, Release, Milestone…): everything is in Backlog') + (p.weightField ? ' · weighted by ' + p.weightField : ' · every task weighs the same')),
+		h('div', { class: 'lanes' }, p.lanes.map(l => h('div', { class: 'lane ' + l.state },
+			h('div', { class: 'muted' }, stateText[l.state]),
+			h('div', { class: 'name' }, l.name),
+			h('div', { class: 'bar' }, h('i', { style: 'width:' + l.percent + '%' })),
+			h('div', { class: 'muted' }, l.done + '/' + l.total + ' done · ' + l.percent + '%')))));
+	const rails = h('section', {},
+		h('h2', {}, 'Branches'),
+		h('p', { class: 'hint' }, 'Where the base branch and each open branch stand, and what goes on them next, in order.'),
+		h('div', { class: 'rails' }, p.rails.map(r => h('div', { class: 'rail' },
+			h('div', { class: 'head' }, h('span', { class: 'branch' }, r.name), r.head ? h('span', { class: 'muted' }, r.head) : null, h('span', { class: 'muted' }, r.note)),
+			h('div', { class: 'steps' }, r.steps.map(s => h('div', { class: 'step' + (s.done ? ' done' : '') + (s.now ? ' now' : ''), onclick: s.url ? () => post({ type: 'open', url: s.url }) : s.roomId ? () => post({ type: 'openRoom', roomId: s.roomId }) : undefined, style: s.url || s.roomId ? 'cursor:pointer' : '' },
+				h('span', { class: 'pin' }), h('span', { class: 'lbl', title: s.label }, (s.done ? '✓ ' : '') + s.label), s.sub ? h('span', { class: 'sub' + (s.tone ? ' tone-' + s.tone : ''), title: s.sub }, s.sub) : null)))))));
+	const cols = 'minmax(120px, 1fr) '.repeat(p.levels);
+	const grid = h('div', { class: 'stairs', style: 'grid-template-columns:' + cols }, Array.from({ length: p.levels }, (_, i) => h('div', { class: 'lv' }, String(i))),
+		p.stairs.filter(s => s.cells.length).map(s => [h('div', { class: 'lanehead' }, s.lane + ' · ' + s.percent + '%'),
+			s.cells.map(c => h('div', { class: 'cell' + (c.critical ? ' critical' : '') + (c.startable ? ' startable' : '') + (c.running ? ' running' : ''), title: c.label + ' ' + c.title, style: 'grid-column:' + (c.level + 1), onclick: () => c.roomId ? post({ type: 'openRoom', roomId: c.roomId }) : c.url && post({ type: 'open', url: c.url }) },
+				h('i', { class: 'fill', style: 'width:' + Math.round(c.fill * 100) + '%' }), h('span', {}, c.label + ' ' + c.title)))]));
+	const stairs = h('section', {},
+		h('h2', {}, 'Dependency staircase'),
+		h('p', { class: 'hint' }, 'Dependency level instead of time: a task goes one column after its latest prerequisite, so tasks in one column can run in parallel. The fill is completion; the red chain is the critical path.'),
+		h('div', { class: 'stairs-wrap' }, grid),
+		p.critical.map(c => h('div', { class: 'muted' }, 'Critical path · ' + c.lane + ': ' + c.path.join(' → '))),
+		h('div', { class: 'legend' }, h('span', {}, h('i', { style: 'border:2px solid var(--vscode-testing-iconFailed, #f85149)' }), 'critical path'), h('span', {}, h('i', { style: 'background:color-mix(in srgb, var(--vscode-progressBar-background, #3794ff) 22%, transparent)' }), 'completion'), h('span', {}, h('i', { style: 'box-shadow: inset 3px 0 0 var(--vscode-testing-iconPassed, #3fb950)' }), 'startable now'), h('span', {}, h('i', { style: 'box-shadow: inset 3px 0 0 var(--vscode-progressBar-background, #3794ff)' }), 'a room is running on it')),
+		h('p', { class: 'hint' }, 'Click a task to open it, or its running room.'));
+	return h('div', { class: 'plan' }, lanes, rails, stairs);
+}
+
 let mainEl = null;
 function drawMain() {
 	if (!mainEl) return;
-	mainEl.replaceChildren(ui.tab === 'table' ? tableEl() : boardEl());
+	mainEl.replaceChildren(ui.tab === 'table' ? tableEl() : ui.tab === 'plan' ? planEl() : boardEl());
 }
 function draw() {
 	if (screen) { document.body.replaceChildren(emptyEl(screen)); return; }

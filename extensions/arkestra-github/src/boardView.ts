@@ -8,6 +8,8 @@ import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import { boardModel, type RoomInfo } from './board';
 import { boardHtml } from './boardHtml';
+import { readGitInfo } from './gitInfo';
+import { planModel, type GitInfo } from './plan';
 import type { FieldInput, ProjectSnapshot } from './project';
 import type { JournalEntry, SyncStatus } from './sync';
 
@@ -37,19 +39,24 @@ export class ProjectBoard implements vscode.Disposable {
 	private rooms: RoomInfo[] = [];
 	private roomsApi: RoomsApi | undefined;
 	private timer: ReturnType<typeof setTimeout> | undefined;
+	private git: GitInfo | undefined;
+	private gitTimer: ReturnType<typeof setTimeout> | undefined;
+	private gitTicker: ReturnType<typeof setInterval> | undefined;
 
 	constructor(private readonly source: BoardSource) {
 		this.disposables.push(
 			vscode.commands.registerCommand('arkestra.github.openBoard', () => this.open()),
 			vscode.window.registerWebviewPanelSerializer(VIEW, { deserializeWebviewPanel: async panel => this.adopt(panel) }),
-			source.onDidChange(() => this.schedule()),
-			vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('arkestra.github.cardFields')) { this.schedule(); } }),
+			source.onDidChange(() => { this.schedule(); this.scheduleGit(); }),
+			vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('arkestra.github')) { this.schedule(); } }),
 		);
 		void this.connectRooms();
 	}
 
 	dispose(): void {
 		clearTimeout(this.timer);
+		clearTimeout(this.gitTimer);
+		clearInterval(this.gitTicker);
 		this.panel?.dispose();
 		for (const d of this.disposables) {
 			d.dispose();
@@ -94,9 +101,44 @@ export class ProjectBoard implements vscode.Disposable {
 		panel.iconPath = new vscode.ThemeIcon('project');
 		panel.webview.options = { enableScripts: true };
 		panel.webview.html = boardHtml(randomBytes(16).toString('base64'), panel.webview.cspSource);
-		panel.onDidDispose(() => { this.panel = undefined; }, undefined, this.disposables);
+		panel.onDidDispose(() => { this.panel = undefined; clearInterval(this.gitTicker); this.gitTicker = undefined; }, undefined, this.disposables);
+		// The branch rails follow the local repository: read again when the project changes and every 30 s.
+		this.gitTicker = setInterval(() => { if (panel.visible) { void this.loadGit(); } }, 30_000);
+		void this.loadGit();
 		panel.webview.onDidReceiveMessage(m => void this.receive(m), undefined, this.disposables);
 		void this.loadRooms();
+	}
+
+	private scheduleGit(): void {
+		clearTimeout(this.gitTimer);
+		this.gitTimer = setTimeout(() => void this.loadGit(), 1500);
+	}
+
+	private async loadGit(): Promise<void> {
+		const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		if (!cwd || !this.panel) {
+			return;
+		}
+		const snap = this.source.snapshot();
+		const wanted = new Set<string>();
+		for (const item of snap?.items ?? []) {
+			for (const pr of item.pullRequests) {
+				if (pr.state === 'OPEN' && pr.headRef) {
+					wanted.add(pr.headRef);
+				}
+			}
+		}
+		for (const room of this.rooms) {
+			for (const b of room.branches ?? []) {
+				wanted.add(b);
+			}
+		}
+		try {
+			this.git = await readGitInfo(cwd, [...wanted]);
+		} catch {
+			this.git = undefined;
+		}
+		this.schedule();
 	}
 
 	private schedule(): void {
@@ -126,6 +168,8 @@ export class ProjectBoard implements vscode.Disposable {
 		}
 		panel.title = snap.title;
 		const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+		const config = vscode.workspace.getConfiguration('arkestra.github');
+		const plan = planModel({ snapshot: snap, rooms: this.rooms, ...(this.git ? { git: this.git } : {}), laneField: config.get<string>('laneField') || undefined, weightField: config.get<string>('weightField') || undefined });
 		const model = boardModel({
 			snapshot: snap,
 			rooms: this.rooms,
@@ -135,7 +179,7 @@ export class ProjectBoard implements vscode.Disposable {
 			journal: this.source.journal(),
 			clock,
 		});
-		void panel.webview.postMessage({ type: 'model', model });
+		void panel.webview.postMessage({ type: 'model', model: { ...model, plan } });
 	}
 
 	private async receive(m: any): Promise<void> {
