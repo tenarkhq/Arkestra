@@ -1,0 +1,12 @@
+{
+	"version": "1.0.0",
+	"contents": {
+		"package": {
+			"displayName": "Arkestra-témák",
+			"description": "Az Arkestra sötét és világos témája: hűvös semleges tónusok korall, menta, borostyán és ibolya kiemelésekkel.",
+			"themeDark": "Arkestra sötét",
+			"themeLight": "Arkestra világos"
+		},
+		"bundle": {}
+	}
+}

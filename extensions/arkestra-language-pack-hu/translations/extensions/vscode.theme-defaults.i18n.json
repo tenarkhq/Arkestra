@@ -1,0 +1,10 @@
+{
+	"version": "1.0.0",
+	"contents": {
+		"package": {
+			"displayName": "Alapértelmezett témák",
+			"description": "Az alapértelmezett Visual Studio világos és sötét témák"
+		},
+		"bundle": {}
+	}
+}

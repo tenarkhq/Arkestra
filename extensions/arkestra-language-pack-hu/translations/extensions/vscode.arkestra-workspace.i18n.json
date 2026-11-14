@@ -1,0 +1,33 @@
+{
+	"version": "1.0.0",
+	"contents": {
+		"package": {
+			"displayName": "Arkestra · Munkaterület",
+			"description": "Mozaik és Pult: a szoba, az ügynökök, a kód és a terminálok csempékként, amelyeket húzhat, feloszthat és elrendezésként menthet.",
+			"mosaic": "Mozaik elrendezés",
+			"layout": "Elrendezés váltása…",
+			"saveLayout": "Elrendezés mentése…",
+			"deleteLayout": "Mentett elrendezés törlése…",
+			"pult": "Pult elrendezés (ügynökönként egy sáv)",
+			"config.title": "Arkestra-elrendezés",
+			"config.defaultLayout": "Az első indításkor megnyíló elrendezés. Az állapotsorról bármikor válthat.",
+			"config.mozaik": "Mozaik: a szoba az ügynökök, a kód és egy terminál mellett.",
+			"config.pult": "Pult: felül ügynökönként egy sáv, alul a szoba, a kód és egy terminál."
+		},
+		"bundle": {
+			"Mozaik": "Mozaik",
+			"Pult · per agent": "Pult · ügynökönként",
+			"Layout": "Elrendezés",
+			"Layout: click to switch": "Elrendezés: kattintson a váltáshoz",
+			"Save layout": "Elrendezés mentése",
+			"Name of this layout": "Az elrendezés neve",
+			"Layout “{0}” saved.": "A(z) „{0}” elrendezés elmentve.",
+			"The room beside the agents, the code and a terminal": "A szoba az ügynökök, a kód és egy terminál mellett",
+			"One lane per agent on top; the room, the code and a terminal below": "Felül ügynökönként egy sáv, alul a szoba, a kód és egy terminál",
+			"current": "jelenlegi",
+			"Saved": "Mentett",
+			"{0} tiles": "{0} csempe",
+			"Delete a saved layout": "Mentett elrendezés törlése"
+		}
+	}
+}

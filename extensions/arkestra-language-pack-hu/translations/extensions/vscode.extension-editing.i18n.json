@@ -1,0 +1,10 @@
+{
+	"version": "1.0.0",
+	"contents": {
+		"package": {
+			"displayName": "Kiegészítőfejlesztés",
+			"description": "Lintelési funkciót biztosít kiegészítőfejlesztéshez."
+		},
+		"bundle": {}
+	}
+}

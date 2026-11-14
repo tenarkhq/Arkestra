@@ -1,0 +1,11 @@
+{
+	"version": "1.0.0",
+	"contents": {
+		"package": {
+			"displayName": "Node hibakeresés automatikus csatolása",
+			"description": "Segédcsomag, ami elvégzi a folyamatok automatikus csatolását, ha a node-hibakereső bővítmények nem aktívak.",
+			"toggle.auto.attach": "Automatikus csatlakozás be- és kikapcsolása"
+		},
+		"bundle": {}
+	}
+}

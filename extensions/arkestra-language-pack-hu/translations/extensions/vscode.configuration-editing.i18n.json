@@ -1,0 +1,10 @@
+{
+	"version": "1.0.0",
+	"contents": {
+		"package": {
+			"displayName": "Konfigurációszerkesztő",
+			"description": "Funkciók (fejlett IntelliSense, automatikus javítás) konfigurációt tartalmazó fájlokhoz, például a beállításokhoz, az indítási konfigurációkhoz és a kiegészítőjavaslatokat tartalmazó fájlokhoz."
+		},
+		"bundle": {}
+	}
+}
