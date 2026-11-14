@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
- *  Arkestra. The board page's script against a minimal fake DOM: board, drag to a column,
- *  start a room, table edit and sort, new issue form, empty screen.
+ *  Arkestra. The board page's script against a minimal fake DOM: header and menu, board, drag to
+ *  a column, start a room, table filters, groups, columns, details pane, new issue form, empty screen.
  *--------------------------------------------------------------------------------------------*/
 /* eslint-disable */
 
@@ -56,41 +56,92 @@ const model = boardModel({ snapshot: snap, rooms: [{ roomId: 'x', title: 't', re
 
 listeners.message({ data: { type: 'model', ref: 'o/3', model: { ...model, pinned: false } } });
 assert.equal(state.ref, 'o/3', 'the tab keeps its project for the next start');
-find(body, (e: any) => e.tag === 'button' && text(e) === 'Pin')[0].fire('click');
-find(body, (e: any) => e.tag === 'button' && text(e) === '+ Board')[0].fire('click');
+const button = (label: string) => find(body, (e: any) => e.tag === 'button' && text(e) === label)[0];
+// The header: title, "owner/number · synced", the view switch, + New issue, and the ⋯ menu.
+assert.ok(text(body).includes('o/3 · synced 14:12'), 'sync state as a subtitle');
+const more = () => find(body, (e: any) => e.tag === 'button' && e.attrs.title === 'More actions')[0];
+more().fire('click');
+button('Pin this board').fire('click');
+more().fire('click');
+button('+ Boardanother project').fire('click');
 assert.ok(posted.some((m: any) => m.type === 'togglePin') && posted.some((m: any) => m.type === 'openBoard'), 'pin and open another board posted');
 listeners.message({ data: { type: 'model', ref: 'o/3', model: { ...model, pinned: true } } });
-assert.ok(find(body, (e: any) => e.tag === 'button' && text(e) === 'Pinned').length === 1, 'pinned shown');
+assert.ok(text(body).includes('· pinned'), 'pinned shown');
+listeners.message({ data: { type: 'model', model: { ...model, sync: { text: 'x', tone: 'warn', kind: 'offline', at: '14:00' } } } });
+assert.ok(find(body, (e: any) => e.className === 'warn' && text(e) === 'relay offline · read 14:00').length === 1, 'relay offline in the warning colour');
 listeners.message({ data: { type: 'model', model } });
-const t1 = text(body); 
-assert.ok(t1.includes('Line0.9') && t1.includes('Board view') && t1.includes('Start room ▸') && t1.includes('+ 2 more') && t1.includes('GitHub → here'), 'board drawn');
-find(body, (e: any) => e.tag === 'button' && text(e) === 'Start room ▸')[0].fire('click');
+const t1 = text(body);
+assert.ok(t1.includes('Line0.9') && t1.includes('Board view') && t1.includes('Start room ▸') && !t1.includes('Old 0') && t1.includes('GitHub → here'), 'board drawn, done hidden by default');
+button('Start room ▸').fire('click');
 assert.ok(posted.some((m: any) => m.type === 'startRoom' && m.itemId === 'I1'), 'start room posted');
 // drag I1 to Done
 const done = find(body, (e: any) => e.tag === 'section' && text(e).startsWith('Done'))[0];
 done.fire('drop', { dataTransfer: { getData: () => 'I1', types: ['text/arkestra-item'] } });
 assert.ok(posted.some((m: any) => m.type === 'move' && m.itemId === 'I1' && m.optionId === 'd'), 'move posted');
-// table
-find(body, (e: any) => e.tag === 'button' && text(e) === 'Table')[0].fire('click');
+const statusSel = () => find(body, (e: any) => e.tag === 'select' && text(e).startsWith('Status: all'))[0];
+statusSel().value = ''; statusSel().fire('change');
+assert.ok(text(body).includes('+ 2 more'), 'done back on the board');
+statusSel().value = '!done'; statusSel().fire('change');
+// table: plain cells, grouped by Line, default columns
+button('Table').fire('click');
 const t2 = text(body);
-// Status: not done hides the Done cards; all brings them back.
-const statusSel = find(body, (e: any) => e.tag === 'select' && text(e).startsWith('Status: all'))[0];
-assert.ok(text(statusSel).includes('Status: not done') && text(statusSel).includes('Status: Done'), 'status filter offered');
-statusSel.value = '!done'; statusSel.fire('change');
-assert.ok(text(body).includes('Board view') && !text(body).includes('Old 0'), 'done hidden');
+assert.ok(t2.includes('Board view') && t2.includes('Estimate') && t2.includes('Blocked by') && !t2.includes('Old 0'), 'table drawn');
+assert.ok(find(body, (e: any) => e.className === 'grp' && text(e) === '0.91').length === 1, 'group header with its count');
+assert.ok(!find(body, (e: any) => e.className === 'tr th' && text(e).includes('Line')).length, 'the grouped column is hidden');
+assert.ok(!find(body, (e: any) => e.className?.startsWith?.('tr') && find(e, (x: any) => x.tag === 'select' || x.tag === 'input').length).length, 'no dropdowns in the grid');
+assert.ok(text(statusSel()).includes('Status: not done') && text(statusSel()).includes('Status: Done'), 'status filter offered');
 assert.equal(state.filters.status, '!done', 'kept in the view state');
-statusSel.value = ''; statusSel.fire('change');
-assert.ok(text(body).includes('Old 0'), 'done back');
-assert.ok(t2.includes('Estimate') && t2.includes('Prerequisites') && t2.includes('Progress'), 'table drawn');
-const input = find(body, (e: any) => e.tag === 'input' && e.attrs.type === 'number')[0];
+statusSel().value = ''; statusSel().fire('change');
+assert.ok(text(body).includes('Old 0') && text(body).includes('No Line'), 'done back, in the no-Line group');
+statusSel().value = '!done'; statusSel().fire('change');
+// + Filter adds a chip; × takes it away
+button('+ Filter').fire('click');
+button('Label').fire('click');
+assert.deepEqual(state.extra, ['labels']);
+const labelSel = find(body, (e: any) => e.tag === 'select' && text(e).startsWith('Label: all'))[0];
+labelSel.value = 'feature'; labelSel.fire('change');
+assert.equal(state.filters.labels, 'feature');
+find(body, (e: any) => e.tag === 'button' && e.attrs.title === 'Remove filter')[0].fire('click');
+assert.ok(!('labels' in state.filters) && state.extra.length === 0, 'filter removed');
+// a row opens the details pane: every field editable, GitHub, no chat without the command
+find(body, (e: any) => e.attrs?.['data-id'] === 'I1')[0].fire('click');
+assert.equal(state.selected, 'I1');
+const pane = () => find(body, (e: any) => e.tag === 'aside')[0];
+assert.ok(text(pane()).includes('#1') && text(pane()).includes('Open on GitHub') && !text(pane()).includes('Chat about this'), 'details pane');
+const input = find(pane(), (e: any) => e.tag === 'input' && e.attrs.type === 'number')[0];
 input.value = '3'; input.fire('change');
 assert.ok(posted.some((m: any) => m.type === 'setField' && m.fieldId === 'N' && m.value === 3), 'number edit posted');
-find(body, (e: any) => e.tag === 'th' && text(e) === 'Title')[0].fire('click');
+const paneStatus = find(pane(), (e: any) => e.tag === 'select' && e.attrs.title === 'Status')[0];
+paneStatus.value = 'd'; paneStatus.fire('change');
+assert.ok(posted.some((m: any) => m.type === 'setField' && m.fieldId === 'S' && m.value.optionId === 'd'), 'status edit posted');
+listeners.message({ data: { type: 'model', model: { ...model, canChat: true } } });
+button('Chat about this').fire('click');
+assert.ok(posted.some((m: any) => m.type === 'chat' && m.itemId === 'I1'), 'chat posted');
+button('Open on GitHub').fire('click');
+assert.ok(posted.some((m: any) => m.type === 'open' && m.url === 'https://github.com/o/r/issues/1'), 'open posted');
+find(pane(), (e: any) => e.tag === 'button' && e.attrs.title === 'Close')[0].fire('click');
+assert.ok(!pane() && state.selected === null, 'pane closed');
+// double-click a cell edits it in place
+const cell = find(body, (e: any) => e.attrs?.['data-id'] === 'I1')[0].children[3];
+cell.fire('dblclick');
+assert.ok(find(cell, (e: any) => e.tag === 'input' && e.attrs.type === 'number').length === 1, 'inline editor');
+// columns chooser and group by, kept in the state
+more().fire('click');
+button('Columns…').fire('click');
+button('Labels').fire('click');
+assert.deepEqual(state.columns, ['num', 'title', 'status', 'f:L', 'f:N', 'prereq', 'labels']);
+assert.ok(text(find(body, (e: any) => e.className === 'tr th')[0]).includes('Labels'), 'column added');
+find(body, (e: any) => e.tag === 'button' && text(e) === 'Group: Line')[0].fire('click');
+button('None').fire('click');
+assert.equal(state.group, '');
+assert.ok(text(find(body, (e: any) => e.className === 'tr th')[0]).includes('Line'), 'Line column back without grouping');
+find(body, (e: any) => e.tag === 'span' && text(e) === 'Title' && e.listeners.click)[0].fire('click');
+assert.deepEqual(state.sort, { key: 'title', dir: 1 });
 // new issue form
-find(body, (e: any) => e.tag === 'button' && text(e) === '+ New issue')[0].fire('click');
+button('+ New issue').fire('click');
 const title = find(body, (e: any) => e.tag === 'input' && e.attrs.placeholder === 'Title of the new issue')[0];
 title.value = 'New task';
-find(body, (e: any) => e.tag === 'button' && text(e) === 'Create')[0].fire('click');
+button('Create').fire('click');
 assert.ok(posted.some((m: any) => m.type === 'createIssue' && m.title === 'New task' && m.repository === 'o/r'), 'create posted');
 const plan = planModel({ snapshot: snap, rooms: [], git: { base: 'main', baseHead: 'abc1234', tags: ['v1.0'], log: [{ sha: 'abc1234', subject: 'Board (#70)', refs: [] }], branches: new Map() } });
 const graph = graphModel(snap, [], plan);
