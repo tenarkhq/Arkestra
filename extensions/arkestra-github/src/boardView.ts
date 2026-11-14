@@ -36,6 +36,66 @@ interface RoomsApi {
 
 const VIEW = 'arkestra.project';
 
+const CHAT = 'arkestra.rooms.newChat';
+
+/** The board page's words in the UI language; the page keeps English for any left out. */
+function pageStrings(): Record<string, string> {
+	return {
+		'+ Board': vscode.l10n.t('+ Board'),
+		'+ Filter': vscode.l10n.t('+ Filter'),
+		'+ New issue': vscode.l10n.t('+ New issue'),
+		'{0}: all': vscode.l10n.t('{0}: all'),
+		'{0}: not done': vscode.l10n.t('{0}: not done'),
+		'another project': vscode.l10n.t('another project'),
+		'Assignees': vscode.l10n.t('Assignees'),
+		'Blocked by': vscode.l10n.t('Blocked by'),
+		'Board': vscode.l10n.t('Board'),
+		'Cancel': vscode.l10n.t('Cancel'),
+		'Chat about this': vscode.l10n.t('Chat about this'),
+		'Close': vscode.l10n.t('Close'),
+		'Columns': vscode.l10n.t('Columns'),
+		'Columns…': vscode.l10n.t('Columns…'),
+		'Create': vscode.l10n.t('Create'),
+		'Default columns': vscode.l10n.t('Default columns'),
+		'done': vscode.l10n.t('done'),
+		'Draft': vscode.l10n.t('Draft'),
+		'Graph': vscode.l10n.t('Graph'),
+		'Group by': vscode.l10n.t('Group by'),
+		'Group by…': vscode.l10n.t('Group by…'),
+		'Group: {0}': vscode.l10n.t('Group: {0}'),
+		'Group: none': vscode.l10n.t('Group: none'),
+		'grouped': vscode.l10n.t('grouped'),
+		'Labels': vscode.l10n.t('Labels'),
+		'More actions': vscode.l10n.t('More actions'),
+		'No {0}': vscode.l10n.t('No {0}'),
+		'None': vscode.l10n.t('None'),
+		'Nothing matches the filters.': vscode.l10n.t('Nothing matches the filters.'),
+		'open': vscode.l10n.t('open'),
+		'Open on GitHub': vscode.l10n.t('Open on GitHub'),
+		'Open the project on GitHub': vscode.l10n.t('Open the project on GitHub'),
+		'pinned': vscode.l10n.t('pinned'),
+		'Pin this board': vscode.l10n.t('Pin this board'),
+		'Plan': vscode.l10n.t('Plan'),
+		'PR': vscode.l10n.t('PR'),
+		'Progress': vscode.l10n.t('Progress'),
+		'reading…': vscode.l10n.t('reading…'),
+		'Refresh': vscode.l10n.t('Refresh'),
+		'relay offline · read {0}': vscode.l10n.t('relay offline · read {0}'),
+		'Remove filter': vscode.l10n.t('Remove filter'),
+		'Room': vscode.l10n.t('Room'),
+		'Search title or #': vscode.l10n.t('Search title or #'),
+		'Sort by {0}': vscode.l10n.t('Sort by {0}'),
+		'Start room ▸': vscode.l10n.t('Start room ▸'),
+		'Status': vscode.l10n.t('Status'),
+		'synced {0}': vscode.l10n.t('synced {0}'),
+		'Table': vscode.l10n.t('Table'),
+		'The relay is offline: the board reads GitHub at intervals until it is back.': vscode.l10n.t('The relay is offline: the board reads GitHub at intervals until it is back.'),
+		'Title': vscode.l10n.t('Title'),
+		'Title of the new issue': vscode.l10n.t('Title of the new issue'),
+		'Unpin this board': vscode.l10n.t('Unpin this board'),
+	};
+}
+
 /** A board's source while its panel is open; released when the panel closes. */
 export interface BoardLease {
 	readonly source: BoardSource;
@@ -59,6 +119,8 @@ export class ProjectBoards implements vscode.Disposable {
 	private readonly disposables: vscode.Disposable[] = [];
 	private roomsApi: RoomsApi | undefined;
 	rooms: RoomInfo[] = [];
+	/** Whether a chat can start from a task (the rooms extension's new chat command is there). */
+	canChat = false;
 
 	constructor(private readonly host: BoardHost, readonly memento: vscode.Memento) {
 		this.disposables.push(
@@ -74,8 +136,17 @@ export class ProjectBoards implements vscode.Disposable {
 			}),
 			vscode.window.registerWebviewPanelSerializer(VIEW, { deserializeWebviewPanel: async (panel, state: { ref?: unknown } | undefined) => { this.adopt(panel, typeof state?.ref === 'string' && state.ref ? state.ref : undefined); } }),
 			vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('arkestra.github')) { this.panels.forEach(p => p.schedule()); } }),
+			vscode.extensions.onDidChange(() => void this.checkChat()),
 		);
-		void this.connectRooms();
+		void this.connectRooms().then(() => this.checkChat());
+	}
+
+	private async checkChat(): Promise<void> {
+		const can = (await vscode.commands.getCommands(true)).includes(CHAT);
+		if (can !== this.canChat) {
+			this.canChat = can;
+			this.panels.forEach(p => p.schedule());
+		}
 	}
 
 	dispose(): void {
@@ -126,6 +197,7 @@ export class ProjectBoards implements vscode.Disposable {
 		this.panels.add(board);
 		panel.onDidDispose(() => { this.panels.delete(board); board.dispose(); });
 		void this.loadRooms();
+		void this.checkChat();
 		return board;
 	}
 
@@ -169,7 +241,7 @@ class BoardPanel implements vscode.Disposable {
 		this.source = lease.source;
 		panel.iconPath = new vscode.ThemeIcon('project');
 		panel.webview.options = { enableScripts: true };
-		panel.webview.html = boardHtml(randomBytes(16).toString('base64'), panel.webview.cspSource);
+		panel.webview.html = boardHtml(randomBytes(16).toString('base64'), panel.webview.cspSource, pageStrings());
 		// The branch rails follow the local repository: read again when the project changes and every 30 s.
 		this.gitTicker = setInterval(() => { if (panel.visible) { void this.loadGit(); } }, 30_000);
 		this.disposables.push(
@@ -269,6 +341,7 @@ class BoardPanel implements vscode.Disposable {
 			snapshot: snap,
 			rooms: this.rooms,
 			cardFields: vscode.workspace.getConfiguration('arkestra.github').get<string[]>('cardFields') ?? [],
+			...(plan.laneField ? { laneField: plan.laneField } : {}),
 			status,
 			live: this.source.live(),
 			journal: this.source.journal(),
@@ -276,7 +349,7 @@ class BoardPanel implements vscode.Disposable {
 		});
 		const graph = graphModel(snap, this.rooms, plan, this.saved(snap));
 		const key = this.pinKey();
-		void panel.webview.postMessage({ type: 'model', ref: this.ref ?? null, model: { ...model, plan, graph, pinned: key ? this.boards.isPinned(key) : false } });
+		void panel.webview.postMessage({ type: 'model', ref: this.ref ?? null, model: { ...model, plan, graph, pinned: key ? this.boards.isPinned(key) : false, canChat: this.boards.canChat } });
 	}
 
 	private async receive(m: any): Promise<void> {
@@ -289,6 +362,13 @@ class BoardPanel implements vscode.Disposable {
 					}
 					return;
 				case 'openRoom': await vscode.commands.executeCommand('arkestra.rooms.openThread', String(m.roomId)); return;
+				case 'chat': {
+					const item = this.source.snapshot()?.items.find(i => i.id === m.itemId);
+					if (item && this.boards.canChat) {
+						await vscode.commands.executeCommand(CHAT, item.url ?? (item.number ? `#${item.number}` : item.title));
+					}
+					return;
+				}
 				case 'refresh': await this.source.refresh(); return;
 				case 'togglePin': await this.boards.togglePin(this); return;
 				case 'openBoard': await vscode.commands.executeCommand('arkestra.github.openBoard'); return;

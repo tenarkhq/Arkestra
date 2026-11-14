@@ -1,28 +1,113 @@
 /*---------------------------------------------------------------------------------------------
  *  Arkestra. The Board and Table views' page (AR30). The extension posts the board model; the
- *  page draws it and posts back what the user does (move, edit, new issue, start a room).
+ *  page draws it and posts back what the user does (move, edit, new issue, start a room). One
+ *  header for every view; the Table is plain text cells with a details pane for the edits.
  *  Drawn with DOM calls, never with HTML strings from data.
  *--------------------------------------------------------------------------------------------*/
 
+import { tableLogic } from './board';
+
 const STYLE = String.raw`
-:root { --gap: 10px; --radius: 6px; }
+:root {
+	--gap: 10px; --radius: 6px;
+	--line: var(--vscode-panel-border, rgba(128, 128, 128, .22));
+	--line2: var(--vscode-widget-border, var(--vscode-panel-border, rgba(128, 128, 128, .3)));
+	--mute: var(--vscode-descriptionForeground);
+	--dim: color-mix(in srgb, var(--vscode-descriptionForeground) 72%, transparent);
+	--hover: var(--vscode-list-hoverBackground);
+	--sel: var(--vscode-list-inactiveSelectionBackground, var(--vscode-list-hoverBackground));
+	--ok: var(--vscode-testing-iconPassed, #3fb950);
+	--warn: var(--vscode-editorWarning-foreground, #cca700);
+	--bad: var(--vscode-errorForeground, #f85149);
+	--run: var(--vscode-progressBar-background, #3794ff);
+	--panel: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
 * { box-sizing: border-box; }
-body { margin: 0; padding: 0; color: var(--vscode-foreground); background: var(--vscode-editor-background); font: 13px/1.4 var(--vscode-font-family); }
+html, body { height: 100%; }
+body { margin: 0; padding: 0; color: var(--vscode-foreground); background: var(--vscode-editor-background); font: 13px/1.4 var(--vscode-font-family); display: flex; flex-direction: column; overflow: hidden; }
 button, select, input { font: inherit; color: inherit; }
 button { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: 0; border-radius: 4px; padding: 3px 9px; cursor: pointer; }
 button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
 button:hover { filter: brightness(1.1); }
 select, input { background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px; padding: 2px 6px; }
+select option { background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); }
 a { color: var(--vscode-textLink-foreground); cursor: pointer; text-decoration: none; }
+header { position: relative; z-index: 3; flex: none; background: var(--vscode-editor-background); display: flex; flex-direction: column; }
+.top { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px 0 18px; border-bottom: 1px solid var(--line); }
+.top .name { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; overflow: hidden; }
+.top .title { font-weight: 500; font-size: 14px; color: var(--vscode-foreground); white-space: nowrap; }
+.top .sub { color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sub .warn { color: var(--warn); } .sub .bad { color: var(--bad); }
+.seg { display: inline-flex; border: 1px solid var(--line2); border-radius: 8px; padding: 2px; gap: 2px; flex: none; }
+.seg button { background: transparent; color: var(--mute); padding: 3px 10px; border-radius: 6px; font-size: 12.5px; }
+.seg button.on { background: var(--sel); color: var(--vscode-foreground); }
+.pri { height: 26px; padding: 0 10px; border-radius: 7px; font-size: 12.5px; font-weight: 500; white-space: nowrap; flex: none; background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.icon { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; background: transparent; color: var(--mute); padding: 0; flex: none; }
+.icon:hover, .icon.on { background: var(--sel); color: var(--vscode-foreground); filter: none; }
+.anchor { position: relative; display: inline-flex; }
+.menu { position: absolute; z-index: 5; top: calc(100% + 4px); right: 0; min-width: 196px; max-height: 70vh; overflow-y: auto; background: var(--vscode-menu-background, var(--vscode-editorWidget-background)); color: var(--vscode-menu-foreground, var(--vscode-foreground)); border: 1px solid var(--vscode-menu-border, var(--line2)); border-radius: 10px; padding: 5px; box-shadow: 0 10px 30px var(--vscode-widget-shadow, rgba(0, 0, 0, .35)); display: flex; flex-direction: column; }
+.menu.left { left: 0; right: auto; }
+.menu .mh { color: var(--dim); font-size: 12px; padding: 6px 10px 4px; }
+.mi { display: flex; justify-content: space-between; align-items: center; gap: 14px; min-height: 30px; padding: 0 10px; border-radius: 6px; font-size: 13px; background: transparent; color: inherit; text-align: left; width: 100%; white-space: nowrap; }
+.mi:hover { background: var(--vscode-menu-selectionBackground, var(--sel)); color: var(--vscode-menu-selectionForeground, inherit); filter: none; }
+.mi span { color: var(--mute); }
+.msep { height: 1px; background: var(--line); margin: 4px 2px; }
+.filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 14px 18px 12px; }
+.fchip { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line2); color: var(--vscode-foreground); background: transparent; font-size: 12.5px; white-space: nowrap; }
+.fchip select { appearance: none; -webkit-appearance: none; background: transparent; border: 0; padding: 0 12px 0 0; margin: 0; color: inherit; font-size: inherit; cursor: pointer; outline: none; max-width: 240px; text-overflow: ellipsis; }
+.fchip .chev { margin-left: -14px; pointer-events: none; color: var(--mute); font-size: 11px; }
+.fchip.off { color: var(--mute); }
+.fchip.search { width: 190px; color: var(--dim); }
+.fchip.search input { flex: 1; min-width: 0; background: transparent; border: 0; padding: 0; outline: none; color: var(--vscode-foreground); }
+.fchip.search input::placeholder { color: var(--dim); }
+.fchip.add { color: var(--mute); border-style: dashed; cursor: pointer; }
+.fchip.ghost { border-color: transparent; color: var(--mute); cursor: pointer; }
+.fchip .x { background: transparent; padding: 0 0 0 2px; color: var(--mute); line-height: 1; }
+.fchip .x:hover { color: var(--vscode-foreground); }
+.area { flex: 1; min-height: 0; display: flex; position: relative; }
+main { flex: 1; min-width: 0; overflow: auto; padding: 12px 14px; }
+main.table { padding: 0 18px; }
+.muted { color: var(--mute); }
+.spacer { flex: 1; }
 .pin.on { border-color: var(--vscode-focusBorder); color: var(--vscode-focusBorder); }
-header { position: sticky; top: 0; z-index: 2; background: var(--vscode-editor-background); border-bottom: 1px solid var(--vscode-panel-border); padding: 8px 14px; display: flex; flex-direction: column; gap: 8px; }
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .title { font-weight: 600; font-size: 14px; }
-.muted { color: var(--vscode-descriptionForeground); }
-.tabs { display: flex; gap: 2px; }
-.tabs button { background: transparent; color: var(--vscode-descriptionForeground); border-bottom: 2px solid transparent; border-radius: 0; }
-.tabs button.on { color: var(--vscode-foreground); border-bottom-color: var(--vscode-focusBorder); }
-.spacer { flex: 1; }
+.tbl { display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+.tr { display: grid; grid-template-columns: var(--cols); gap: 12px; align-items: center; min-height: 38px; padding: 0 8px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.tr:not(.th) { cursor: default; }
+.tr:not(.th):hover { background: var(--hover); }
+.tr > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tr > span select, .tr > span input { width: 100%; }
+.tr.th { position: sticky; top: 0; z-index: 1; min-height: 32px; color: var(--dim); font-size: 12px; background: var(--vscode-editor-background); }
+.tr.th > span { cursor: pointer; user-select: none; }
+.tr.sel, .tr.sel:hover { background: var(--sel); }
+.num { color: var(--dim); font-variant-numeric: tabular-nums; }
+.t-muted { color: var(--mute); } .t-none { color: var(--dim); } .t-ok { color: var(--ok); } .t-warn { color: var(--warn); } .t-run { color: var(--run); }
+.pill { font-style: normal; font-size: 11.5px; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+.pill.t-none { padding-left: 0; }
+.pill.t-muted { background: color-mix(in srgb, var(--mute) 14%, transparent); }
+.pill.t-warn { background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.pill.t-ok { background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.pill.t-run { background: color-mix(in srgb, var(--run) 16%, transparent); }
+.grp { display: flex; gap: 8px; align-items: center; padding: 12px 8px 6px; color: var(--mute); font-size: 12px; font-weight: 500; }
+.grp em { font-style: normal; color: var(--dim); font-weight: 400; }
+.nothing { padding: 28px 8px; color: var(--mute); }
+.details { flex: 0 0 330px; min-width: 0; background: var(--panel); border-left: 1px solid var(--line); padding: 16px 14px; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
+.details .dh { display: flex; justify-content: space-between; align-items: center; color: var(--mute); font-size: 12.5px; font-weight: 500; padding: 0 0 6px 4px; }
+.details .dtitle { font-size: 15px; font-weight: 500; line-height: 1.4; padding: 0 4px 8px; overflow-wrap: anywhere; }
+.dkv { display: flex; justify-content: space-between; align-items: center; gap: 10px; min-height: 30px; padding: 0 4px; font-size: 13px; }
+.dkv > .k { color: var(--mute); flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dkv > .v { min-width: 0; display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 4px; text-align: right; }
+.dkv select, .dkv input { background: transparent; border: 1px solid transparent; border-radius: 5px; padding: 2px 4px; max-width: 190px; text-align: right; color: inherit; }
+.dkv select { appearance: none; -webkit-appearance: none; text-align-last: right; cursor: pointer; }
+.dkv select:hover, .dkv input:hover, .dkv select:focus, .dkv input:focus { border-color: var(--line2); outline: none; }
+.dkv .chev { color: var(--mute); font-size: 11px; pointer-events: none; }
+.dkv input.t-warn { color: var(--warn); } .dkv input.t-ok { color: var(--ok); }
+.hr { height: 1px; background: var(--line); margin: 8px 0; flex: none; }
+.dacts { display: flex; gap: 8px; flex-wrap: wrap; padding: 4px; }
+.dacts button { height: 26px; padding: 0 9px; border-radius: 7px; border: 1px solid var(--line2); background: transparent; color: var(--vscode-foreground); font-size: 12.5px; }
+.dacts button.primary { border-color: transparent; background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+@media (max-width: 760px) { .details { position: absolute; top: 0; right: 0; bottom: 0; width: min(330px, 100%); box-shadow: -8px 0 24px var(--vscode-widget-shadow, rgba(0, 0, 0, .3)); } }
 .chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border-radius: 10px; font-size: 11px; line-height: 18px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); white-space: nowrap; }
 .tone-ok { background: color-mix(in srgb, var(--vscode-testing-iconPassed, #3fb950) 22%, transparent); color: var(--vscode-foreground); }
 .tone-bad { background: color-mix(in srgb, var(--vscode-testing-iconFailed, #f85149) 25%, transparent); color: var(--vscode-foreground); }
@@ -30,7 +115,6 @@ header { position: sticky; top: 0; z-index: 2; background: var(--vscode-editor-b
 .tone-warn { background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 25%, transparent); color: var(--vscode-foreground); }
 .tone-muted { background: var(--vscode-editorWidget-background); color: var(--vscode-descriptionForeground); }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: currentColor; }
-main { padding: 12px 14px; }
 .board { display: flex; gap: var(--gap); align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
 .col { flex: 0 0 272px; background: var(--vscode-sideBar-background, var(--vscode-editorWidget-background)); border-radius: var(--radius); display: flex; flex-direction: column; max-height: calc(100vh - 150px); }
 .col.drop { outline: 2px dashed var(--vscode-focusBorder); }
@@ -45,13 +129,9 @@ main { padding: 12px 14px; }
 .kv span:nth-child(odd) { color: var(--vscode-descriptionForeground); }
 .chips { display: flex; gap: 4px; flex-wrap: wrap; }
 .more { margin: 0 8px 8px; }
-.table-wrap { overflow-x: auto; }
-table { border-collapse: collapse; width: 100%; font-size: 12px; }
-th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--vscode-panel-border); vertical-align: top; white-space: nowrap; }
-td.wrap { white-space: normal; min-width: 220px; }
-th { position: sticky; top: 0; background: var(--vscode-editor-background); cursor: pointer; user-select: none; font-weight: 600; }
-td select, td input { width: 100%; min-width: 90px; }
 .form { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding: 8px; border: 1px solid var(--vscode-panel-border); border-radius: var(--radius); }
+header .form { margin: 10px 18px 0; }
+.empty { flex: 1; }
 .form input.wide { flex: 1; min-width: 200px; }
 .empty { padding: 40px 20px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; }
 footer { border-top: 1px solid var(--vscode-panel-border); margin-top: 12px; padding: 8px 14px 14px; }
@@ -125,10 +205,14 @@ footer summary { cursor: pointer; font-weight: 600; font-size: 12px; }
 const SCRIPT = String.raw`
 const vscode = acquireVsCodeApi();
 const saved = vscode.getState() || {};
-const ui = { tab: saved.tab || 'board', filters: saved.filters || {}, search: saved.search || '', open: saved.open || {}, sort: saved.sort || null, form: false };
+const STRINGS = __STRINGS__;
+const LOGIC = (__LOGIC__)();
+/** The page's words: the extension sends them in the UI language; English when one is missing. */
+const t = (text, ...args) => (STRINGS[text] || text).replace(/\{(\d+)\}/g, (m, i) => args[i] !== undefined ? String(args[i]) : m);
+const ui = { tab: saved.tab || 'board', filters: saved.filters || { status: '!done' }, extra: saved.extra || [], search: saved.search || '', open: saved.open || {}, sort: saved.sort || null, columns: saved.columns || null, group: saved.group, selected: saved.selected || null, menu: null, form: false };
 let model = null;
 let screen = null;
-const save = () => vscode.setState(Object.assign({}, vscode.getState(), { tab: ui.tab, filters: ui.filters, search: ui.search, open: ui.open, sort: ui.sort }));
+const save = () => vscode.setState(Object.assign({}, vscode.getState(), { tab: ui.tab, filters: ui.filters, extra: ui.extra, search: ui.search, open: ui.open, sort: ui.sort, columns: ui.columns, group: ui.group, selected: ui.selected }));
 const post = (m) => vscode.postMessage(m);
 
 function h(tag, attrs, ...kids) {
@@ -148,23 +232,10 @@ function h(tag, attrs, ...kids) {
 }
 const chip = (text, tone, attrs) => h('span', Object.assign({ class: 'chip' + (tone ? ' tone-' + tone : '') }, attrs || {}), text);
 
-const columnOf = (card) => model.columns.find(c => c.cards.some(x => x.id === card.id));
-function cardValue(card, key) {
-	if (key === 'status') { const col = columnOf(card); return [col ? col.name : 'No status']; }
-	if (key === 'labels') return card.labels;
-	if (key === 'assignees') return card.assignees;
-	const f = card.fields.find(x => 'f:' + x.fieldId === key);
-	return f ? [f.value] : [];
-}
-function visible(card) {
-	for (const [key, want] of Object.entries(ui.filters)) {
-		if (want === '!done') { const col = columnOf(card); if (col && col.done) return false; continue; }
-		if (want && !cardValue(card, key).includes(want)) return false;
-	}
-	const q = ui.search.trim().toLowerCase();
-	if (q && !(card.title.toLowerCase().includes(q) || ('#' + card.number) === q || String(card.number) === q)) return false;
-	return true;
-}
+// The rows the filters and the search let through, worked out once per drawing (Board and Table).
+let shownRows = [];
+let shownIds = new Set();
+const visible = (card) => shownIds.has(card.id);
 const label = (card) => card.number !== undefined ? '#' + card.number : '';
 
 function roomChip(room) {
@@ -224,47 +295,124 @@ function colour(name) {
 	return map[name] || 'currentColor';
 }
 
-function editor(card, field) {
-	const cur = card.fields.find(f => f.fieldId === field.id);
+function statusField() {
+	return model.statusFieldId ? { id: model.statusFieldId, name: 'Status', type: 'single_select', options: model.columns.filter(c => c.id).map(c => ({ id: c.id, name: c.name })) } : null;
+}
+function editor(card, field, cls) {
+	const cur = field.id === model.statusFieldId ? (card.statusId ? { valueId: card.statusId, value: card.status } : null) : card.fields.find(f => f.fieldId === field.id);
 	const send = (value) => post({ type: 'setField', itemId: card.id, fieldId: field.id, value });
 	if (field.type === 'single_select' || field.type === 'iteration') {
 		const opts = field.type === 'single_select' ? field.options : field.iterations.map(i => ({ id: i.id, name: i.title }));
-		const sel = h('select', { onchange: () => send(sel.value ? (field.type === 'single_select' ? { optionId: sel.value } : { iterationId: sel.value }) : null) },
+		const sel = h('select', { class: cls, title: field.name, onchange: () => send(sel.value ? (field.type === 'single_select' ? { optionId: sel.value } : { iterationId: sel.value }) : null) },
 			h('option', { value: '' }, '—'), opts.map(o => h('option', { value: o.id, selected: cur && cur.valueId === o.id }, o.name)));
 		return sel;
 	}
 	if (field.type === 'text' || field.type === 'number' || field.type === 'date') {
-		const input = h('input', { type: field.type === 'text' ? 'text' : field.type, value: cur ? cur.value : '' });
+		const input = h('input', { class: cls, title: field.name, type: field.type === 'text' ? 'text' : field.type, value: cur ? cur.value : '', placeholder: '—' });
 		input.addEventListener('change', () => send(input.value === '' ? null : field.type === 'number' ? Number(input.value) : input.value));
+		input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && input.blur) input.blur(); });
 		return input;
 	}
 	return document.createTextNode(cur ? cur.value : '');
 }
 
-function tableEl() {
-	const cards = model.columns.flatMap(c => c.cards).filter(visible);
-	const status = model.statusFieldId ? { id: model.statusFieldId, name: 'Status', type: 'single_select', options: model.columns.filter(c => c.id).map(c => ({ id: c.id, name: c.name })) } : null;
-	const cols = [
-		{ key: 'num', name: '#', get: c => c.number || 0, cell: c => label(c) },
-		{ key: 'title', name: 'Title', get: c => c.title.toLowerCase(), cell: c => h('a', { onclick: () => c.url && post({ type: 'open', url: c.url }) }, c.title), wrap: true },
-		status && { key: 'status', name: 'Status', get: c => c.status || '', cell: c => editor(Object.assign({}, c, { fields: c.statusId ? [{ fieldId: status.id, valueId: c.statusId, value: c.status }] : [] }), status) },
-		...model.fields.filter(f => f.type !== 'other').map(f => ({ key: 'f:' + f.id, name: f.name, get: c => { const v = c.fields.find(x => x.fieldId === f.id); return v ? (f.type === 'number' ? Number(v.value) : v.value.toLowerCase()) : ''; }, cell: c => editor(c, f) })),
-		{ key: 'labels', name: 'Labels', get: c => c.labels.join(','), cell: c => h('div', { class: 'chips' }, c.labels.map(l => chip(l))) },
-		{ key: 'prereq', name: 'Prerequisites', get: c => c.blockers.filter(b => b.open).length, cell: c => prereq(c) || (c.startable ? chip('startable', 'ok') : '') },
-		{ key: 'pr', name: 'PR', get: c => c.prs.length ? c.prs[0].label : '', cell: c => h('div', { class: 'chips' }, c.prs.map(p => chip(p.label, p.tone)), c.review ? chip(c.review.label, c.review.tone) : null) },
-		{ key: 'room', name: 'Room', get: c => c.room ? c.room.status : '', cell: c => c.room ? roomChip(c.room) : (c.startable ? h('button', { onclick: () => post({ type: 'startRoom', itemId: c.id }) }, 'Start room ▸') : '') },
-		{ key: 'progress', name: 'Progress', get: c => c.room && c.room.progress ? c.room.progress.done / c.room.progress.total : -1, cell: c => c.room && c.room.progress ? c.room.progress.done + '/' + c.room.progress.total : '' },
-	].filter(Boolean);
-	if (ui.sort) {
-		const col = cols.find(c => c.key === ui.sort.key);
-		if (col) cards.sort((a, b) => { const x = col.get(a), y = col.get(b); return (x < y ? -1 : x > y ? 1 : 0) * ui.sort.dir; });
+/** A field the Table can edit in place (double-click) or in the details pane. */
+function editableField(key) {
+	if (key === 'status') return statusField();
+	if (!key.startsWith('f:')) return null;
+	const f = model.fields.find(x => 'f:' + x.id === key);
+	return f && f.type !== 'other' ? f : null;
+}
+const colName = (c) => c.key.startsWith('f:') || c.key === 'num' ? c.name : t(c.name);
+function colWidth(c) {
+	switch (c.type) {
+		case 'num': return 56;
+		case 'status': return 104;
+		case 'note': case 'prereq': return 180;
+		case 'pr': return 160;
+		case 'room': return 140;
+		case 'list': return 130;
+		case 'progress': case 'number': return 72;
+		case 'date': return 96;
+		default: return 104;
 	}
-	const head = h('tr', {}, cols.map(c => h('th', { onclick: () => { ui.sort = ui.sort && ui.sort.key === c.key ? { key: c.key, dir: -ui.sort.dir } : { key: c.key, dir: 1 }; save(); draw(); } }, c.name + (ui.sort && ui.sort.key === c.key ? (ui.sort.dir > 0 ? ' ▲' : ' ▼') : ''))));
-	return h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, head), h('tbody', {}, cards.map(card => h('tr', {}, cols.map(c => h('td', { class: c.wrap ? 'wrap' : '' }, c.cell(card))))))));
+}
+function currentGroup() {
+	const g = ui.group;
+	if (g === undefined || g === null) return LOGIC.defaultGroup(model);
+	return g && LOGIC.groupChoices(model).some(x => x.key === g) ? g : '';
+}
+const groupName = (key) => key ? ((LOGIC.groupChoices(model).find(g => g.key === key) || {}).name || '') : '';
+
+function cellEl(r, c) {
+	const v = LOGIC.cell(model, r, c.key);
+	const tone = v.tone ? 't-' + v.tone : '';
+	const field = editableField(c.key);
+	const span = c.key === 'status'
+		? h('span', { title: v.text }, h('i', { class: 'pill ' + tone }, v.text))
+		: h('span', { class: c.key === 'num' ? 'num' : c.key === 'title' ? 'ti' : tone, title: v.text && v.text !== '—' ? v.text : undefined }, v.text);
+	if (field) {
+		span.addEventListener('dblclick', (e) => {
+			e.stopPropagation();
+			const ed = editor(r.card, field);
+			span.replaceChildren(ed);
+			if (ed.focus) ed.focus();
+			if (ed.addEventListener) ed.addEventListener('blur', () => drawMain());
+		});
+	}
+	return span;
+}
+function rowEl(r, cols) {
+	const id = r.card.id;
+	return h('div', { class: 'tr' + (ui.selected === id ? ' sel' : ''), 'data-id': id, onclick: () => { if (ui.selected !== id) { ui.selected = id; save(); drawMain(); } } }, cols.map(c => cellEl(r, c)));
+}
+
+function tableEl() {
+	const group = currentGroup();
+	const cols = LOGIC.visible(model, ui.columns, group);
+	const rows = LOGIC.sortRows(model, shownRows, ui.sort);
+	const groups = LOGIC.groups(model, rows, group);
+	const tmpl = cols.map(c => c.key === 'title' ? 'minmax(220px, 1fr)' : colWidth(c) + 'px').join(' ');
+	const min = 220 + cols.filter(c => c.key !== 'title').reduce((a, c) => a + colWidth(c), 0) + 12 * (cols.length - 1) + 16;
+	const sortBy = (c) => { ui.sort = !ui.sort || ui.sort.key !== c.key ? { key: c.key, dir: 1 } : ui.sort.dir > 0 ? { key: c.key, dir: -1 } : null; save(); drawMain(); };
+	const head = h('div', { class: 'tr th' }, cols.map(c => h('span', { title: t('Sort by {0}', colName(c)), onclick: () => sortBy(c) }, colName(c) + (ui.sort && ui.sort.key === c.key ? (ui.sort.dir > 0 ? ' ↑' : ' ↓') : ''))));
+	return h('div', { class: 'tbl', style: '--cols:' + tmpl + ';min-width:' + min + 'px' }, head,
+		groups.map(g => [group ? h('div', { class: 'grp' }, g.value || t('No {0}', groupName(group)), h('em', {}, String(g.rows.length))) : null, g.rows.map(r => rowEl(r, cols))]),
+		rows.length ? null : h('div', { class: 'nothing' }, t('Nothing matches the filters.')));
+}
+
+/** The selected row's details: the full title and every field, editable; GitHub, chat, room. */
+function detailsEl() {
+	const card = model.columns.flatMap(c => c.cards).find(c => c.id === ui.selected);
+	if (!card) return null;
+	const kv = (k, v) => h('div', { class: 'dkv' }, h('span', { class: 'k', title: k }, k), h('span', { class: 'v' }, v));
+	const row = { card, done: false, values: {} };
+	const pick = (f) => {
+		const tone = f.id === (model.roles || {}).prereq ? LOGIC.cell(model, row, 'f:' + f.id).tone : '';
+		const ed = editor(card, f, tone && tone !== 'none' ? 't-' + tone : undefined);
+		return f.type === 'single_select' || f.type === 'iteration' ? [ed, h('span', { class: 'chev' }, '⌄')] : ed;
+	};
+	const sf = statusField();
+	const close = () => { ui.selected = null; save(); drawMain(); };
+	return h('aside', { class: 'details' },
+		h('div', { class: 'dh' }, h('span', {}, label(card) || (card.type === 'draft' ? t('Draft') : '')), h('button', { class: 'icon', title: t('Close'), onclick: close }, '✕')),
+		h('div', { class: 'dtitle' }, card.title),
+		sf ? kv(t('Status'), pick(sf)) : null,
+		model.fields.filter(f => f.type !== 'other').map(f => kv(f.name, pick(f))),
+		card.labels.length ? kv(t('Labels'), card.labels.join(', ')) : null,
+		card.assignees.length ? kv(t('Assignees'), card.assignees.join(', ')) : null,
+		card.blockers.length ? kv(t('Blocked by'), card.blockers.map(b => h('a', { class: b.open ? 't-warn' : 't-ok', title: b.open ? t('open') : t('done'), onclick: () => { if (b.itemId) { ui.selected = b.itemId; save(); drawMain(); } } }, (b.open ? '' : '✓ ') + b.label))) : null,
+		card.prs.length || card.review ? kv(t('PR'), [card.prs.map(p => chip(p.label, p.tone, { onclick: () => post({ type: 'open', url: p.url }), style: 'cursor:pointer' })), card.review ? chip(card.review.label, card.review.tone) : null]) : null,
+		card.room ? kv(t('Room'), roomChip(card.room)) : null,
+		h('div', { class: 'hr' }),
+		h('div', { class: 'dacts' },
+			card.url ? h('button', { onclick: () => post({ type: 'open', url: card.url }) }, t('Open on GitHub')) : null,
+			model.canChat ? h('button', { onclick: () => post({ type: 'chat', itemId: card.id }) }, t('Chat about this')) : null,
+			card.startable ? h('button', { class: 'primary', onclick: () => post({ type: 'startRoom', itemId: card.id }) }, t('Start room ▸')) : null));
 }
 
 function newIssueForm() {
-	const title = h('input', { class: 'wide', placeholder: 'Title of the new issue' });
+	const title = h('input', { class: 'wide', placeholder: t('Title of the new issue') });
 	const repo = h('input', { list: 'repos', value: model.repositories[0] || '', placeholder: 'owner/repository', size: 22 });
 	const status = h('select', {}, model.columns.filter(c => c.id).map(c => h('option', { value: c.id }, c.name)));
 	const submit = () => {
@@ -275,30 +423,98 @@ function newIssueForm() {
 	title.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') { ui.form = false; draw(); } });
 	setTimeout(() => title.focus(), 0);
 	return h('div', { class: 'form' }, title, repo, h('datalist', { id: 'repos' }, model.repositories.map(r => h('option', { value: r }))), model.statusFieldId ? status : null,
-		h('button', { class: 'primary', onclick: submit }, 'Create'), h('button', { onclick: () => { ui.form = false; draw(); } }, 'Cancel'));
+		h('button', { class: 'primary', onclick: submit }, t('Create')), h('button', { onclick: () => { ui.form = false; draw(); } }, t('Cancel')));
+}
+
+const icon = (paths, fill) => s('svg', { width: 14, height: 14, viewBox: '0 0 16 16', fill: fill ? 'currentColor' : 'none', stroke: fill ? 'none' : 'currentColor', 'stroke-width': 1.5 }, paths);
+const searchIcon = () => icon([s('circle', { cx: 7, cy: 7, r: 4.5 }), s('path', { d: 'm10.5 10.5 3 3' })]);
+const dotsIcon = () => icon([s('circle', { cx: 3.5, cy: 8, r: 1.2 }), s('circle', { cx: 8, cy: 8, r: 1.2 }), s('circle', { cx: 12.5, cy: 8, r: 1.2 })], true);
+const menuEl = (side, items) => h('div', { class: 'menu' + (side === 'left' ? ' left' : ''), onclick: (e) => e.stopPropagation() }, items);
+function toggleMenu(name) { ui.menu = ui.menu === name ? null : name; draw(); }
+
+function groupMenu() {
+	const cur = currentGroup();
+	const pick = (k) => (e) => { e.stopPropagation(); ui.group = k; ui.menu = null; save(); draw(); };
+	return menuEl('right', [h('div', { class: 'mh' }, t('Group by')),
+		LOGIC.groupChoices(model).map(g => h('button', { class: 'mi', onclick: pick(g.key) }, g.name, cur === g.key ? h('span', {}, '✓') : null)),
+		h('button', { class: 'mi', onclick: pick('') }, t('None'), cur === '' ? h('span', {}, '✓') : null)]);
+}
+function columnsMenu() {
+	const keys = LOGIC.columnKeys(model, ui.columns);
+	const group = currentGroup();
+	return menuEl('right', [h('div', { class: 'mh' }, t('Columns')),
+		LOGIC.columns(model).filter(c => c.key !== 'num' && c.key !== 'title').map(c => h('button', { class: 'mi', onclick: (e) => { e.stopPropagation(); ui.columns = LOGIC.toggle(model, ui.columns, c.key); save(); draw(); } },
+			colName(c), h('span', {}, keys.includes(c.key) ? (c.key === group ? t('grouped') : '✓') : ''))),
+		h('div', { class: 'msep' }),
+		h('button', { class: 'mi', onclick: (e) => { e.stopPropagation(); ui.columns = null; save(); draw(); } }, t('Default columns'))]);
+}
+function moreMenu() {
+	const item = (text, run, hint) => h('button', { class: 'mi', onclick: (e) => { e.stopPropagation(); ui.menu = null; run(); draw(); } }, text, hint ? h('span', {}, hint) : null);
+	const open = (name) => (e) => { e.stopPropagation(); ui.menu = name; draw(); };
+	return menuEl('right', [
+		item(t('Refresh'), () => post({ type: 'refresh' })),
+		item(model.pinned ? t('Unpin this board') : t('Pin this board'), () => post({ type: 'togglePin' })),
+		item(t('+ Board'), () => post({ type: 'openBoard' }), t('another project')),
+		ui.tab === 'table' ? [h('div', { class: 'msep' }), h('button', { class: 'mi', onclick: open('columns') }, t('Columns…')), h('button', { class: 'mi', onclick: open('group') }, t('Group by…'))] : null]);
+}
+
+function filterChip(f, removable) {
+	const cur = ui.filters[f.key] || '';
+	const sel = h('select', { title: f.name, onchange: () => { ui.filters[f.key] = sel.value; save(); draw(); } },
+		h('option', { value: '' }, t('{0}: all', f.name)),
+		f.key === 'status' ? h('option', { value: '!done', selected: cur === '!done' }, t('{0}: not done', f.name)) : null,
+		f.values.map(v => h('option', { value: v, selected: cur === v }, f.name + ': ' + v)));
+	const remove = () => { ui.extra = ui.extra.filter(k => k !== f.key); delete ui.filters[f.key]; save(); draw(); };
+	return h('span', { class: 'fchip' + (cur ? '' : ' off') }, sel, h('span', { class: 'chev' }, '⌄'),
+		removable ? h('button', { class: 'x', title: t('Remove filter'), onclick: remove }, '×') : null);
+}
+let searchInput = null;
+function filterRow() {
+	const roles = model.roles || {};
+	const has = (k) => model.filters.some(f => f.key === k);
+	const byKey = (k) => model.filters.find(f => f.key === k);
+	const quick = ['status', roles.line && 'f:' + roles.line, roles.executor && 'f:' + roles.executor].filter(k => k && has(k));
+	const extras = [...new Set([...ui.extra, ...Object.keys(ui.filters).filter(k => ui.filters[k])])].filter(k => !quick.includes(k) && has(k));
+	const addable = model.filters.filter(f => !quick.includes(f.key) && !extras.includes(f.key));
+	const search = h('input', { placeholder: t('Search title or #'), value: ui.search });
+	search.addEventListener('input', () => { ui.search = search.value; save(); drawMain(); });
+	searchInput = search;
+	const group = ui.tab === 'table' ? currentGroup() : '';
+	const add = (f) => (e) => { e.stopPropagation(); ui.extra = ui.extra.concat(f.key); ui.menu = null; save(); draw(); };
+	return h('div', { class: 'filters' },
+		h('label', { class: 'fchip search' }, searchIcon(), search),
+		quick.map(k => filterChip(byKey(k), false)),
+		extras.map(k => filterChip(byKey(k), true)),
+		addable.length ? h('span', { class: 'anchor' }, h('button', { class: 'fchip add', onclick: (e) => { e.stopPropagation(); toggleMenu('filter'); } }, t('+ Filter')),
+			ui.menu === 'filter' ? menuEl('left', addable.map(f => h('button', { class: 'mi', onclick: add(f) }, f.name))) : null) : null,
+		h('span', { class: 'spacer' }),
+		ui.tab === 'table' ? h('span', { class: 'anchor' }, h('button', { class: 'fchip ghost', onclick: (e) => { e.stopPropagation(); toggleMenu('groupChip'); } }, group ? t('Group: {0}', groupName(group)) : t('Group: none')),
+			ui.menu === 'groupChip' ? groupMenu() : null) : null);
+}
+
+/** "owner/number · synced 23:28"; the relay offline in the warning colour, only when it is. */
+function syncSub() {
+	const st = model.sync || {};
+	const at = (st.at || '').replace(/^(\d{1,2}:\d{2}):\d{2}/, '$1'); // hours and minutes are enough here
+	const state = st.kind === 'synced' ? h('span', { title: st.at }, t('synced {0}', at))
+		: st.kind === 'offline' ? h('span', { class: 'warn', title: t('The relay is offline: the board reads GitHub at intervals until it is back.') }, t('relay offline · read {0}', at))
+			: st.kind === 'error' ? h('span', { class: 'bad' }, st.text)
+				: st.kind === 'loading' ? h('span', {}, t('reading…')) : h('span', {}, st.text || '');
+	return h('span', { class: 'sub' }, model.project.ref + ' · ', state, model.pinned ? ' · ' + t('pinned') : '');
 }
 
 function headerEl() {
-	const search = h('input', { placeholder: 'Search title or #', value: ui.search, size: 18 });
-	search.addEventListener('input', () => { ui.search = search.value; save(); drawMain(); });
+	const names = { board: t('Board'), table: t('Table'), plan: t('Plan'), graph: t('Graph') };
+	searchInput = null;
 	return h('header', {},
-		h('div', { class: 'row' },
-			h('a', { class: 'title', onclick: () => post({ type: 'open', url: model.project.url }) }, model.project.title),
-			h('span', { class: 'muted' }, 'GitHub Project ' + model.project.ref + ' · two-way sync'),
-			chip(model.sync.text, model.sync.tone),
-			h('span', { class: 'spacer' }),
-			h('div', { class: 'tabs' }, ['board', 'table', 'plan', 'graph'].map(t => h('button', { class: ui.tab === t ? 'on' : '', onclick: () => { ui.tab = t; save(); draw(); } }, { board: 'Board', table: 'Table', plan: 'Plan', graph: 'Graph' }[t]))),
-			h('button', { title: 'Read the project again', onclick: () => post({ type: 'refresh' }) }, '↻'),
-			h('button', { class: 'pin' + (model.pinned ? ' on' : ''), title: model.pinned ? 'Unpin this board' : 'Pin this board: its tab stays and it comes first when opening a board', onclick: () => post({ type: 'togglePin' }) }, model.pinned ? 'Pinned' : 'Pin'),
-			h('button', { title: 'Open another project\'s board next to this one', onclick: () => post({ type: 'openBoard' }) }, '+ Board'),
-			h('button', { class: 'primary', onclick: () => { ui.form = !ui.form; draw(); } }, '+ New issue')),
+		h('div', { class: 'top' },
+			h('div', { class: 'name' }, h('a', { class: 'title', title: t('Open the project on GitHub'), onclick: () => post({ type: 'open', url: model.project.url }) }, model.project.title), syncSub()),
+			h('div', { class: 'seg' }, ['board', 'table', 'plan', 'graph'].map(k => h('button', { class: ui.tab === k ? 'on' : '', onclick: () => { ui.tab = k; ui.menu = null; save(); draw(); } }, names[k]))),
+			h('button', { class: 'pri', onclick: () => { ui.form = !ui.form; draw(); } }, t('+ New issue')),
+			h('span', { class: 'anchor' }, h('button', { class: 'icon' + (ui.menu === 'more' || ui.menu === 'columns' || ui.menu === 'group' ? ' on' : ''), title: t('More actions'), onclick: (e) => { e.stopPropagation(); toggleMenu('more'); } }, dotsIcon()),
+				ui.menu === 'more' ? moreMenu() : ui.menu === 'columns' ? columnsMenu() : ui.menu === 'group' ? groupMenu() : null)),
 		ui.form ? newIssueForm() : null,
-		h('div', { class: 'row' }, search, model.filters.map(f => {
-			const sel = h('select', { onchange: () => { ui.filters[f.key] = sel.value; save(); drawMain(); } }, h('option', { value: '' }, f.name + ': all'),
-				f.key === 'status' ? h('option', { value: '!done', selected: ui.filters[f.key] === '!done' }, f.name + ': not done') : null,
-				f.values.map(v => h('option', { value: v, selected: ui.filters[f.key] === v }, f.name + ': ' + v)));
-			return sel;
-		}), Object.values(ui.filters).some(Boolean) || ui.search ? h('a', { onclick: () => { ui.filters = {}; ui.search = ''; save(); draw(); } }, 'Clear filters') : null));
+		ui.tab === 'board' || ui.tab === 'table' ? filterRow() : null);
 }
 
 function footerEl() {
@@ -507,22 +723,55 @@ window.addEventListener('keydown', (e) => {
 	ui.graph.selected = null; drawMain();
 });
 
+window.addEventListener('keydown', (e) => {
+	if (e.key !== 'Escape') return;
+	if (ui.menu) { ui.menu = null; draw(); return; }
+	if (ui.tab === 'table' && ui.selected && !(document.activeElement && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName || ''))) { ui.selected = null; save(); drawMain(); }
+});
+window.addEventListener('click', () => { if (ui.menu) { ui.menu = null; draw(); } });
+
 let mainEl = null;
-function drawMain() {
+let areaEl = null;
+function drawMain(pos) {
 	if (!mainEl) return;
-	mainEl.replaceChildren(ui.tab === 'table' ? tableEl() : ui.tab === 'plan' ? planEl() : ui.tab === 'graph' ? graphEl() : boardEl());
+	const top = pos ? pos.top : mainEl.scrollTop, left = pos ? pos.left : mainEl.scrollLeft;
+	const lane = mainEl.querySelector ? mainEl.querySelector('.board') : null;
+	const laneLeft = pos ? pos.lane : lane ? lane.scrollLeft : 0;
+	shownRows = LOGIC.filter(LOGIC.rows(model), ui.filters, ui.search);
+	shownIds = new Set(shownRows.map(r => r.card.id));
+	mainEl.className = ui.tab === 'table' ? 'table' : '';
+	mainEl.replaceChildren(ui.tab === 'table' ? tableEl() : ui.tab === 'plan' ? planEl() : ui.tab === 'graph' ? graphEl() : boardEl(), footerEl());
+	const aside = ui.tab === 'table' ? detailsEl() : null;
+	areaEl.replaceChildren(...(aside ? [mainEl, aside] : [mainEl]));
+	mainEl.scrollTop = top || 0;
+	mainEl.scrollLeft = left || 0;
+	const again = mainEl.querySelector ? mainEl.querySelector('.board') : null;
+	if (again) again.scrollLeft = laneLeft || 0;
 }
 function draw() {
-	if (screen) { document.body.replaceChildren(emptyEl(screen)); return; }
+	if (screen) { mainEl = null; document.body.replaceChildren(emptyEl(screen)); return; }
 	if (!model) return;
-	const scroll = mainEl ? mainEl.querySelector('.board, .table-wrap') : null;
-	const left = scroll ? scroll.scrollLeft : 0;
-	mainEl = h('main', {});
-	document.body.replaceChildren(headerEl(), mainEl, footerEl());
-	drawMain();
-	const again = mainEl.querySelector('.board, .table-wrap');
-	if (again) again.scrollLeft = left;
+	const typing = !!searchInput && document.activeElement === searchInput;
+	const caret = typing ? searchInput.selectionStart : 0;
+	let pos;
+	if (mainEl) {
+		const lane = mainEl.querySelector ? mainEl.querySelector('.board') : null;
+		pos = { top: mainEl.scrollTop, left: mainEl.scrollLeft, lane: lane ? lane.scrollLeft : 0 };
+	} else {
+		mainEl = h('main', {});
+		areaEl = h('div', { class: 'area' });
+	}
+	document.body.replaceChildren(headerEl(), areaEl);
+	drawMain(pos);
+	if (typing && searchInput) {
+		searchInput.focus();
+		try { searchInput.setSelectionRange(caret, caret); } catch { /* not a text input */ }
+	}
 }
+/** A field being edited (not the search) holds back a redraw until it loses focus, so a sync does not drop the typing. */
+let held = false;
+const editing = () => { const a = document.activeElement; return !!a && a !== searchInput && /INPUT|SELECT|TEXTAREA/.test(a.tagName || ''); };
+window.addEventListener('focusout', () => { if (held) { held = false; setTimeout(() => { if (!editing()) draw(); else held = true; }, 0); } });
 function emptyEl(s) {
 	return h('div', { class: 'empty' }, h('div', { class: 'title' }, s.title), s.text ? h('div', { class: 'muted' }, s.text) : null,
 		h('div', { class: 'row' }, (s.actions || []).map((a, i) => h('button', { class: i === 0 ? 'primary' : '', onclick: () => post({ type: a.command }) }, a.label))));
@@ -530,13 +779,16 @@ function emptyEl(s) {
 window.addEventListener('message', (e) => {
 	const m = e.data;
 	if ('ref' in m) vscode.setState(Object.assign({}, vscode.getState(), { ref: m.ref })); // the tab reopens on the same project
-	if (m.type === 'model') { model = m.model; screen = null; draw(); }
+	if (m.type === 'model') { model = m.model; screen = null; if (editing()) { held = true; return; } draw(); }
 	if (m.type === 'screen') { screen = m.screen; draw(); }
 });
 post({ type: 'ready' });
 `;
 
-export function boardHtml(nonce: string, cspSource: string): string {
+/** The page; `strings` are its words in the UI language (the extension's l10n), English when left out. */
+export function boardHtml(nonce: string, cspSource: string, strings: Readonly<Record<string, string>> = {}): string {
+	const words = JSON.stringify(strings).replace(/</g, '\\u003c');
+	const script = SCRIPT.replace('__STRINGS__', () => words).replace('__LOGIC__', () => tableLogic.toString());
 	return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -547,7 +799,7 @@ export function boardHtml(nonce: string, cspSource: string): string {
 <style nonce="${nonce}">${STYLE}</style>
 </head>
 <body>
-<script nonce="${nonce}">${SCRIPT}</script>
+<script nonce="${nonce}">${script}</script>
 </body>
 </html>`;
 }

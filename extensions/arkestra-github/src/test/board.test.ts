@@ -70,12 +70,14 @@ test('board: columns in Status order, no-status column, card fields, filters, re
 	assert.deepEqual(m.fields.map(f => f.name), ['Line', 'Executor', 'Title']);
 	assert.deepEqual(m.filters.map(f => [f.name, f.values]), [['Status', ['No status', 'Backlog', 'Ready', 'In progress', 'Done']], ['Line', ['0.9', '1.x']], ['Executor', ['Codex']], ['Label', ['feature']], ['Assignee', ['dev']]]);
 	assert.deepEqual(m.repositories, ['o/r']);
-	assert.deepEqual(m.sync, { text: 'in sync · 14:12:08', tone: 'ok' });
+	assert.deepEqual(m.sync, { text: 'in sync · 14:12:08', tone: 'ok', kind: 'synced', at: '14:12:08' });
+	assert.deepEqual(m.roles, { line: 'L', executor: 'E' });
 	assert.equal(m.journal[0].text, 'Status: Backlog → Ready');
 
 	const chosen = boardModel({ snapshot: snap, rooms: [], cardFields: ['executor'], status: { kind: 'synced', at: 0, live: false }, live: false, journal: [], clock: () => '1' });
 	assert.deepEqual(chosen.cardFields, ['E']);
 	assert.equal(chosen.sync.tone, 'warn');
+	assert.equal(chosen.sync.kind, 'offline');
 });
 
 test('the page: script and style only with the nonce', () => {
