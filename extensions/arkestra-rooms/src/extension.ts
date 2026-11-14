@@ -15,6 +15,7 @@ import { copyFile, mkdir, stat } from 'node:fs/promises';
 import { templateForm } from './templateForm';
 import { ChangesUi } from './changesView';
 import { InlineEdits } from './inlineEditUi';
+import { References } from './referencesUi';
 import { GitTemplateIO, createWorkTrees } from './templates/gitio';
 import { TemplateRun } from './templates/run';
 import type { Role } from './templates/signals';
@@ -156,6 +157,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		stream.button({ command: 'arkestra.rooms.invite', arguments: [room.id], title: vscode.l10n.t('Invite an agent') });
 
 	context.subscriptions.push(new InlineEdits(context, registry));
+	const references = new References(async () => (await store.list()).map(state => loaded.get(state.id)?.state ?? state));
+	context.subscriptions.push(references);
 	changesUi = new ChangesUi(context.globalStorageUri.fsPath, async () => (await currentRoom())?.id);
 	context.subscriptions.push(changesUi, currentChanged.event(() => changesUi?.refresh()));
 
@@ -217,15 +220,16 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	};
 
 	/** The user's word in a template room goes to the template, not to a plain round. */
-	const templateTurn = async (room: Room, request: vscode.ChatRequest, stream: vscode.ChatResponseStream, token: vscode.CancellationToken) => {
+	/** `prompt`: the message with its @-referenced material; addressing reads the user's own text. */
+	const templateTurn = async (room: Room, request: vscode.ChatRequest, prompt: string, stream: vscode.ChatResponseStream, token: vscode.CancellationToken) => {
 		const run = ensureRun(room)!;
 		run.unpause();
 		if (request.command === 'continue') {
 			if (run.state.pending) {
 				run.engine.resume();
 			} else if (request.prompt.trim()) {
-				room.addUser(request.prompt);
-				await run.engine.user(request.prompt, run.addressed(request.prompt));
+				room.addUser(prompt);
+				await run.engine.user(prompt, run.addressed(request.prompt));
 			} else {
 				run.state.ended = undefined;
 				for (const role of ['A', 'B'] as Role[]) {
@@ -237,12 +241,12 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			}
 		} else if (request.command === 'approve') {
 			if (request.prompt.trim()) {
-				room.addUser(request.prompt);
+				room.addUser(prompt);
 			}
-			run.engine.approvePlan(request.prompt.trim());
+			run.engine.approvePlan(prompt.trim());
 		} else {
-			room.addUser(request.prompt);
-			await run.engine.user(request.prompt, run.addressed(request.prompt));
+			room.addUser(prompt);
+			await run.engine.user(prompt, run.addressed(request.prompt));
 		}
 		await streamRun(run, stream, token, true);
 	};
@@ -259,6 +263,14 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			untitledSessions.set(session.toString(), room.id);
 		}
 		const result: vscode.ChatResult = { metadata: { [ROOM_ID_KEY]: room.id } };
+		// The message with its @-referenced material, resolved only when it goes to agents.
+		const expand = async () => {
+			const expanded = await references.expand(request.prompt, request.references, room.id);
+			if (expanded.notes.length) {
+				stream.markdown(`_${vscode.l10n.t('Attached: {0}', expanded.notes.join(' · '))}_\n\n`);
+			}
+			return expanded.text;
+		};
 
 		if (request.command === 'new') {
 			stream.markdown(vscode.l10n.t('New room: **{0}**. Invite agents with /invite.', room.state.title));
@@ -295,7 +307,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}
 
 		if (room.state.template) {
-			await templateTurn(room, request, stream, token);
+			await templateTurn(room, request, await expand(), stream, token);
 			return result;
 		}
 
@@ -310,9 +322,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		const abort = new AbortController();
 		const cancel = token.onCancellationRequested(() => abort.abort());
 		activity.queue(room.id, room.roster);
+		const prompt = await expand();
 		await changesUi?.take(room.id, vscode.l10n.t('Before: {0}', titleFrom(request.prompt, vscode.l10n.t('Room'))));
 		try {
-			await room.say(request.prompt, (agent, event) => {
+			await room.say(prompt, (agent, event) => {
 				switch (event.kind) {
 					case 'start': activity.start(room.id, agent.id); stream.markdown(`\n\n**${agent.name}**\n\n`); break;
 					case 'text': stream.markdown(event.text); break;
@@ -424,11 +437,13 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 
 	const participant = vscode.chat.createChatParticipant('arkestra.room', handler);
 	participant.iconPath = new vscode.ThemeIcon('organization');
+	participant.participantVariableProvider = references.completionProvider();
 
 	// ---- Threads as native chat sessions: history, session list, the left column ----------
 	const sessionUri = (roomId: string) => vscode.Uri.from({ scheme: ROOM_SCHEME, path: `/room/${roomId}` });
 	const sessionParticipant = vscode.chat.createChatParticipant(ROOM_SCHEME, handler);
 	sessionParticipant.iconPath = new vscode.ThemeIcon('organization');
+	sessionParticipant.participantVariableProvider = references.completionProvider();
 	// ChatRequestTurn's constructor is internal in the typings; the runtime class takes these arguments.
 	const RequestTurn = vscode.ChatRequestTurn as unknown as new (prompt: string, command: string | undefined, references: [], participant: string, toolReferences: []) => vscode.ChatRequestTurn;
 

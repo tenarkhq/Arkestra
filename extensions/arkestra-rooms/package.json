@@ -483,6 +483,7 @@
   },
   "enabledApiProposals": [
     "chatSessionsProvider",
-    "chatParticipantPrivate"
+    "chatParticipantPrivate",
+    "chatParticipantAdditions"
   ]
 }
