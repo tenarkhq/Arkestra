@@ -905,10 +905,11 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 				return;
 			}
 			try {
-				const entries = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Reading the {0} session…', agent.name) }, () => agent.sessionHistory!(session.id));
+				// The history and where its live follow goes on: nothing written after the read is lost.
+				const history = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Reading the {0} session…', agent.name) }, () => agent.sessionHistory!(session.id));
 				// A local session's folder is its project; an SSH machine's folder is not one here.
 				const project = !agent.id.includes('@') && session.cwd ? vscode.Uri.file(session.cwd).toString() : undefined;
-				const room = track(new Room(importedRoomState({ id: agent.id, name: agent.name }, session, entries, project), registry));
+				const room = track(new Room(importedRoomState({ id: agent.id, name: agent.name }, session, history, project), registry));
 				await store.save(room.state);
 				refreshThreads();
 				await vscode.commands.executeCommand('arkestra.rooms.openThread', room.id);

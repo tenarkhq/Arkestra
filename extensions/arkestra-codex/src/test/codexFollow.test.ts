@@ -4,11 +4,15 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { codexPiece, localRollout, locateRolloutScript } from '../codexFollow';
-import { EntryAssembler, LineSplitter, assemble } from '../follow';
+import { codexPiece, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript, rolloutHistory } from '../codexFollow';
+import { EntryAssembler, LineSplitter, assemble, followLocal } from '../follow';
+import type { SessionEntry } from '../rooms';
+
+/** A Codex 0.163 rollout in the real line format (session_meta, turn_context, response_item, event_msg…), nothing private. */
+const FIXTURE = path.join(__dirname, '..', '..', 'src', 'test', 'fixtures', 'rollout-2026-11-14T10-00-00-01a1e000-0000-7000-8000-00000000c0de.jsonl');
 
 const ID = '01a15d40-ab71-74c1-877b-793c24b8fba4';
 const event = (payload: object) => JSON.stringify({ timestamp: '2026-11-14T10:00:00Z', type: 'event_msg', payload });
@@ -58,4 +62,68 @@ test('the rollout file: found under the Codex homes here, or a known path or a s
 	assert.equal(locateRolloutScript(ID, undefined, ['~/.codex', '~/.arkestra/codex-key']),
 		`f=$(find "$HOME"/'.codex'/sessions "$HOME"/'.arkestra/codex-key'/sessions -name 'rollout-*-${ID}.jsonl' 2>/dev/null | head -n 1)`);
 	assert.throws(() => locateRolloutScript('x; rm -rf ~', undefined, []), /not a Codex thread id/);
+});
+
+test('older rollouts: Codex\'s own preamble (folder, AGENTS.md, user instructions) is not a user message', () => {
+	for (const text of ['<environment_context>\n  <cwd>/w</cwd>\n</environment_context>', '<user_instructions>\nbe brief\n</user_instructions>', '# AGENTS.md instructions for /w\n\n<INSTRUCTIONS>x</INSTRUCTIONS>']) {
+		assert.equal(codexPiece(event({ type: 'user_message', message: text })), undefined, text);
+		assert.equal(codexPiece(event({ type: 'item_completed', item: { type: 'UserMessage', id: 'u', content: [{ type: 'text', text }] } })), undefined, text);
+	}
+	assert.deepEqual(codexPiece(event({ type: 'user_message', message: 'what is <environment_context>?' }))?.text, 'what is <environment_context>?');
+});
+
+test('history from a 0.163 rollout: what the user wrote and the answers, preamble and the room\'s own turn left out, the follow cursor after it', async () => {
+	const content = await readFile(FIXTURE);
+	const history = rolloutHistory(content);
+	assert.deepEqual(history.entries.map(e => [e.id, e.role, e.text, e.at]), [
+		['01a1e000-0002-7000-8000-0000000000a1', 'user', 'Add a health check endpoint.', '2026-11-14T10:00:00.030Z'],
+		['msg_a1', 'agent', 'I will look at the server first.\n\nAdded GET /health to src/server.ts.', '2026-11-14T10:00:03.000Z'],
+		['01a1e000-0002-7000-8000-0000000000b2', 'user', 'Thanks. A test for it too.', '2026-11-14T10:05:00.010Z'],
+		['msg_a3', 'agent', 'Added test/health.test.ts; it passes.', '2026-11-14T10:05:20.000Z'],
+	]);
+	// The last turn was the room's own: the follow goes on after the file, still muted.
+	assert.equal(history.cursor, `${content.length}m`);
+	assert.deepEqual(await readLocalRollout(FIXTURE), history);
+	assert.deepEqual(rolloutHistory(content, 2).entries.map(e => e.id), ['01a1e000-0002-7000-8000-0000000000b2', 'msg_a3']);
+	// A line still being written is not read; the answer before it may still grow, so the
+	// cursor is at its start (the follow reads it again under the same id).
+	const cut = content.subarray(0, content.indexOf('"Thanks.'));
+	const partial = rolloutHistory(cut);
+	assert.equal(partial.entries.length, 2);
+	assert.equal(partial.cursor, String(content.lastIndexOf(10, content.indexOf('"msg_a1"')) + 1));
+	const afterUser = content.subarray(0, content.indexOf('\n', content.indexOf('"type":"UserMessage","id":"01a1e000-0002-7000-8000-0000000000b2"')) + 1);
+	assert.equal(rolloutHistory(afterUser).cursor, String(afterUser.length));
+	assert.equal(readRolloutScript(`f='/x/r.jsonl'`), `f='/x/r.jsonl'\n[ -n "$f" ] && [ -f "$f" ] || exit 3\nexec cat "$f"`);
+});
+
+test('history then follow: whatever was written after the read comes once, under the same ids, nothing lost', async () => {
+	const content = await readFile(FIXTURE);
+	const dir = await mkdtemp(path.join(tmpdir(), 'arkestra-codex-hist-'));
+	const whole = rolloutHistory(content).entries;
+	// Cut after a line in the middle of an answer, after a whole turn, and inside a line.
+	const lineEnds = [...content.entries()].filter(([, b]) => b === 10).map(([i]) => i + 1);
+	const cuts = [content.indexOf('"msg_a1"'), lineEnds[12], lineEnds[20], content.length - 5, 0];
+	for (const at of cuts) {
+		const file = path.join(dir, `cut-${at}.jsonl`);
+		await writeFile(file, content.subarray(0, at));
+		const history = await readLocalRollout(file);
+		await appendFile(file, content.subarray(at));
+		const thread: SessionEntry[] = [...history.entries];
+		await new Promise<void>((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error('timed out')), 5000);
+			const follow = followLocal(async () => file, {
+				classify: codexPiece, cursor: history.cursor, pollMs: 20,
+				onEntries: entries => {
+					for (const e of entries) {
+						const i = thread.findIndex(t => t.id === e.id);
+						i >= 0 ? thread[i] = e : thread.push(e); // the room's own dedupe: by id
+					}
+					clearTimeout(timer);
+					follow.dispose();
+					resolve();
+				},
+			});
+		});
+		assert.deepEqual(thread, whole, `cut at ${at}`);
+	}
 });

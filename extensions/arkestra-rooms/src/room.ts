@@ -4,7 +4,7 @@
 
 import type { TemplateState } from './templates/types';
 import type { BestRun } from './best';
-import type { Agent, AgentEvent, AgentRegistry, ExistingSession, Readiness, SessionEntry } from './agent';
+import type { Agent, AgentEvent, AgentRegistry, ExistingSession, Readiness, SessionEntry, SessionHistory } from './agent';
 
 export type AuthorKind = 'user' | 'agent' | 'system';
 
@@ -263,8 +263,18 @@ function sessionMessage(agent: { id: string; name: string }, e: SessionEntry, no
 	return { id: newId(), at, author, text: e.text, ...(e.id ? { source: { agent: agent.id, entry: e.id } } : {}) };
 }
 
-/** A thread that continues an existing CLI session (AR39): its messages, then the agent goes on in it. */
-export function importedRoomState(agent: { id: string; name: string }, session: ExistingSession, entries: readonly SessionEntry[], project?: string, now: () => Date = () => new Date()): RoomState {
+/** What an agent's sessionHistory gave: its entries, and the follow cursor when it has one (an older agent gives a list). */
+export function sessionHistoryOf(read: readonly SessionEntry[] | SessionHistory | undefined): SessionHistory {
+	return Array.isArray(read) ? { entries: read } : { entries: (read as SessionHistory | undefined)?.entries ?? [], ...(typeof (read as SessionHistory | undefined)?.cursor === 'string' ? { cursor: (read as SessionHistory).cursor } : {}) };
+}
+
+/**
+ * A thread that continues an existing CLI session (AR39): its messages, then the agent goes on
+ * in it. The history's cursor is kept for the live follow, which then starts exactly after what
+ * was imported; without one it starts at the session's end when the thread is first followed.
+ */
+export function importedRoomState(agent: { id: string; name: string }, session: ExistingSession, history: readonly SessionEntry[] | SessionHistory, project?: string, now: () => Date = () => new Date()): RoomState {
+	const { entries, cursor } = sessionHistoryOf(history);
 	const state = newRoomState(session.title, project);
 	const at = (e: SessionEntry) => e.at && !Number.isNaN(Date.parse(e.at)) ? new Date(e.at).toISOString() : now().toISOString();
 	state.roster.push(agent.id);
@@ -272,6 +282,6 @@ export function importedRoomState(agent: { id: string; name: string }, session: 
 	for (const e of entries) {
 		state.messages.push(sessionMessage(agent, e, now));
 	}
-	state.adopted = { [agent.id]: { session: session.id, ...(session.cwd ? { cwd: session.cwd } : {}), upTo: state.messages.at(-1)!.id } };
+	state.adopted = { [agent.id]: { session: session.id, ...(session.cwd ? { cwd: session.cwd } : {}), upTo: state.messages.at(-1)!.id, ...(cursor !== undefined ? { cursor } : {}) } };
 	return state;
 }

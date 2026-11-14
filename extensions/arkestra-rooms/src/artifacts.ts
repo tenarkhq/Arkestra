@@ -173,6 +173,60 @@ export function filterArtifacts(all: readonly Artifact[], filter: ArtifactFilter
 		.sort((a, b) => (pinnedFirst ? Number(pinned.has(b.key)) - Number(pinned.has(a.key)) : 0) || latest(b).localeCompare(latest(a)));
 }
 
+/** The group of artifacts no agent is known for (an old record without its author). */
+export const UNKNOWN_AUTHOR = 'unknown';
+
+/** The artifact's author as a group key: its agent's id, or unknown. */
+export const authorKey = (a: Pick<Artifact, 'agentId' | 'agentName'>): string => a.agentId && a.agentName ? a.agentId : UNKNOWN_AUTHOR;
+
+/** The machine an agent runs on, from its id (`codex@prd` → `prd`); none: this machine. */
+const machineOf = (agentId: string): string | undefined => agentId.includes('@') ? agentId.slice(agentId.indexOf('@') + 1) || undefined : undefined;
+
+/**
+ * Each author's label in the gallery: the agent's name (its latest), with the machine when two
+ * agents share a name (`Claude · tenark-claude`), and `names.unknown` for artifacts without one.
+ */
+export function authorLabels(all: readonly Pick<Artifact, 'agentId' | 'agentName' | 'versions'>[], names: { readonly unknown: string; readonly local: string }): Map<string, string> {
+	const latest = new Map<string, { name: string; at: string }>();
+	for (const a of all) {
+		const key = authorKey(a);
+		const at = a.versions.at(-1)?.at ?? '';
+		const known = latest.get(key);
+		if (!known || at > known.at) {
+			latest.set(key, { name: key === UNKNOWN_AUTHOR ? names.unknown : a.agentName, at });
+		}
+	}
+	// Shared labels are told apart all at once, from the labels before the step.
+	const apart = (labels: Map<string, string>, more: (key: string, label: string) => string) => {
+		const shared = new Set([...labels.values()].filter((l, i, all) => all.indexOf(l) !== i));
+		return new Map([...labels].map(([key, label]) => [key, key !== UNKNOWN_AUTHOR && shared.has(label) ? more(key, label) : label]));
+	};
+	const byName = new Map([...latest].map(([key, v]) => [key, v.name]));
+	const byMachine = apart(byName, (key, name) => `${name} · ${machineOf(key) ?? names.local}`);
+	return apart(byMachine, (key, label) => `${label} · ${key}`); // the same name on the same machine: the id tells them apart
+}
+
+export interface AuthorGroup<T> {
+	readonly key: string;
+	readonly label: string;
+	readonly items: T[];
+}
+
+/** A sorted list by author: the groups in the order of their first item (newest first), each keeping the list's order. */
+export function groupByAuthor<T extends Pick<Artifact, 'agentId' | 'agentName'>>(sorted: readonly T[], labels: ReadonlyMap<string, string>, unknown: string): AuthorGroup<T>[] {
+	const groups = new Map<string, AuthorGroup<T>>();
+	for (const a of sorted) {
+		const key = authorKey(a);
+		let group = groups.get(key);
+		if (!group) {
+			group = { key, label: labels.get(key) ?? (key === UNKNOWN_AUTHOR ? unknown : a.agentName), items: [] };
+			groups.set(key, group);
+		}
+		group.items.push(a);
+	}
+	return [...groups.values()];
+}
+
 /** The file extension a version is saved with (open in a tab, send as @file). */
 export function extensionFor(a: Pick<Artifact, 'kind'>, v: Pick<ArtifactVersion, 'language'>): string {
 	switch (a.kind) {

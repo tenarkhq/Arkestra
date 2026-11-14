@@ -1,6 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Arkestra. The artifact gallery (AR26): every agent's output of every thread in one place,
- *  with search, project / kind / agent filters, pinned ones on top, and per artifact its
+ *  grouped by the agent that made it, with search, project / kind / agent filters, pinned ones
+ *  on top, and per artifact its
  *  preview, versions, a tab of its own, the jump to its thread, @-reference into the room
  *  and copy.
  *--------------------------------------------------------------------------------------------*/
@@ -10,7 +11,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { RoomState } from './room';
-import { ARTIFACT_KINDS, extensionFor, filterArtifacts, roomArtifacts, type Artifact, type ArtifactVersion } from './artifacts';
+import { ARTIFACT_KINDS, authorKey, authorLabels, extensionFor, filterArtifacts, roomArtifacts, type Artifact, type ArtifactVersion } from './artifacts';
 import { flowchartSvg, parseFlowchart } from './flowchart';
 
 const PINNED = 'arkestra.artifacts.pinned';
@@ -126,13 +127,17 @@ export class ArtifactGallery implements vscode.Disposable {
 			return;
 		}
 		this.artifacts = await this.collect();
+		const labels = this.labels();
+		// Who made it (AR26): the page groups by this key under this label.
+		const authors = authorLabels(this.artifacts, { unknown: labels.unknownAgent, local: labels.thisMachine });
 		const data = {
 			pinned: [...this.pinned()],
 			items: await Promise.all(this.artifacts.map(async a => ({
-				key: a.key, kind: a.kind, title: a.title, roomId: a.roomId, roomTitle: a.roomTitle, project: a.project ?? '', agentName: a.agentName,
+				key: a.key, kind: a.kind, title: a.title, roomId: a.roomId, roomTitle: a.roomTitle, project: a.project ?? '', agentName: a.agentName || labels.unknownAgent,
+				author: authorKey(a), authorLabel: authors.get(authorKey(a)) ?? labels.unknownAgent,
 				versions: await Promise.all(a.versions.map(async v => ({ n: v.n, at: v.at, language: v.language ?? '', content: v.content.slice(0, PREVIEW_LIMIT), src: a.kind === 'image' ? this.imageSrc(panel.webview, v) : undefined, svg: a.kind === 'diagram' ? diagramSvg(v.content) : undefined }))),
 			}))),
-			labels: this.labels(),
+			labels,
 			select: this.selectNext,
 		};
 		this.selectNext = undefined;
@@ -162,7 +167,7 @@ export class ArtifactGallery implements vscode.Disposable {
 		return {
 			title: vscode.l10n.t('Artifacts'), subtitle: vscode.l10n.t('Every agent\'s output of every thread in one place'), search: vscode.l10n.t('Search'),
 			project: vscode.l10n.t('Project'), all: vscode.l10n.t('All'), noProject: vscode.l10n.t('No project'), kind: vscode.l10n.t('Kind'), agent: vscode.l10n.t('Agent'),
-			pinnedFirst: vscode.l10n.t('Pinned ones on top'), pinnedGroup: vscode.l10n.t('Pinned'), recent: vscode.l10n.t('Recent'), empty: vscode.l10n.t('No artifacts yet. Diagrams, documents, pages, code and images the agents write in any thread show up here.'),
+			pinnedFirst: vscode.l10n.t('Pinned ones on top'), pinnedGroup: vscode.l10n.t('Pinned'), unknownAgent: vscode.l10n.t('Unknown'), thisMachine: vscode.l10n.t('this machine'), empty: vscode.l10n.t('No artifacts yet. Diagrams, documents, pages, code and images the agents write in any thread show up here.'),
 			noMatch: vscode.l10n.t('Nothing matches the filters.'), pin: vscode.l10n.t('Pin'), unpin: vscode.l10n.t('Unpin'), openTab: vscode.l10n.t('Open in a tab'), thread: vscode.l10n.t('Go to the thread'),
 			send: vscode.l10n.t('Send to the room as an @-reference'), copy: vscode.l10n.t('Copy'), versions: vscode.l10n.t('Versions'), version: vscode.l10n.t('version {0}'), pick: vscode.l10n.t('Pick an artifact on the left.'),
 			mermaid: vscode.l10n.t('This diagram kind is shown as its mermaid source; flowcharts are drawn.'), source: vscode.l10n.t('Source'), kinds, kindOrder: ARTIFACT_KINDS,
@@ -226,7 +231,8 @@ export class ArtifactGallery implements vscode.Disposable {
 			}
 			case 'send': {
 				const uri = await this.save(a, v);
-				await vscode.commands.executeCommand('workbench.action.chat.open', { query: `@file:"${uri.fsPath}" `, isPartialQuery: true });
+				// Into the composer of the thread used last (or a new chat): Arkestra's own thread panel.
+				await vscode.commands.executeCommand('arkestra.rooms.insertInThread', `@file:"${uri.fsPath}"`);
 				return;
 			}
 			case 'render': {
@@ -253,7 +259,8 @@ function galleryHtml(cspSource: string): string {
 	.chips { display: flex; flex-wrap: wrap; gap: 4px; } .chips b { width: 100%; font-weight: 600; font-size: .9em; }
 	.chip { border: 1px solid var(--vscode-panel-border); border-radius: 10px; padding: 1px 8px; cursor: pointer; background: none; color: inherit; font: inherit; }
 	.chip.on { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: transparent; }
-	.group { font-weight: 600; margin-top: 4px; }
+	.group { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; color: color-mix(in srgb, var(--vscode-descriptionForeground) 70%, transparent); font-size: 12px; padding: 10px 2px 0; }
+	.group span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.card { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 8px 10px; cursor: pointer; display: grid; gap: 2px; }
 	.card.sel { outline: 1px solid var(--vscode-focusBorder); }
 	.card pre { margin: 4px 0 0; max-height: 4.5em; overflow: hidden; font-size: .85em; opacity: .8; }
@@ -302,9 +309,14 @@ function galleryHtml(cspSource: string): string {
 		const projects = [...new Set(data.items.map(a => a.project || ''))];
 		const agents = [...new Set(data.items.map(a => a.agentName.replace(/ ·.*$/, '').replace(/ #\\d+$/, '')))];
 		const items = list();
-		const card = a => { const v = latest(a); return '<div class="card' + (a.key === st.sel ? ' sel' : '') + '" data-key="' + esc(a.key) + '"><span class="kind mut">' + esc(L.kinds[a.kind]) + '</span><b>' + esc(a.title) + '</b><span class="mut">' + esc(a.agentName) + ' · ' + esc(a.roomTitle) + ' · ' + esc(time(v.at)) + (a.versions.length > 1 ? ' · v' + a.versions.length : '') + '</span>' + (a.kind === 'code' || a.kind === 'diagram' ? '<pre>' + esc(v.content.split('\\n').slice(0, 4).join('\\n')) + '</pre>' : '') + '</div>'; };
+		// Under its author's header a card needs no author; among the pinned it does.
+		const card = (a, withAuthor) => { const v = latest(a); return '<div class="card' + (a.key === st.sel ? ' sel' : '') + '" data-key="' + esc(a.key) + '"><span class="kind mut">' + esc(L.kinds[a.kind]) + '</span><b>' + esc(a.title) + '</b><span class="mut">' + (withAuthor ? esc(a.authorLabel) + ' · ' : '') + esc(a.roomTitle) + ' · ' + esc(time(v.at)) + (a.versions.length > 1 ? ' · v' + a.versions.length : '') + '</span>' + (a.kind === 'code' || a.kind === 'diagram' ? '<pre>' + esc(v.content.split('\\n').slice(0, 4).join('\\n')) + '</pre>' : '') + '</div>'; };
+		const header = (label, n) => '<div class="group"><span>' + esc(label) + '</span><span>' + n + '</span></div>';
 		const top = st.pinnedFirst ? items.filter(a => pinned.has(a.key)) : [];
 		const rest = st.pinnedFirst ? items.filter(a => !pinned.has(a.key)) : items;
+		// By author, the one with the newest artifact first (the list is newest first).
+		const byAuthor = new Map();
+		for (const a of rest) { if (!byAuthor.has(a.author)) byAuthor.set(a.author, { label: a.authorLabel, items: [] }); byAuthor.get(a.author).items.push(a); }
 		document.getElementById('left').innerHTML = '<div><h1>' + esc(L.title) + '</h1><div class="mut">' + esc(L.subtitle) + '</div></div>'
 			+ '<input type="search" id="q" placeholder="' + esc(L.search) + '" value="' + esc(st.query) + '">'
 			+ (projects.length > 1 || projects[0] ? chips(L.project, [{ value: '', label: L.all }, ...projects.filter(Boolean).map(p => ({ value: p, label: p.split(/[\\\\/]/).pop() }))], st.project, false, 'project') : '')
@@ -312,8 +324,8 @@ function galleryHtml(cspSource: string): string {
 			+ (agents.length ? chips(L.agent, agents.map(a => ({ value: a, label: a })), st.agents, true, 'agents') : '')
 			+ '<label><input type="checkbox" id="pf"' + (st.pinnedFirst ? ' checked' : '') + '> ' + esc(L.pinnedFirst) + '</label>'
 			+ (!data.items.length ? '<p class="mut">' + esc(L.empty) + '</p>' : !items.length ? '<p class="mut">' + esc(L.noMatch) + '</p>' : '')
-			+ (top.length ? '<div class="group">' + esc(L.pinnedGroup) + ' · ' + top.length + '</div>' + top.map(card).join('') : '')
-			+ (rest.length ? (top.length ? '<div class="group">' + esc(L.recent) + '</div>' : '') + rest.map(card).join('') : '');
+			+ (top.length ? header(L.pinnedGroup, top.length) + top.map(a => card(a, true)).join('') : '')
+			+ [...byAuthor.values()].map(g => header(g.label, g.items.length) + g.items.map(a => card(a, false)).join('')).join('');
 		drawDetail();
 	}
 	function drawDetail() {
@@ -330,7 +342,7 @@ function galleryHtml(cspSource: string): string {
 		else if (a.kind === 'diagram' && v.svg) preview = '<div class="diagram">' + v.svg + '</div><details><summary class="mut">' + esc(L.source) + '</summary><pre>' + esc(v.content) + '</pre></details>';
 		else preview = (a.kind === 'diagram' ? '<p class="mut">' + esc(L.mermaid) + '</p>' : '') + '<pre>' + esc(v.content) + '</pre>';
 		right.innerHTML = '<h1>' + esc(a.title) + (isPinned ? ' <span class="mut">· ' + esc(L.pinnedGroup) + '</span>' : '') + '</h1>'
-			+ '<div class="mut">' + esc(a.agentName) + ' · ' + esc(a.roomTitle) + ' · ' + esc(L.version.replace('{0}', v.n)) + ' · ' + esc(time(v.at)) + ' · <a data-act="thread">' + esc(L.thread) + '</a></div>'
+			+ '<div class="mut">' + esc(a.authorLabel) + ' · ' + esc(a.roomTitle) + ' · ' + esc(L.version.replace('{0}', v.n)) + ' · ' + esc(time(v.at)) + ' · <a data-act="thread">' + esc(L.thread) + '</a></div>'
 			+ '<div class="bar"><button class="act" data-act="pin">' + esc(isPinned ? L.unpin : L.pin) + '</button><button class="act" data-act="openTab">' + esc(L.openTab) + '</button><button class="act" data-act="send">' + esc(L.send) + '</button><button class="act" data-act="copy">' + esc(L.copy) + '</button></div>'
 			+ '<div class="preview">' + preview + '</div>'
 			+ (a.versions.length > 1 ? '<div class="versions"><b>' + esc(L.versions) + '</b>' + a.versions.map(x => '<button class="chip' + (x.n === v.n ? ' on' : '') + '" data-ver="' + x.n + '">v' + x.n + ' · ' + esc(time(x.at)) + '</button>').join('') + '</div>' : '');

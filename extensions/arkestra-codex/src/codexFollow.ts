@@ -5,9 +5,16 @@
 
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
-import type { Piece } from './follow';
+import { EntryAssembler, LineSplitter, type Piece } from './follow';
+import type { SessionEntry, SessionHistory } from './rooms';
 
 const THREAD_ID = /^[0-9A-Za-z][0-9A-Za-z_-]{1,79}$/;
+
+/**
+ * What Codex itself puts before the user's first words (the folder, AGENTS.md, the user's own
+ * instructions): a user message in older rollouts, never something the user wrote.
+ */
+const CODEX_PREAMBLE = /^(<environment_context>|<user_instructions>|<INSTRUCTIONS>|# AGENTS\.md instructions for )/;
 
 function textOf(content: unknown): string {
 	return (Array.isArray(content) ? content : []).map((c: any) => typeof c?.text === 'string' ? c.text : '').join('\n').trim();
@@ -34,12 +41,75 @@ export function codexPiece(line: string): Piece {
 		const item = p.item;
 		const kind = item?.type === 'UserMessage' ? 'user' : item?.type === 'AgentMessage' ? 'agent' : undefined;
 		const text = kind ? textOf(item.content) : '';
-		return kind && text ? { kind, text, ...(typeof item.id === 'string' ? { id: item.id } : {}), ...at } : undefined;
+		return kind && text && !(kind === 'user' && CODEX_PREAMBLE.test(text)) ? { kind, text, ...(typeof item.id === 'string' ? { id: item.id } : {}), ...at } : undefined;
 	}
 	if ((p.type === 'user_message' || p.type === 'agent_message') && typeof p.message === 'string' && p.message.trim()) {
-		return { kind: p.type === 'user_message' ? 'user' : 'agent', text: p.message.trim(), ...at };
+		const kind = p.type === 'user_message' ? 'user' : 'agent';
+		return kind === 'user' && CODEX_PREAMBLE.test(p.message.trim()) ? undefined : { kind, text: p.message.trim(), ...at };
 	}
 	return undefined;
+}
+
+/**
+ * A rollout file read from its start (the history import), the way the live follow reads it:
+ * the same entries under the same ids, the room's own turns left out, and the cursor the
+ * follow goes on from, so nothing written after the read is lost and nothing comes twice.
+ * Codex 0.163 keeps a thread's turns "paginated": thread/read gives none, the file has them all.
+ */
+export class RolloutHistory {
+	private readonly splitter = new LineSplitter();
+	private readonly assembler = new EntryAssembler({ mute: true, positional: true });
+	private readonly entries: SessionEntry[] = [];
+
+	push(chunk: Buffer): void {
+		for (const line of this.splitter.push(chunk)) {
+			const entry = line.text.trim() ? this.assembler.feed(codexPiece(line.text), line.start) : undefined;
+			if (!entry) {
+				continue;
+			}
+			if (entry.id !== undefined && this.entries.at(-1)?.id === entry.id) {
+				this.entries[this.entries.length - 1] = entry; // the same answer, grown
+			} else {
+				this.entries.push(entry);
+			}
+		}
+	}
+
+	/**
+	 * The entries read, the latest `limit` of them, and the follow's cursor: after the last whole
+	 * line, or at the start of an answer that may still grow (the follow reads it again, same id).
+	 */
+	result(limit = 300): Required<SessionHistory> {
+		return { entries: this.entries.slice(-limit), cursor: this.assembler.cursor(this.splitter.position) };
+	}
+}
+
+/** A whole rollout file's content as history and follow cursor. */
+export function rolloutHistory(content: Buffer, limit = 300): Required<SessionHistory> {
+	const history = new RolloutHistory();
+	history.push(content);
+	return history.result(limit);
+}
+
+/** Reads a rollout file on this machine up to its size now, in pieces (a long thread is many MB). */
+export async function readLocalRollout(file: string, limit = 300): Promise<Required<SessionHistory>> {
+	const handle = await fs.open(file, 'r');
+	try {
+		const { size } = await handle.stat();
+		const history = new RolloutHistory();
+		for (let pos = 0; pos < size;) {
+			const buf = Buffer.alloc(Math.min(1 << 20, size - pos));
+			const { bytesRead } = await handle.read(buf, 0, buf.length, pos);
+			if (!bytesRead) {
+				break;
+			}
+			history.push(buf.subarray(0, bytesRead));
+			pos += bytesRead;
+		}
+		return history.result(limit);
+	} finally {
+		await handle.close();
+	}
 }
 
 /** The thread id, checked before it goes into a file name or a shell line. */
@@ -96,4 +166,9 @@ export function locateRolloutScript(id: string, known: string | undefined, homes
 	}
 	const dirs = homes.map(h => `${remoteHome(h)}/sessions`).join(' ');
 	return `f=$(find ${dirs} -name 'rollout-*-${checkThreadId(id)}.jsonl' 2>/dev/null | head -n 1)`;
+}
+
+/** The script that prints a thread's rollout file on a POSIX machine (exit 3: no such file). */
+export function readRolloutScript(locate: string): string {
+	return [locate, '[ -n "$f" ] && [ -f "$f" ] || exit 3', 'exec cat "$f"'].join('\n');
 }

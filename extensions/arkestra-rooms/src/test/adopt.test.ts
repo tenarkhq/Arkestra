@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { AgentRegistry, type Agent, type TurnInput } from '../agent';
-import { Room, importedRoomState, seenBy, type Message } from '../room';
+import { Room, importedRoomState, seenBy, sessionHistoryOf, type Message } from '../room';
 
 const session = { id: 's-1', title: 'Stop loss fix', cwd: '/home/r/tenark', updatedAt: '2026-11-14T10:00:00Z' };
 const entries = [
@@ -26,6 +26,16 @@ test('import: the session\'s messages under the agent, a note first, the session
 	assert.deepEqual([state.messages[1].at, state.messages[2].at], ['2026-11-14T09:00:00.000Z', '2026-11-14T12:00:00.000Z']);
 	assert.deepEqual(state.adopted, { 'claude@prd': { session: 's-1', cwd: '/home/r/tenark', upTo: state.messages[2].id } });
 	assert.equal(importedRoomState({ id: 'codex', name: 'Codex' }, { id: 't', title: 'x', updatedAt: '' }, [], 'file:///p').project, 'file:///p');
+});
+
+test('import with the history\'s cursor: the live follow goes on exactly after what was imported', () => {
+	const state = importedRoomState({ id: 'codex', name: 'Codex' }, session, { entries, cursor: '6744m' });
+	assert.equal(state.messages.length, 3);
+	assert.deepEqual(state.adopted, { codex: { session: 's-1', cwd: '/home/r/tenark', upTo: state.messages[2].id, cursor: '6744m' } });
+	// An older agent gives a plain list: no cursor, the follow starts at the session's end.
+	assert.deepEqual(sessionHistoryOf(entries), { entries });
+	assert.deepEqual(sessionHistoryOf({ entries: [] }), { entries: [] });
+	assert.deepEqual(sessionHistoryOf(undefined), { entries: [] });
 });
 
 test('seen: up to the imported messages, or later when the agent answered here since', () => {

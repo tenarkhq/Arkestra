@@ -1,11 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Arkestra. Artifacts: found in agents' answers by kind and title, versions by title,
- *  unchanged repeats skipped, filters and pinned ones first, file extensions.
+ *  unchanged repeats skipped, filters and pinned ones first, grouped by author, file extensions.
  *--------------------------------------------------------------------------------------------*/
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { extensionFor, filterArtifacts, findInAnswer, roomArtifacts } from '../artifacts';
+import { authorLabels, extensionFor, filterArtifacts, findInAnswer, groupByAuthor, roomArtifacts } from '../artifacts';
 import type { Message, RoomState } from '../room';
 
 const code = (lines: number) => Array.from({ length: lines }, (_, i) => `line ${i}`).join('\n');
@@ -89,4 +89,36 @@ test('a version is saved with its kind\'s extension', () => {
 	assert.equal(extensionFor({ kind: 'code' }, { language: 'python' }), 'py');
 	assert.equal(extensionFor({ kind: 'code' }, { language: 'zig' }), 'txt');
 	assert.equal(extensionFor({ kind: 'image' }, { language: 'svg' }), 'svg');
+});
+
+test('by author: one group per agent, the newest first, its name with the machine when two share it, unknown for old records', () => {
+	const mk = (key: string, agentId: string, agentName: string, at: string) =>
+		({ key, kind: 'code' as const, title: key, roomId: 'r', roomTitle: 'Room', agentId, agentName, versions: [{ n: 1, at, messageId: key, content: key }] });
+	const all = [
+		mk('a', 'claude', 'Claude', '2026-11-14T10:00:00Z'),
+		mk('b', 'codex', 'Codex', '2026-11-14T12:00:00Z'),
+		mk('c', 'claude@tenark-claude', 'Claude', '2026-11-14T11:00:00Z'),
+		mk('d', 'claude', 'Claude', '2026-11-14T13:00:00Z'),
+		mk('e', '', '', '2026-11-14T09:00:00Z'),
+		mk('f', 'codex@prd', 'Codex · prd', '2026-11-14T08:00:00Z'),
+	];
+	const labels = authorLabels(all, { unknown: 'Unknown', local: 'this machine' });
+	assert.deepEqual(Object.fromEntries(labels), {
+		claude: 'Claude · this machine', 'claude@tenark-claude': 'Claude · tenark-claude', codex: 'Codex', unknown: 'Unknown', 'codex@prd': 'Codex · prd',
+	});
+	const groups = groupByAuthor(filterArtifacts(all, {}, new Set()), labels, 'Unknown');
+	assert.deepEqual(groups.map(g => [g.label, g.items.map(a => a.key)]), [
+		['Claude · this machine', ['d', 'a']],
+		['Codex', ['b']],
+		['Claude · tenark-claude', ['c']],
+		['Unknown', ['e']],
+		['Codex · prd', ['f']],
+	]);
+	// Filters come first: a group only holds what matches.
+	assert.deepEqual(groupByAuthor(filterArtifacts(all, { query: 'a' }, new Set()), labels, 'Unknown').map(g => [g.label, g.items.length]), [['Claude · this machine', 1]]);
+	// The same name on the same machine: the id tells them apart.
+	const twins = authorLabels([mk('x', 'gemini', 'Gemini', '1'), mk('y', 'gemini-2', 'Gemini', '2')], { unknown: 'Unknown', local: 'local' });
+	assert.deepEqual([...twins.values()], ['Gemini · local · gemini', 'Gemini · local · gemini-2']);
+	// The latest name of an agent is its label.
+	assert.equal(authorLabels([mk('x', 'acp', 'Old', '1'), mk('y', 'acp', 'New', '2')], { unknown: 'U', local: 'l' }).get('acp'), 'New');
 });
