@@ -24,7 +24,23 @@ export interface ReadinessAction {
 export type AgentEvent =
 	| { readonly kind: 'text'; readonly text: string }
 	| { readonly kind: 'tool'; readonly text: string }
-	| { readonly kind: 'error'; readonly text: string };
+	| { readonly kind: 'error'; readonly text: string }
+	| { readonly kind: 'usage'; readonly usage: Usage };
+
+/** Token, context and quota figures an agent reports (AR25); every field is optional. */
+export interface Usage {
+	/** Tokens of this turn so far (increments: the room adds them up). */
+	readonly input?: number;
+	readonly output?: number;
+	readonly cached?: number;
+	/** How full the agent's context is now. */
+	readonly context?: { readonly used: number; readonly window?: number };
+	/** Cost of this turn in USD, when the agent knows it. */
+	readonly costUsd?: number;
+	/** The account's quota windows (for example 5 hours, a week): how much is used. */
+	readonly limits?: readonly { readonly label: string; readonly usedPercent: number; readonly resetsAt?: string }[];
+}
+
 
 export interface TurnInput {
 	readonly roomId: string;

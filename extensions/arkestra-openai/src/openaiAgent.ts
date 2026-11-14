@@ -4,7 +4,7 @@
  *  Nothing is stored at OpenAI (store: false); each turn sends the thread.
  *--------------------------------------------------------------------------------------------*/
 
-import type { Agent, AgentEvent, Message, Readiness, TurnInput } from './rooms';
+import type { Agent, AgentEvent, Message, Readiness, TurnInput, Usage } from './rooms';
 
 export interface OpenAIOptions {
 	readonly model: string;
@@ -31,12 +31,14 @@ export function toInput(messages: readonly Message[], selfId: string): { role: '
 }
 
 /** One server-sent event's data, as the turn reads it. */
-export function parseEvent(data: any): { text?: string; error?: string; done?: boolean } {
+export function parseEvent(data: any): { text?: string; error?: string; done?: boolean; usage?: Usage } {
 	switch (data?.type) {
 		case 'response.output_text.delta':
 			return typeof data.delta === 'string' ? { text: data.delta } : {};
-		case 'response.completed':
-			return { done: true };
+		case 'response.completed': {
+			const u = data.response?.usage;
+			return u ? { done: true, usage: { input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cached: u.input_tokens_details?.cached_tokens ?? 0, context: { used: (u.input_tokens ?? 0) + (u.output_tokens ?? 0) } } } : { done: true };
+		}
 		case 'response.incomplete':
 			return { done: true, error: `Answer cut short: ${data.response?.incomplete_details?.reason ?? 'incomplete'}` };
 		case 'response.failed':
@@ -124,6 +126,9 @@ export class OpenAIAgent implements Agent {
 			}
 			if (parsed.text) {
 				onEvent({ kind: 'text', text: parsed.text });
+			}
+			if (parsed.usage) {
+				onEvent({ kind: 'usage', usage: parsed.usage });
 			}
 			failure = parsed.error ?? failure;
 			done ||= !!parsed.done;

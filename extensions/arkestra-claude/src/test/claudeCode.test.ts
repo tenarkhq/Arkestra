@@ -7,7 +7,7 @@ import * as assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { ClaudeCodeAgent, permissionArgs, ROOM_PREAMBLE, parseLine } from '../claudeCode';
+import { ClaudeCodeAgent, permissionArgs, ROOM_PREAMBLE, parseLine, rateLimit } from '../claudeCode';
 import type { AgentEvent, Message } from '../rooms';
 
 const FAKE = `#!/usr/bin/env node
@@ -126,4 +126,14 @@ test('the shared rules go to a session once per version: again only when they ch
 	assert.ok(prompts[0].startsWith(ROOM_PREAMBLE) && prompts[0].includes('KÖZÖS v1\n\n[You]\nfirst'));
 	assert.equal(prompts[1], '[You]\nsecond');
 	assert.equal(prompts[2], 'KÖZÖS v2\n\n[You]\nthird');
+});
+
+test('usage: the result\'s totals and cost, the context fill of the last model call, rate limit windows', () => {
+	const assistant = parseLine(JSON.stringify({ type: 'assistant', message: { content: [], usage: { input_tokens: 10, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 500, output_tokens: 300 } } }));
+	assert.equal(assistant.contextUsed, 40_810);
+	const result = parseLine(JSON.stringify({ type: 'result', is_error: false, result: 'ok', total_cost_usd: 0.42, usage: { input_tokens: 100, cache_creation_input_tokens: 900, cache_read_input_tokens: 80_000, output_tokens: 1200 }, modelUsage: { 'claude-x': { contextWindow: 200_000 } } }));
+	assert.deepEqual(result.usage, { input: 1000, output: 1200, cached: 80_000, costUsd: 0.42, context: { used: 0, window: 200_000 } });
+	const limit = parseLine(JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning', rateLimitType: 'seven_day', utilization: 0.83, resetsAt: 1795000000 } }));
+	assert.deepEqual(limit.events, [{ kind: 'usage', usage: { limits: [{ label: 'week', usedPercent: 83, resetsAt: new Date(1795000000 * 1000).toISOString() } ] } }]);
+	assert.equal(rateLimit({ status: 'allowed' }), undefined, 'no utilization, no ring');
 });

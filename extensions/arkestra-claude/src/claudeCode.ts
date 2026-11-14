@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
-import type { Agent, AgentEvent, Message, Readiness, TurnInput } from './rooms';
+import type { Agent, AgentEvent, Usage, Message, Readiness, TurnInput } from './rooms';
 
 export type AuthMode = 'subscription' | 'apiKey';
 
@@ -59,7 +59,7 @@ export const ROOM_PREAMBLE = 'You are Claude in an Arkestra room: a thread share
 	+ 'and do not repeat what they already did.';
 
 /** Parses one stream-json line of `claude -p --output-format stream-json`. */
-export function parseLine(line: string): { events: AgentEvent[]; sessionId?: string; result?: { isError: boolean; text?: string } } {
+export function parseLine(line: string): { events: AgentEvent[]; sessionId?: string; result?: { isError: boolean; text?: string }; contextUsed?: number; usage?: Usage } {
 	let data: any;
 	try {
 		data = JSON.parse(line);
@@ -68,6 +68,15 @@ export function parseLine(line: string): { events: AgentEvent[]; sessionId?: str
 	}
 	const events: AgentEvent[] = [];
 	const sessionId: string | undefined = typeof data.session_id === 'string' ? data.session_id : undefined;
+	if (data.type === 'rate_limit_event' && data.rate_limit_info) {
+		const limit = rateLimit(data.rate_limit_info);
+		if (limit) {
+			events.push({ kind: 'usage', usage: { limits: [limit] } });
+		}
+	}
+	// The latest model call's input is how full the context is.
+	const u = data.type === 'assistant' ? data.message?.usage : undefined;
+	const contextUsed = u ? (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0) : undefined;
 	if (data.type === 'assistant' && Array.isArray(data.message?.content)) {
 		for (const block of data.message.content) {
 			if (block?.type === 'text' && typeof block.text === 'string' && block.text) {
@@ -78,9 +87,31 @@ export function parseLine(line: string): { events: AgentEvent[]; sessionId?: str
 		}
 	}
 	if (data.type === 'result') {
-		return { events, sessionId, result: { isError: !!data.is_error, text: typeof data.result === 'string' ? data.result : undefined } };
+		const total = data.usage ?? {};
+		const models = data.modelUsage && typeof data.modelUsage === 'object' ? Object.values(data.modelUsage) as { contextWindow?: number }[] : [];
+		const window = models.map(m => m?.contextWindow).find((w): w is number => typeof w === 'number' && w > 0);
+		const usage: Usage = {
+			input: (total.input_tokens ?? 0) + (total.cache_creation_input_tokens ?? 0),
+			output: total.output_tokens ?? 0,
+			cached: total.cache_read_input_tokens ?? 0,
+			...(typeof data.total_cost_usd === 'number' ? { costUsd: data.total_cost_usd } : {}),
+			...(window ? { context: { used: 0, window } } : {}),
+		};
+		const reported = data.usage !== undefined || typeof data.total_cost_usd === 'number';
+		return { events, sessionId, ...(reported ? { usage } : {}), result: { isError: !!data.is_error, text: typeof data.result === 'string' ? data.result : undefined } };
 	}
-	return { events, sessionId };
+	return { events, sessionId, ...(contextUsed !== undefined ? { contextUsed } : {}) };
+}
+
+/** Claude Code's rate limit report as a quota window, when it says how much is used. */
+export function rateLimit(info: any): { label: string; usedPercent: number; resetsAt?: string } | undefined {
+	const used = typeof info?.utilization === 'number' ? info.utilization : undefined;
+	if (used === undefined) {
+		return undefined;
+	}
+	const labels: Record<string, string> = { five_hour: '5h', seven_day: 'week', seven_day_opus: 'week · Opus', seven_day_sonnet: 'week · Sonnet' };
+	const resets = typeof info.resetsAt === 'number' ? new Date(info.resetsAt * 1000).toISOString() : undefined;
+	return { label: labels[info.rateLimitType] ?? String(info.rateLimitType ?? 'limit'), usedPercent: Math.round(used <= 1 ? used * 100 : used), ...(resets ? { resetsAt: resets } : {}) };
 }
 
 function describeTool(name: string, input: any): string {
@@ -159,10 +190,18 @@ export class ClaudeCodeAgent implements Agent {
 		let stderr = '';
 		let result: { isError: boolean; text?: string } | undefined;
 		let sawText = false;
+		let contextUsed: number | undefined;
 		const handle = (line: string) => {
 			const parsed = parseLine(line);
 			if (parsed.sessionId) {
 				session.sessionId = parsed.sessionId;
+			}
+			contextUsed = parsed.contextUsed ?? contextUsed;
+			if (parsed.usage) {
+				// The result knows the window; the last model call knows the fill.
+				const { context, ...totals } = parsed.usage;
+				const window = context?.window;
+				onEvent({ kind: 'usage', usage: { ...totals, ...(contextUsed !== undefined ? { context: { used: contextUsed, ...(window ? { window } : {}) } } : {}) } });
 			}
 			for (const event of parsed.events) {
 				sawText ||= event.kind === 'text';

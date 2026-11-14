@@ -6,7 +6,7 @@
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
-import type { Agent, AgentEvent, Message, PermissionRequest, Readiness, TurnInput } from './rooms';
+import type { Agent, AgentEvent, Message, PermissionRequest, Readiness, TurnInput, Usage } from './rooms';
 import { RpcClient, type Notification } from './rpc';
 
 export type CodexAuth = { readonly mode: 'subscription' } | { readonly mode: 'apiKey'; readonly key: string | undefined };
@@ -55,6 +55,15 @@ interface RoomThread {
 	seen: Set<string>;
 	/** The shared rules' version this session was given. */
 	sharedVersion?: string;
+	/** The thread's token totals at the last report, so a report adds only what is new. */
+	tokens?: TokenBreakdown;
+}
+
+interface TokenBreakdown {
+	inputTokens?: number;
+	cachedInputTokens?: number;
+	outputTokens?: number;
+	totalTokens?: number;
 }
 
 /** Turns transcript messages into the text Codex reads, author by author. */
@@ -170,7 +179,22 @@ export class CodexAgent implements Agent {
 		const subscriptions: { dispose(): void }[] = [];
 		const completed = new Promise<any>((resolve, reject) => {
 			subscriptions.push(client.onNotification((n: Notification) => {
+				if (n.method === 'account/rateLimits/updated') {
+					const limits = codexLimits(n.params?.rateLimits);
+					if (limits.length) {
+						onEvent({ kind: 'usage', usage: { limits } });
+					}
+					return;
+				}
 				if (n.params?.threadId !== threadId) {
+					return;
+				}
+				if (n.method === 'thread/tokenUsage/updated') {
+					const usage = codexUsage(n.params.tokenUsage, room.tokens);
+					room.tokens = n.params.tokenUsage?.total ?? room.tokens;
+					if (usage) {
+						onEvent({ kind: 'usage', usage });
+					}
 					return;
 				}
 				if (n.method === 'item/started') {
@@ -309,4 +333,43 @@ export class CodexAgent implements Agent {
 /** The app-server's per-turn sandbox policy for a sandbox setting. */
 export function sandboxPolicy(sandbox: CodexOptions['sandbox']): { type: 'readOnly' | 'workspaceWrite' | 'dangerFullAccess' } {
 	return { type: sandbox === 'read-only' ? 'readOnly' : sandbox === 'danger-full-access' ? 'dangerFullAccess' : 'workspaceWrite' };
+}
+
+/** A thread token report: what is new since the last one, and how full the context is. */
+export function codexUsage(report: { total?: TokenBreakdown; last?: TokenBreakdown; modelContextWindow?: number | null } | undefined, before: TokenBreakdown | undefined): Usage | undefined {
+	if (!report?.total) {
+		return undefined;
+	}
+	const d = (k: keyof TokenBreakdown) => Math.max(0, (report.total![k] ?? 0) - (before?.[k] ?? 0));
+	const used = report.last?.totalTokens;
+	return {
+		input: d('inputTokens') - d('cachedInputTokens'),
+		cached: d('cachedInputTokens'),
+		output: d('outputTokens'),
+		...(used !== undefined ? { context: { used, ...(report.modelContextWindow ? { window: report.modelContextWindow } : {}) } } : {}),
+	};
+}
+
+/** The account's quota windows from a rate limit snapshot. */
+export function codexLimits(snapshot: any): { label: string; usedPercent: number; resetsAt?: string }[] {
+	const out: { label: string; usedPercent: number; resetsAt?: string }[] = [];
+	for (const w of [snapshot?.primary, snapshot?.secondary]) {
+		if (w && typeof w.usedPercent === 'number') {
+			out.push({ label: windowLabel(w.windowDurationMins), usedPercent: w.usedPercent, ...(typeof w.resetsAt === 'number' ? { resetsAt: new Date(w.resetsAt * 1000).toISOString() } : {}) });
+		}
+	}
+	return out;
+}
+
+function windowLabel(minutes: number | null | undefined): string {
+	if (!minutes) {
+		return 'limit';
+	}
+	if (minutes % 10080 === 0) {
+		return minutes === 10080 ? 'week' : `${minutes / 10080} weeks`;
+	}
+	if (minutes % 1440 === 0) {
+		return `${minutes / 1440}d`;
+	}
+	return minutes % 60 === 0 ? `${minutes / 60}h` : `${minutes}m`;
 }

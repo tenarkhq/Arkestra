@@ -20,6 +20,7 @@ import { Permissions, type PermissionsApi } from './permissionsUi';
 import { SharedContext } from './sharedUi';
 import { extractMemories } from './shared';
 import { BestOfN } from './bestUi';
+import { contextPercent, ringSvg, statusText, tightestLimit, usageLine, formatTokens } from './usage';
 import { GitTemplateIO, createWorkTrees } from './templates/gitio';
 import { TemplateRun } from './templates/run';
 import type { Role } from './templates/signals';
@@ -203,6 +204,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 					case 'start': activity.start(room.id, agentId); break;
 					case 'tool': activity.tool(room.id, agentId, event.text); break;
 					case 'error': activity.error(room.id, agentId, event.text); break;
+					case 'usage': activity.usage(room.id, agentId, event.usage); break;
 					case 'end': activity.end(room.id, agentId); break;
 				}
 			});
@@ -400,6 +402,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 					case 'text': stream.markdown(event.text); break;
 					case 'tool': activity.tool(room.id, agent.id, event.text); stream.progress(`${agent.name}: ${event.text}`); break;
 					case 'error': activity.error(room.id, agent.id, event.text); stream.markdown(`\n\n> ${agent.name}: ${event.text}\n`); break;
+					case 'usage': activity.usage(room.id, agent.id, event.usage); break;
 					case 'end': activity.end(room.id, agent.id); break;
 				}
 			}, abort.signal);
@@ -417,6 +420,30 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}
 		return result;
 	};
+
+	// The room's tokens, the fullest context and quota in the status bar (AR25).
+	const usageItem = vscode.window.createStatusBarItem('arkestra.usage', vscode.StatusBarAlignment.Right, 99);
+	usageItem.name = vscode.l10n.t('Agent usage');
+	usageItem.command = 'arkestra.rooms.showAgents';
+	const renderUsage = async () => {
+		const room = await currentRoom();
+		const rows = room ? room.roster.map(id => ({ name: registry.get(id)?.name ?? id, usage: activity.get(room.id, id).usage })) : [];
+		const text = statusText(rows.map(r => r.usage));
+		if (!text) {
+			usageItem.hide();
+			return;
+		}
+		usageItem.text = `$(pulse) ${text}`;
+		const md = new vscode.MarkdownString(`**${vscode.l10n.t('Agents in this room')}**\n\n| | ${vscode.l10n.t('Context')} | ${vscode.l10n.t('Quota')} | ${vscode.l10n.t('Tokens')} |\n|---|---|---|---|\n`);
+		for (const r of rows) {
+			const ctx = contextPercent(r.usage);
+			const limit = tightestLimit(r.usage);
+			md.appendMarkdown(`| ${r.name} | ${ctx !== undefined ? `${ctx}% (${formatTokens(r.usage!.context!.used)})` : '–'} | ${limit ? `${limit.usedPercent}% · ${limit.label}` : '–'} | ${usageLine(r.usage) || '–'} |\n`);
+		}
+		usageItem.tooltip = md;
+		usageItem.show();
+	};
+	context.subscriptions.push(usageItem, currentChanged.event(() => void renderUsage()), activity.onDidChange(roomId => { void currentRoom().then(r => { if (r?.id === roomId) { void renderUsage(); } }); }));
 
 	// The Agents tile: who is in the current room and what each one is doing.
 	let agentsPanel: vscode.WebviewPanel | undefined;
@@ -793,9 +820,17 @@ function agentsHtml(rows: readonly AgentRow[] | undefined): string {
 			? `<p class="mut">${escapeHtml(vscode.l10n.t('Nobody in this room yet.'))}</p>`
 			: rows.map(r => {
 				const s = state(r.activity);
+				const u = r.activity.usage;
+				const ctx = contextPercent(u);
+				const limit = tightestLimit(u);
+				const rings = [
+					ctx !== undefined ? ringSvg(ctx, vscode.l10n.t('Context {0}% full ({1} of {2} tokens)', ctx, formatTokens(u!.context!.used), formatTokens(u!.context!.window!))) : '',
+					limit ? ringSvg(limit.usedPercent, vscode.l10n.t('Quota {0}: {1}% used{2}', limit.label, limit.usedPercent, limit.resetsAt ? vscode.l10n.t(', resets {0}', new Date(limit.resetsAt).toLocaleString(vscode.env.language)) : '')) : '',
+				].join('');
+				const line = usageLine(u);
 				return `<div class="agent">
-					<div class="top"><span class="dot ${s.cls}"></span><b>${escapeHtml(r.name)}</b><span class="mut when">${escapeHtml(time(r.activity.since))}</span></div>
-					<div class="mut">${escapeHtml(r.detail)}</div>
+					<div class="top"><span class="dot ${s.cls}"></span><b>${escapeHtml(r.name)}</b><span class="rings">${rings}</span><span class="mut when">${escapeHtml(time(r.activity.since))}</span></div>
+					<div class="mut">${escapeHtml(r.detail)}${line ? ` · ${escapeHtml(line)}` : ''}</div>
 					<div class="${s.cls}">${escapeHtml(s.text)}</div>
 					${r.activity.error ? `<div class="err">${escapeHtml(r.activity.error)}</div>` : ''}
 				</div>`;
@@ -806,7 +841,12 @@ function agentsHtml(rows: readonly AgentRow[] | undefined): string {
 	body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); padding: 10px 12px; }
 	.agent { padding: 10px 0; border-bottom: 1px solid var(--vscode-panel-border); display: grid; gap: 3px; }
 	.top { display: flex; align-items: center; gap: 8px; }
-	.when { margin-left: auto; font-size: .9em; }
+	.when { font-size: .9em; }
+	.rings { margin-left: auto; display: inline-flex; gap: 4px; }
+	.ring .track { stroke: var(--vscode-panel-border); }
+	.ring.ok .fill { stroke: var(--vscode-charts-green, var(--vscode-progressBar-background)); }
+	.ring.warn .fill { stroke: var(--vscode-editorWarning-foreground); }
+	.ring.crit .fill { stroke: var(--vscode-errorForeground); }
 	.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--vscode-descriptionForeground); flex: none; }
 	.dot.busy { background: var(--vscode-progressBar-background); }
 	.dot.wait { background: var(--vscode-editorWarning-foreground); }

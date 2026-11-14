@@ -211,6 +211,15 @@ export class AcpAgent implements Agent {
 						onEvent({ kind: 'tool', text: `${describeToolCall(update)} · failed` });
 					}
 					break;
+				case 'usage_update': {
+					// ACP session usage: tokens in the context, the window, and the cost so far.
+					const used = typeof update.used === 'number' ? update.used : undefined;
+					const size = typeof update.size === 'number' ? update.size : undefined;
+					if (used !== undefined) {
+						onEvent({ kind: 'usage', usage: { context: { used, ...(size ? { window: size } : {}) } } });
+					}
+					break;
+				}
 			}
 		});
 		const cancel = () => peer.notify('session/cancel', { sessionId });
@@ -226,8 +235,11 @@ export class AcpAgent implements Agent {
 			}
 		}
 		try {
-			const result = await peer.request<{ stopReason: string }>('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
+			const result = await peer.request<{ stopReason: string; usage?: { inputTokens?: number; outputTokens?: number; cachedReadTokens?: number } }>('session/prompt', { sessionId, prompt: [{ type: 'text', text }] });
 			flush();
+			if (result.usage) {
+				onEvent({ kind: 'usage', usage: { input: result.usage.inputTokens ?? 0, output: result.usage.outputTokens ?? 0, cached: result.usage.cachedReadTokens ?? 0 } });
+			}
 			if (result.stopReason === 'refusal') {
 				onEvent({ kind: 'error', text: `${this.name} refused this request` });
 			} else if (result.stopReason === 'max_tokens' || result.stopReason === 'max_turn_requests') {
