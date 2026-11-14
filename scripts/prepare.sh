@@ -30,6 +30,10 @@ mkdir -p "${WORK}/arkestra-extensions"
 cp -R "${ROOT}/extensions/." "${WORK}/arkestra-extensions/"
 rm -rf "${WORK}"/arkestra-extensions/*/node_modules "${WORK}"/arkestra-extensions/*/out
 
+# Arkestra's source additions to VS Code (copied over the tree by the names step).
+mkdir -p "${WORK}/arkestra-overlay"
+cp -R "${ROOT}/branding/overlay/." "${WORK}/arkestra-overlay/"
+
 # Run the Arkestra names after VSCodium's own literals.
 cp "${ROOT}/branding/after-prepare.sh" "${WORK}/after-prepare.sh"
 printf '\n. ./after-prepare.sh\n' >> "${WORK}/prepare_vscode.sh"
