@@ -18,6 +18,15 @@ export interface ClaudeCodeOptions {
 	/** The stored API key, or undefined to use the CLI's own login. */
 	readonly apiKey: () => Promise<string | undefined>;
 	readonly spawn?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
+	/** Who this instance is: the local Claude, or Claude on an SSH machine. */
+	readonly identity?: AgentIdentity;
+}
+
+export interface AgentIdentity {
+	readonly id: string;
+	readonly name: string;
+	/** Where the CLI runs, shown in the agent's detail line. */
+	readonly where: string;
 }
 
 interface RoomSession {
@@ -72,18 +81,25 @@ function describeTool(name: string, input: any): string {
 }
 
 export class ClaudeCodeAgent implements Agent {
-	readonly id = 'claude';
-	readonly name = 'Claude';
+	readonly id: string;
+	readonly name: string;
+	private readonly where: string;
 	private readonly sessions = new Map<string, RoomSession>();
 
-	constructor(private readonly options: ClaudeCodeOptions) { }
+	constructor(private readonly options: ClaudeCodeOptions) {
+		({ id: this.id, name: this.name, where: this.where } = options.identity ?? { id: 'claude', name: 'Claude', where: 'local' });
+	}
 
 	get detail(): string {
-		return `Claude Code${this.options.model ? ' · ' + this.options.model : ''} · local`;
+		return `Claude Code${this.options.model ? ' · ' + this.options.model : ''} · ${this.where}`;
 	}
 
 	async readiness(): Promise<Readiness> {
-		const version = await this.run(['--version'], 10_000).catch(() => undefined);
+		const version = await this.run(['--version'], 20_000).catch(() => undefined);
+		if (version?.code === 255 && version.err) {
+			// ssh itself failed: unreachable machine, rejected key.
+			return { ready: false, reason: version.err, fix: 'retry' };
+		}
 		if (version === undefined || version.code !== 0) {
 			return { ready: false, reason: 'Claude Code CLI not found', fix: 'install' };
 		}
@@ -165,15 +181,18 @@ export class ClaudeCodeAgent implements Agent {
 		this.sessions.set(input.roomId, session);
 	}
 
-	private run(args: string[], timeoutMs: number): Promise<{ code: number | null; out: string }> {
+	private run(args: string[], timeoutMs: number): Promise<{ code: number | null; out: string; err?: string }> {
 		return new Promise((resolve, reject) => {
-			const child = (this.options.spawn ?? nodeSpawn)(this.options.command, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+			const child = (this.options.spawn ?? nodeSpawn)(this.options.command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 			let out = '';
+			let err = '';
 			const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('timeout')); }, timeoutMs);
 			child.stdout?.setEncoding('utf8');
 			child.stdout?.on('data', (c: string) => { out += c; });
+			child.stderr?.setEncoding('utf8');
+			child.stderr?.on('data', (c: string) => { err = (err + c).slice(-2000); });
 			child.on('error', e => { clearTimeout(timer); reject(e); });
-			child.on('close', code => { clearTimeout(timer); resolve({ code, out }); });
+			child.on('close', code => { clearTimeout(timer); resolve({ code, out, err: err.trim().split('\n').at(-1) || undefined }); });
 		});
 	}
 }
