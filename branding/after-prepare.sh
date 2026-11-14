@@ -52,6 +52,28 @@ for EXT in ../arkestra-extensions/*/; do
   grep -q "'extensions/${NAME}'," build/npm/dirs.ts
 done
 
+# AR03 · Removed: built-in extensions Arkestra does not ship.
+#   microsoft-authentication, tunnel-forwarding: Microsoft sign-in and relay.
+#   grunt, gulp, jake: outdated task runners; available from Open VSX.
+for NAME in microsoft-authentication tunnel-forwarding grunt gulp jake; do
+  rm -rf "extensions/${NAME}"
+  sed -i "\#^\s*'extensions/${NAME}/tsconfig.json',\$#d" build/gulpfile.extensions.ts
+  sed -i "\#^\s*'extensions/${NAME}',\$#d" build/npm/dirs.ts
+  if grep -q "'extensions/${NAME}[/']" build/gulpfile.extensions.ts build/npm/dirs.ts; then
+    echo "after-prepare: ${NAME} is still listed in the build" >&2
+    exit 1
+  fi
+done
+
+# AR03 · Removed: Remote Tunnels need these product keys; without them the feature is off.
+jq 'del(.tunnelApplicationName, .tunnelApplicationConfig, .win32TunnelMutex, .win32TunnelServiceMutex)' product.json > product.json.tmp && mv product.json.tmp product.json
+
+# AR03 · Hidden and Removed rows: Arkestra's workbench defaults, one source overlay.
+cp -R ../arkestra-overlay/. ./
+grep -q "contrib/arkestra/browser/arkestraDefaults.contribution.js" src/vs/workbench/workbench.common.main.ts || \
+  printf "\n// Arkestra\nimport './contrib/arkestra/browser/arkestraDefaults.contribution.js';\n" >> src/vs/workbench/workbench.common.main.ts
+grep -q "contrib/arkestra/browser/arkestraDefaults.contribution.js" src/vs/workbench/workbench.common.main.ts
+
 if [[ -f resources/linux/debian/postinst.template ]]; then
   sed -i -E 's/\bcodium(-insiders)?\b/arkestra/' resources/linux/debian/postinst.template
 fi
