@@ -24,6 +24,19 @@ const log = (line: string) => { if (process.env.FAKE_LOG) { appendFileSync(proce
 async function prompt(id: number, p: any) {
 	const text: string = p.prompt.map((b: any) => b.text).join('');
 	log(`prompt ${p.sessionId}: ${JSON.stringify(text)}`);
+	if (text.includes('PLAN')) {
+		// A Plan mode turn: every change it tries is refused by the client.
+		const write = await call('fs/write_text_file', { sessionId: p.sessionId, path: `${process.env.FAKE_FILE}.plan`, content: 'x' });
+		const term = await call('terminal/create', { sessionId: p.sessionId, command: 'touch', args: [`${process.env.FAKE_FILE}.plan`] });
+		const permission = await call('session/request_permission', {
+			sessionId: p.sessionId,
+			toolCall: { toolCallId: 't3', title: 'Edit state.py' },
+			options: [{ optionId: 'yes', name: 'Allow', kind: 'allow_once' }, { optionId: 'no', name: 'Reject', kind: 'reject_once' }],
+		});
+		update(p.sessionId, { sessionUpdate: 'agent_message_chunk', messageId: 'p1', content: { type: 'text', text: `write=${write.error ? 'refused' : 'ok'} term=${term.error ? 'refused' : 'ok'} permission=${permission.result.outcome.optionId ?? permission.result.outcome.outcome}` } });
+		send({ id, result: { stopReason: 'end_turn' } });
+		return;
+	}
 	if (text.includes('WAIT')) {
 		await new Promise<void>(resolve => { cancel = resolve; });
 		send({ id, result: { stopReason: 'cancelled' } });
@@ -65,11 +78,15 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
 			break;
 		case 'session/new':
 			log(`new ${m.params.cwd}`);
-			send(authenticated ? { id: m.id, result: { sessionId: `s${nextId++}` } } : { id: m.id, error: { code: -32000, message: 'Authentication required' } });
+			send(authenticated ? { id: m.id, result: { sessionId: `s${nextId++}`, ...(process.env.FAKE_MODES ? { modes: { currentModeId: 'default', availableModes: [{ id: 'default', name: 'Default' }, { id: 'plan', name: 'Plan' }] } } : {}) } } : { id: m.id, error: { code: -32000, message: 'Authentication required' } });
 			break;
 		case 'session/load':
 			log(`load ${m.params.sessionId}`);
 			update(m.params.sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'replayed history' } });
+			send({ id: m.id, result: {} });
+			break;
+		case 'session/set_mode':
+			log(`mode ${m.params.modeId}`);
 			send({ id: m.id, result: {} });
 			break;
 		case 'session/prompt':

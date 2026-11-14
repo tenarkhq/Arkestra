@@ -58,6 +58,14 @@
           {
             "name": "approve",
             "description": "%command.approve%"
+          },
+          {
+            "name": "plan",
+            "description": "%command.plan%"
+          },
+          {
+            "name": "execute",
+            "description": "%command.execute%"
           }
         ]
       }
@@ -248,6 +256,14 @@
           {
             "name": "approve",
             "description": "%command.approve%"
+          },
+          {
+            "name": "plan",
+            "description": "%command.plan%"
+          },
+          {
+            "name": "execute",
+            "description": "%command.execute%"
           }
         ]
       }

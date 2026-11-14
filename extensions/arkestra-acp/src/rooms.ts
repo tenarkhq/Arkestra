@@ -26,6 +26,8 @@ export type AgentEvent =
 export interface TurnInput {
 	readonly roomId: string;
 	readonly transcript: readonly Message[];
+	/** 'plan': the room is in Plan mode; the agent may read but must not change anything. */
+	readonly mode?: 'plan';
 }
 
 export interface Agent {

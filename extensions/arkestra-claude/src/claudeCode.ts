@@ -128,7 +128,8 @@ export class ClaudeCodeAgent implements Agent {
 		const body = formatMessages(fresh, this.id, !session.sessionId);
 		const prompt = session.sessionId ? body : `${ROOM_PREAMBLE}\n\n${body}`;
 
-		const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--permission-mode', this.options.permissionMode];
+		// Plan mode is Claude Code's own: it reads and plans, nothing is changed.
+		const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--permission-mode', input.mode === 'plan' ? 'plan' : this.options.permissionMode];
 		if (session.sessionId) {
 			args.push('--resume', session.sessionId);
 		}

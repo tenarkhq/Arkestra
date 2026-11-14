@@ -96,6 +96,13 @@ test('the first turn starts a thread with the room preamble and the whole thread
 	assert.equal(second.params.threadId, 'th1');
 	assert.equal(second.params.input[0].text, '[You]\nnow the test');
 	assert.equal((await requests('thread/start')).length, 1);
+	assert.deepEqual(first.params.sandboxPolicy, { type: 'workspaceWrite' }, 'every turn sets the sandbox');
+
+	await agent.turn({ roomId: 'r', transcript: [...t2, msg('user', 'user', 'plan the next step')], mode: 'plan' }, () => { }, never());
+	await agent.turn({ roomId: 'r', transcript: [...t2, msg('user', 'user', 'plan the next step'), msg('user', 'user', 'go')] }, () => { }, never());
+	const [, , plan, after] = await requests('turn/start');
+	assert.deepEqual(plan.params.sandboxPolicy, { type: 'readOnly' }, 'a Plan mode turn is read-only');
+	assert.deepEqual(after.params.sandboxPolicy, { type: 'workspaceWrite' }, 'and the next turn writes again');
 	agent.dispose();
 });
 

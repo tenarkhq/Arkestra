@@ -36,6 +36,8 @@ export interface RoomState {
 	pinned?: boolean;
 	/** A 2ARK template room's state (review, coding, audit), when the room runs one. */
 	template?: TemplateState;
+	/** Plan mode: the agents read and plan, nothing is changed until the user executes the plan. */
+	mode?: 'plan';
 }
 
 export class AgentNotReadyError extends Error {
@@ -149,7 +151,7 @@ export class Room {
 		let reply = '';
 		sink(agent, { kind: 'start' });
 		try {
-			await agent.turn({ roomId: this.id, transcript: [...this.state.messages] }, event => {
+			await agent.turn({ roomId: this.id, transcript: [...this.state.messages], ...(this.state.mode === 'plan' ? { mode: 'plan' as const } : {}) }, event => {
 				if (event.kind === 'text') {
 					reply += reply ? `\n\n${event.text}` : event.text;
 				}

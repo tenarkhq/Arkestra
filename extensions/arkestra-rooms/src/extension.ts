@@ -29,6 +29,11 @@ export interface ArkestraRoomsApi {
 
 const ACTIVE_ROOM = 'arkestra.rooms.active';
 
+/** Room lines for Plan mode; the agents read them as instructions (kept in Hungarian, like the 2ARK briefings). */
+const PLAN_ON = 'Plan mód: mostantól csak tervezünk. Olvashatjátok a kódot, de semmit ne módosítsatok: fájlt ne írjatok, módosító parancsot ne futtassatok. A válasz egy lépésekre bontott terv (mit, melyik fájlban, milyen sorrendben, hogyan ellenőrizzük); ha valami eldöntendő, kérdezzétek meg. A végrehajtás a felhasználó jóváhagyására indul.';
+const PLAN_OFF = 'Plan mód vége: a felhasználó jóváhagyta a tervet. Most már módosíthattok.';
+const PLAN_EXECUTE = 'Hajtsátok végre a jóváhagyott tervet, lépésenként, és a végén mondjátok el, mi készült el és hogyan ellenőriztétek.';
+
 export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	const registry = new AgentRegistry();
 	const store = new RoomStore(path.join(context.globalStorageUri.fsPath, 'rooms'));
@@ -307,8 +312,35 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}
 
 		if (room.state.template) {
+			if (request.command === 'plan' || request.command === 'execute') {
+				stream.markdown(vscode.l10n.t('A template room has its own plan step: the slice plan waits for /approve when the room was set up so.'));
+				return result;
+			}
 			await templateTurn(room, request, await expand(), stream, token);
 			return result;
+		}
+
+		// Plan mode: the agents read and plan; nothing changes until /execute.
+		let fallback: string | undefined;
+		if (request.command === 'plan') {
+			if (room.state.mode !== 'plan') {
+				room.state.mode = 'plan';
+				room.post(PLAN_ON);
+				await store.save(room.state);
+			}
+			if (!request.prompt.trim()) {
+				stream.markdown(vscode.l10n.t('Plan mode is on: the agents may read the code but change nothing. Write the task; when the plan is right, /execute runs it.'));
+				return result;
+			}
+		} else if (request.command === 'execute') {
+			if (room.state.mode !== 'plan') {
+				stream.markdown(vscode.l10n.t('This room is not in Plan mode. Start one with /plan.'));
+				return result;
+			}
+			room.state.mode = undefined;
+			room.post(PLAN_OFF);
+			await store.save(room.state);
+			fallback = PLAN_EXECUTE;
 		}
 
 		if (!room.roster.length) {
@@ -322,7 +354,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		const abort = new AbortController();
 		const cancel = token.onCancellationRequested(() => abort.abort());
 		activity.queue(room.id, room.roster);
-		const prompt = await expand();
+		const prompt = !request.prompt.trim() && fallback ? fallback : await expand();
 		await changesUi?.take(room.id, vscode.l10n.t('Before: {0}', titleFrom(request.prompt, vscode.l10n.t('Room'))));
 		try {
 			await room.say(prompt, (agent, event) => {
@@ -337,6 +369,9 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		} finally {
 			activity.settle(room.id);
 			cancel.dispose();
+		}
+		if (room.state.mode === 'plan') {
+			stream.markdown(`\n\n_${vscode.l10n.t('Plan mode: nothing was changed. Refine the plan, or run it with /execute.')}_`);
 		}
 		return result;
 	};

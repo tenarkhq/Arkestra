@@ -178,7 +178,9 @@ export class CodexAgent implements Agent {
 		completed.catch(() => { }); // rejections are read below; never unhandled
 		signal.addEventListener('abort', interrupt);
 		try {
-			const started = await client.request<{ turn: { id: string } }>('turn/start', { threadId, input: [{ type: 'text', text, text_elements: [] }] });
+			// The sandbox is set on every turn: a Plan mode turn is read-only, and the override
+			// would otherwise carry over to the next turns.
+			const started = await client.request<{ turn: { id: string } }>('turn/start', { threadId, input: [{ type: 'text', text, text_elements: [] }], sandboxPolicy: sandboxPolicy(input.mode === 'plan' ? 'read-only' : this.options.sandbox) });
 			turnId = started.turn.id;
 			if (signal.aborted) {
 				interrupt();
@@ -260,4 +262,9 @@ export class CodexAgent implements Agent {
 			child.on('close', code => { clearTimeout(timer); resolve({ code, out, err: err.trim().split('\n').at(-1) || undefined }); });
 		});
 	}
+}
+
+/** The app-server's per-turn sandbox policy for a sandbox setting. */
+export function sandboxPolicy(sandbox: CodexOptions['sandbox']): { type: 'readOnly' | 'workspaceWrite' | 'dangerFullAccess' } {
+	return { type: sandbox === 'read-only' ? 'readOnly' : sandbox === 'danger-full-access' ? 'dangerFullAccess' : 'workspaceWrite' };
 }
