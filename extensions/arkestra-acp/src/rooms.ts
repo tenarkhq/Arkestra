@@ -28,6 +28,8 @@ export interface TurnInput {
 	readonly transcript: readonly Message[];
 	/** 'plan': the room is in Plan mode; the agent may read but must not change anything. */
 	readonly mode?: 'plan';
+	/** The shared rules and memory (AR23): sent when a session has not seen this version yet. */
+	readonly shared?: { readonly text: string; readonly version: string };
 }
 
 export interface Agent {

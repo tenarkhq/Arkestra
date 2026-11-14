@@ -113,3 +113,17 @@ test('permission lists go to Claude Code as its own flags, one argument per rule
 		['--allowedTools', 'Bash(npm test:*)', 'Bash(git log --format=%h,%s)', 'Read', '--disallowedTools', 'Bash(rm:*)']);
 	assert.deepEqual(permissionArgs({ allow: ['*'], deny: [] }).slice(0, 3), ['--allowedTools', 'Bash', 'Edit']);
 });
+
+test('the shared rules go to a session once per version: again only when they change', async () => {
+	const { agent, calls } = await setup();
+	const t1 = [msg('user', 'user', 'first')];
+	await agent.turn({ roomId: 'r', transcript: t1, shared: { text: 'KÖZÖS v1', version: 'v1' } }, () => { }, new AbortController().signal);
+	const t2 = [...t1, msg('user', 'user', 'second')];
+	await agent.turn({ roomId: 'r', transcript: t2, shared: { text: 'KÖZÖS v1', version: 'v1' } }, () => { }, new AbortController().signal);
+	const t3 = [...t2, msg('user', 'user', 'third')];
+	await agent.turn({ roomId: 'r', transcript: t3, shared: { text: 'KÖZÖS v2', version: 'v2' } }, () => { }, new AbortController().signal);
+	const prompts = (await calls()).map(c => c.args[c.args.indexOf('-p') + 1]);
+	assert.ok(prompts[0].startsWith(ROOM_PREAMBLE) && prompts[0].includes('KÖZÖS v1\n\n[You]\nfirst'));
+	assert.equal(prompts[1], '[You]\nsecond');
+	assert.equal(prompts[2], 'KÖZÖS v2\n\n[You]\nthird');
+});

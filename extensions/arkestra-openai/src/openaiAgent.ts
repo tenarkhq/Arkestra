@@ -88,7 +88,7 @@ export class OpenAIAgent implements Agent {
 		}
 		const body = {
 			model: this.options.model,
-			instructions: ROOM_INSTRUCTIONS,
+			instructions: input.shared ? `${ROOM_INSTRUCTIONS}\n\n${input.shared.text}` : ROOM_INSTRUCTIONS,
 			input: toInput(input.transcript, this.id),
 			stream: true,
 			store: false,

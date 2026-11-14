@@ -58,6 +58,8 @@ interface RoomSession {
 	 * template room other agents write while this one works.
 	 */
 	seen: Set<string>;
+	/** The shared rules' version this session was given. */
+	sharedVersion?: string;
 	/** The agent's own session modes (ACP), when it has them: Plan mode uses its 'plan' mode. */
 	modes?: { current: string; available: string[] };
 }
@@ -147,10 +149,10 @@ export class AcpAgent implements Agent {
 				// The history it replays is already in the room; no turn listens to it.
 				await peer.request<{ modes?: AcpModes }>('session/load', { sessionId: room.sessionId, cwd, mcpServers: [] })
 					.then(loaded => { room.peer = peer; room.modes = readModes(loaded?.modes); })
-					.catch(() => { room.sessionId = undefined; room.seen = new Set(); });
+					.catch(() => { room.sessionId = undefined; room.seen = new Set(); room.sharedVersion = undefined; });
 			} else {
 				room.sessionId = undefined;
-				room.seen = new Set();
+				room.seen = new Set(); room.sharedVersion = undefined;
 			}
 		}
 		const fresh = !room.sessionId;
@@ -159,7 +161,7 @@ export class AcpAgent implements Agent {
 				const created = await peer.request<{ sessionId: string; modes?: AcpModes }>('session/new', { cwd, mcpServers: [] });
 				room.sessionId = created.sessionId;
 				room.peer = peer;
-				room.seen = new Set();
+				room.seen = new Set(); room.sharedVersion = undefined;
 				room.modes = readModes(created.modes);
 			} catch (e) {
 				if (e instanceof RpcError && e.code === AUTH_REQUIRED) {
@@ -172,7 +174,8 @@ export class AcpAgent implements Agent {
 		}
 		const sessionId = room.sessionId!;
 		const transcript = formatMessages(input.transcript.filter(m => !room.seen.has(m.id)), this.id, fresh);
-		const text = fresh ? `${roomPreamble(this.name)}\n\n${transcript}` : transcript;
+		const shared = input.shared && room.sharedVersion !== input.shared.version ? `${input.shared.text}\n\n` : '';
+		const text = fresh ? `${roomPreamble(this.name)}\n\n${shared}${transcript}` : `${shared}${transcript}`;
 
 		// Message chunks are collected and handed to the room as whole messages: when a tool
 		// call starts, when the message id changes, and at the end of the turn.
@@ -232,6 +235,7 @@ export class AcpAgent implements Agent {
 			}
 			// The session now holds the transcript it was given; its own answer is never sent back.
 			input.transcript.forEach(m => room.seen.add(m.id));
+			room.sharedVersion = input.shared?.version ?? room.sharedVersion;
 			this.sessions.set(input.roomId, room);
 		} catch (e) {
 			flush();

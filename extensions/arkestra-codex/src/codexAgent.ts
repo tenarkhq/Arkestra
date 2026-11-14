@@ -53,6 +53,8 @@ interface RoomThread {
 	 * template room other agents write while this one works.
 	 */
 	seen: Set<string>;
+	/** The shared rules' version this session was given. */
+	sharedVersion?: string;
 }
 
 /** Turns transcript messages into the text Codex reads, author by author. */
@@ -142,18 +144,19 @@ export class CodexAgent implements Agent {
 			// The app-server restarted (crash, auth change): load the room's thread again.
 			await client.request('thread/resume', { threadId: room.threadId, ...threadParams, excludeTurns: true })
 				.then(() => { room.server = client; })
-				.catch(() => { room.threadId = undefined; room.seen = new Set(); });
+				.catch(() => { room.threadId = undefined; room.seen = new Set(); room.sharedVersion = undefined; });
 		}
 		const freshThread = !room.threadId;
 		if (freshThread) {
 			const started = await client.request<{ thread: { id: string } }>('thread/start', { ...threadParams, developerInstructions: ROOM_PREAMBLE });
 			room.threadId = started.thread.id;
 			room.server = client;
-			room.seen = new Set();
+			room.seen = new Set(); room.sharedVersion = undefined;
 		}
 		const threadId = room.threadId!;
 		// A new thread also gets Codex's own earlier answers.
-		const text = formatMessages(input.transcript.filter(m => !room.seen.has(m.id)), this.id, freshThread);
+		const body = formatMessages(input.transcript.filter(m => !room.seen.has(m.id)), this.id, freshThread);
+		const text = input.shared && room.sharedVersion !== input.shared.version ? `${input.shared.text}\n\n${body}` : body;
 
 		let turnId: string | undefined;
 		let lastError: string | undefined;
@@ -205,6 +208,7 @@ export class CodexAgent implements Agent {
 			const turn = await completed;
 			if (signal.aborted || turn.status === 'interrupted') {
 				input.transcript.forEach(m => room.seen.add(m.id));
+				room.sharedVersion = input.shared?.version ?? room.sharedVersion;
 				this.threads.set(input.roomId, room);
 				return;
 			}
@@ -213,6 +217,7 @@ export class CodexAgent implements Agent {
 			}
 			// The thread now holds the transcript it was given; its own answer is never sent back.
 			input.transcript.forEach(m => room.seen.add(m.id));
+			room.sharedVersion = input.shared?.version ?? room.sharedVersion;
 			this.threads.set(input.roomId, room);
 		} finally {
 			this.approvals.delete(threadId);

@@ -38,6 +38,8 @@ interface RoomSession {
 	 * in a template room other agents write while this one works.
 	 */
 	seen: Set<string>;
+	/** The shared rules' version this session was given. */
+	sharedVersion?: string;
 }
 
 /** Turns transcript messages into the text Claude reads, author by author. */
@@ -128,7 +130,8 @@ export class ClaudeCodeAgent implements Agent {
 		const fresh = input.transcript.filter(m => !session.seen.has(m.id));
 		// A new CLI session (first turn, or after a restart) also gets Claude's own earlier answers.
 		const body = formatMessages(fresh, this.id, !session.sessionId);
-		const prompt = session.sessionId ? body : `${ROOM_PREAMBLE}\n\n${body}`;
+		const shared = input.shared && session.sharedVersion !== input.shared.version ? `${input.shared.text}\n\n` : '';
+		const prompt = session.sessionId ? `${shared}${body}` : `${ROOM_PREAMBLE}\n\n${shared}${body}`;
 
 		// Plan mode is Claude Code's own: it reads and plans, nothing is changed.
 		const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--permission-mode', input.mode === 'plan' ? 'plan' : this.options.permissionMode];
@@ -197,6 +200,7 @@ export class ClaudeCodeAgent implements Agent {
 		}
 		// The CLI session now holds the transcript it was given; its own answer is never sent back.
 		input.transcript.forEach(m => session.seen.add(m.id));
+		session.sharedVersion = input.shared?.version ?? session.sharedVersion;
 		this.sessions.set(input.roomId, session);
 	}
 

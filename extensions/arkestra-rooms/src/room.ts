@@ -53,8 +53,10 @@ const newId = () => `${Date.now().toString(36)}-${(counter++).toString(36)}`;
 
 export class Room {
 	private readonly listeners = new Set<() => void>();
-	/** Runs after every agent turn, before the next one starts (checkpoints). */
-	afterTurn?: (agent: Agent) => Promise<void>;
+	/** Runs after every agent turn, before the next one starts (checkpoints, shared memory). */
+	afterTurn?: (agent: Agent, reply: string) => Promise<void>;
+	/** The shared rules and memory every agent gets (AR23). */
+	shared?: () => Promise<{ text: string; version: string } | undefined>;
 
 	constructor(readonly state: RoomState, private readonly registry: AgentRegistry, private readonly now: () => Date = () => new Date()) { }
 
@@ -149,9 +151,10 @@ export class Room {
 
 	private async runTurn(agent: Agent, sink: TurnSink, signal: AbortSignal): Promise<string> {
 		let reply = '';
+		const shared = await this.shared?.().catch(() => undefined);
 		sink(agent, { kind: 'start' });
 		try {
-			await agent.turn({ roomId: this.id, transcript: [...this.state.messages], ...(this.state.mode === 'plan' ? { mode: 'plan' as const } : {}) }, event => {
+			await agent.turn({ roomId: this.id, transcript: [...this.state.messages], ...(this.state.mode === 'plan' ? { mode: 'plan' as const } : {}), ...(shared ? { shared } : {}) }, event => {
 				if (event.kind === 'text') {
 					reply += reply ? `\n\n${event.text}` : event.text;
 				}
@@ -166,7 +169,7 @@ export class Room {
 		if (reply) {
 			this.append({ kind: 'agent', id: agent.id, name: agent.name }, reply);
 		}
-		await this.afterTurn?.(agent).catch(() => undefined);
+		await this.afterTurn?.(agent, reply).catch(() => undefined);
 		return reply;
 	}
 
