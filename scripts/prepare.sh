@@ -25,6 +25,11 @@ grep -v -E '^\s*(#|$)' "${ROOT}/branding/skip-patches.txt" | while IFS= read -r 
   rm -f "${WORK}/patches/${PATCH}"
 done
 
+# Arkestra's own built-in extensions go in with the names step.
+mkdir -p "${WORK}/arkestra-extensions"
+cp -R "${ROOT}/extensions/." "${WORK}/arkestra-extensions/"
+rm -rf "${WORK}"/arkestra-extensions/*/node_modules "${WORK}"/arkestra-extensions/*/out
+
 # Run the Arkestra names after VSCodium's own literals.
 cp "${ROOT}/branding/after-prepare.sh" "${WORK}/after-prepare.sh"
 printf '\n. ./after-prepare.sh\n' >> "${WORK}/prepare_vscode.sh"
