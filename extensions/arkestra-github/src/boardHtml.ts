@@ -147,7 +147,9 @@ function h(tag, attrs, ...kids) {
 }
 const chip = (text, tone, attrs) => h('span', Object.assign({ class: 'chip' + (tone ? ' tone-' + tone : '') }, attrs || {}), text);
 
+const columnOf = (card) => model.columns.find(c => c.cards.some(x => x.id === card.id));
 function cardValue(card, key) {
+	if (key === 'status') { const col = columnOf(card); return [col ? col.name : 'No status']; }
 	if (key === 'labels') return card.labels;
 	if (key === 'assignees') return card.assignees;
 	const f = card.fields.find(x => 'f:' + x.fieldId === key);
@@ -155,6 +157,7 @@ function cardValue(card, key) {
 }
 function visible(card) {
 	for (const [key, want] of Object.entries(ui.filters)) {
+		if (want === '!done') { const col = columnOf(card); if (col && col.done) return false; continue; }
 		if (want && !cardValue(card, key).includes(want)) return false;
 	}
 	const q = ui.search.trim().toLowerCase();
@@ -288,7 +291,9 @@ function headerEl() {
 			h('button', { class: 'primary', onclick: () => { ui.form = !ui.form; draw(); } }, '+ New issue')),
 		ui.form ? newIssueForm() : null,
 		h('div', { class: 'row' }, search, model.filters.map(f => {
-			const sel = h('select', { onchange: () => { ui.filters[f.key] = sel.value; save(); drawMain(); } }, h('option', { value: '' }, f.name + ': all'), f.values.map(v => h('option', { value: v, selected: ui.filters[f.key] === v }, f.name + ': ' + v)));
+			const sel = h('select', { onchange: () => { ui.filters[f.key] = sel.value; save(); drawMain(); } }, h('option', { value: '' }, f.name + ': all'),
+				f.key === 'status' ? h('option', { value: '!done', selected: ui.filters[f.key] === '!done' }, f.name + ': not done') : null,
+				f.values.map(v => h('option', { value: v, selected: ui.filters[f.key] === v }, f.name + ': ' + v)));
 			return sel;
 		}), Object.values(ui.filters).some(Boolean) || ui.search ? h('a', { onclick: () => { ui.filters = {}; ui.search = ''; save(); draw(); } }, 'Clear filters') : null));
 }

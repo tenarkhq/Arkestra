@@ -68,7 +68,7 @@ test('board: columns in Status order, no-status column, card fields, filters, re
 	assert.equal(m.columns.find(c => c.name === 'Done')!.done, true);
 	assert.deepEqual(m.cardFields, ['L', 'E']);
 	assert.deepEqual(m.fields.map(f => f.name), ['Line', 'Executor', 'Title']);
-	assert.deepEqual(m.filters.map(f => [f.name, f.values]), [['Line', ['0.9', '1.x']], ['Executor', ['Codex']], ['Label', ['feature']], ['Assignee', ['dev']]]);
+	assert.deepEqual(m.filters.map(f => [f.name, f.values]), [['Status', ['No status', 'Backlog', 'Ready', 'In progress', 'Done']], ['Line', ['0.9', '1.x']], ['Executor', ['Codex']], ['Label', ['feature']], ['Assignee', ['dev']]]);
 	assert.deepEqual(m.repositories, ['o/r']);
 	assert.deepEqual(m.sync, { text: 'in sync · 14:12:08', tone: 'ok' });
 	assert.equal(m.journal[0].text, 'Status: Backlog → Ready');

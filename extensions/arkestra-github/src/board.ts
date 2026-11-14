@@ -208,6 +208,10 @@ export function boardModel(input: BoardInput): BoardModel {
 	const wanted = (input.cardFields ?? []).map(n => snap.fields.find(f => f.name.toLowerCase() === n.toLowerCase() || f.id === n)?.id).filter((x): x is string => !!x);
 	const fields = snap.fields.filter(f => f.id !== statusId);
 	const filters: BoardModel['filters'][number][] = [];
+	// Status first, in the board's column order; the page adds "not done" (AR30 follow-up).
+	if (statusField && columns.length) {
+		filters.push({ key: 'status', name: statusField.name, values: columns.map(c => c.name) });
+	}
 	for (const f of fields.filter(f => f.type === 'single_select' || f.type === 'iteration' || f.type === 'text')) {
 		const values = [...new Set(cards.flatMap(c => c.fields.filter(x => x.fieldId === f.id).map(x => x.value)))].sort();
 		if (values.length && values.length <= 30) {
