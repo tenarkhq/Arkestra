@@ -34,6 +34,12 @@
           "type": "string",
           "default": "",
           "markdownDescription": "%appSlug%"
+        },
+        "arkestra.github.project": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "%project%"
         }
       }
     },
@@ -56,6 +62,21 @@
       {
         "command": "arkestra.github.log",
         "title": "%log%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.github.signIn",
+        "title": "%signIn%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.github.setProject",
+        "title": "%setProject%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.github.refreshProject",
+        "title": "%refreshProject%",
         "category": "Arkestra"
       }
     ]
