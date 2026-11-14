@@ -34,6 +34,7 @@ const good = {
 	extensionsGallery: { serviceUrl: 'https://open-vsx.org/vscode/gallery' },
 	defaultChatAgent: { entitlementUrl: '', tokenEntitlementUrl: '', managedSettingsUrl: '', mcpRegistryDataUrl: '', documentationUrl: 'https://aka.ms/github-copilot-overview' },
 	extensionAllowedBadgeProviders: ['img.shields.io'],
+	updateUrl: 'https://raw.githubusercontent.com/tenarkhq/Arkestra/refs/heads/versions',
 };
 
 test('static: a fixed tree passes and lists the remaining links', () => {
@@ -45,7 +46,7 @@ test('static: a fixed tree passes and lists the remaining links', () => {
 test('static: every way of calling Microsoft by itself is reported', () => {
 	const bad = {
 		...good,
-		updateUrl: 'https://update.example',
+		updateUrl: 'https://update.code.visualstudio.com',
 		voiceWsUrl: 'wss://falcon-caas.mai.microsoft.com/voice',
 		extensionsGallery: { serviceUrl: 'https://marketplace.visualstudio.com/_apis/public/gallery' },
 		defaultChatAgent: { ...good.defaultChatAgent, entitlementUrl: 'https://api.github.com/copilot_internal/user' },
