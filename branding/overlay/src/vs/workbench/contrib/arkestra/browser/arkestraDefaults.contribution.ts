@@ -11,7 +11,7 @@ import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor,
 export const ARKESTRA_DEFAULTS: { readonly [key: string]: unknown } = {
 	// Hidden
 	'window.menuBarVisibility': 'toggle',                // Windows/Linux: Alt shows it; macOS keeps the system menu
-	'workbench.activityBar.location': 'hidden',          // replaced by the tabs of the left column (AR07)
+	'workbench.activityBar.location': 'top',             // the left column's equal tabs: Threads, Files, Git, ... (AR07)
 	'workbench.layoutControl.enabled': false,            // reachable from the command palette
 	'debug.showInStatusBar': 'never',                    // Run and Debug
 	'debug.toolBarLocation': 'hidden',

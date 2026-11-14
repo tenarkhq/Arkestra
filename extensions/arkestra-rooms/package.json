@@ -14,6 +14,8 @@
   ],
   "activationEvents": [
     "onChatParticipant:arkestra.room",
+    "onChatSession:arkestra-room",
+    "onView:arkestra.threads",
     "onWebviewPanel:arkestra.agents"
   ],
   "main": "./out/extension",
@@ -67,8 +69,163 @@
         "command": "arkestra.rooms.showAgents",
         "title": "%showAgents%",
         "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.rooms.newThread",
+        "title": "%command.newThread%",
+        "category": "Arkestra",
+        "icon": "$(add)"
+      },
+      {
+        "command": "arkestra.rooms.openThread",
+        "title": "%command.openThread%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.rooms.pin",
+        "title": "%command.pin%",
+        "category": "Arkestra",
+        "icon": "$(pin)"
+      },
+      {
+        "command": "arkestra.rooms.unpin",
+        "title": "%command.unpin%",
+        "category": "Arkestra",
+        "icon": "$(pinned)"
+      },
+      {
+        "command": "arkestra.rooms.setCategory",
+        "title": "%command.setCategory%",
+        "category": "Arkestra",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "arkestra.rooms.rename",
+        "title": "%command.rename%",
+        "category": "Arkestra"
       }
-    ]
+    ],
+    "chatSessions": [
+      {
+        "type": "arkestra-room",
+        "name": "arkestra",
+        "displayName": "%session.displayName%",
+        "description": "%session.description%",
+        "icon": "$(organization)",
+        "welcomeTitle": "%session.welcomeTitle%",
+        "welcomeMessage": "%session.welcomeMessage%",
+        "inputPlaceholder": "%session.inputPlaceholder%",
+        "capabilities": {
+          "supportsFileAttachments": true
+        },
+        "commands": [
+          {
+            "name": "invite",
+            "description": "%command.invite%"
+          },
+          {
+            "name": "agents",
+            "description": "%command.agents%"
+          },
+          {
+            "name": "new",
+            "description": "%command.new%"
+          }
+        ]
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "arkestra",
+          "title": "%threads.container%",
+          "icon": "media/threads.svg"
+        }
+      ]
+    },
+    "views": {
+      "arkestra": [
+        {
+          "id": "arkestra.threads",
+          "name": "%threads.view%",
+          "icon": "media/threads.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "arkestra.threads",
+        "contents": "%threads.empty%"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "arkestra.rooms.newThread",
+          "when": "view == arkestra.threads",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "arkestra.rooms.pin",
+          "when": "view == arkestra.threads && viewItem == thread",
+          "group": "inline"
+        },
+        {
+          "command": "arkestra.rooms.unpin",
+          "when": "view == arkestra.threads && viewItem == thread.pinned",
+          "group": "inline"
+        },
+        {
+          "command": "arkestra.rooms.openThread",
+          "when": "view == arkestra.threads && viewItem =~ /^thread/",
+          "group": "1_open"
+        },
+        {
+          "command": "arkestra.rooms.setCategory",
+          "when": "view == arkestra.threads && viewItem =~ /^thread/",
+          "group": "2_edit@1"
+        },
+        {
+          "command": "arkestra.rooms.rename",
+          "when": "view == arkestra.threads && viewItem =~ /^thread/",
+          "group": "2_edit@2"
+        },
+        {
+          "command": "arkestra.rooms.pin",
+          "when": "view == arkestra.threads && viewItem == thread",
+          "group": "2_edit@3"
+        },
+        {
+          "command": "arkestra.rooms.unpin",
+          "when": "view == arkestra.threads && viewItem == thread.pinned",
+          "group": "2_edit@3"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "arkestra.rooms.openThread",
+          "when": "false"
+        },
+        {
+          "command": "arkestra.rooms.pin",
+          "when": "false"
+        },
+        {
+          "command": "arkestra.rooms.unpin",
+          "when": "false"
+        },
+        {
+          "command": "arkestra.rooms.setCategory",
+          "when": "false"
+        },
+        {
+          "command": "arkestra.rooms.rename",
+          "when": "false"
+        }
+      ]
+    }
   },
   "scripts": {
     "compile": "gulp compile-extension:arkestra-rooms",
@@ -76,5 +233,9 @@
   },
   "devDependencies": {
     "@types/node": "24.x"
-  }
+  },
+  "enabledApiProposals": [
+    "chatSessionsProvider",
+    "chatParticipantPrivate"
+  ]
 }
