@@ -105,7 +105,7 @@
       }
     ],
     "views": {
-      "arkestra": [
+      "arkestra-details": [
         {
           "id": "arkestra.machines",
           "name": "%machines.view%",
