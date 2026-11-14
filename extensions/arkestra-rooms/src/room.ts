@@ -27,6 +27,10 @@ export interface RoomState {
 	/** Agent ids in the order they answer. */
 	roster: string[];
 	messages: Message[];
+	/** Category the user filed the thread under, if any (left column). */
+	category?: string;
+	/** Pinned threads come first in their project. */
+	pinned?: boolean;
 }
 
 export class AgentNotReadyError extends Error {

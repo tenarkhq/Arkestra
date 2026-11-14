@@ -10,7 +10,7 @@ import { ActivityBoard, type AgentActivity } from './activity';
 import { AgentRegistry, type Agent, type InviteEntry } from './agent';
 import { AgentNotReadyError, Room, newRoomState } from './room';
 import { RoomStore } from './store';
-import { ROOM_ID_KEY, roomIdFromHistory, titleFrom } from './threads';
+import { ROOM_ID_KEY, ROOM_SCHEME, groupThreads, historyTurns, projectName, roomIdFromHistory, roomIdFromSessionPath, summarize, titleFrom, type ProjectThreads, type ThreadSummary } from './threads';
 
 /** What adapter extensions (Claude Code, Codex, OpenAI, ACP) receive. */
 export interface ArkestraRoomsApi {
@@ -24,6 +24,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	const store = new RoomStore(path.join(context.globalStorageUri.fsPath, 'rooms'));
 	// One Room object per room: a running round and a mid-run invite must share it.
 	const loaded = new Map<string, Room>();
+	/** Untitled native sessions (a new session before its first item exists) and their rooms. */
+	const untitledSessions = new Map<string, string>();
 	/** The room of the thread used last; the palette commands and the Agents tile follow it. */
 	let current: Room | undefined;
 	const activity = new ActivityBoard();
@@ -33,6 +35,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		loaded.set(room.id, room);
 		room.onDidChange(() => {
 			void store.save(room.state);
+			refreshThreadsLater();
 			if (room === current) {
 				currentChanged.fire();
 			}
@@ -61,6 +64,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		return room;
 	};
 
+	// Set once the left column exists; rooms changing before that need no refresh.
+	let refreshThreadsLater: () => void = () => { };
 	const createRoom = async (title: string): Promise<Room> => {
 		const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.toString();
 		const room = track(new Room(newRoomState(title, workspace), registry));
@@ -139,10 +144,16 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		stream.button({ command: 'arkestra.rooms.invite', arguments: [room.id], title: vscode.l10n.t('Invite an agent') });
 
 	const handler: vscode.ChatRequestHandler = async (request, chatContext, stream, token): Promise<vscode.ChatResult> => {
-		// This thread's room; a thread without one (a new chat) gets a new room.
+		// This thread's room: a native Arkestra session carries it in its URI, an @room chat in
+		// its history; a thread without one (a new chat) gets a new room.
+		const session = chatContext.chatSessionContext?.chatSessionItem.resource;
+		const sessionRoomId = session ? roomIdFromSessionPath(session.path) ?? untitledSessions.get(session.toString()) : undefined;
 		const room = request.command === 'new'
 			? await createRoom(titleFrom(request.prompt, vscode.l10n.t('Room')))
-			: await use(await open(roomIdFromHistory(chatContext.history)) ?? await createRoom(titleFrom(request.prompt, vscode.l10n.t('Room'))));
+			: await use(await open(sessionRoomId ?? roomIdFromHistory(chatContext.history)) ?? await createRoom(titleFrom(request.prompt, vscode.l10n.t('Room'))));
+		if (session && !roomIdFromSessionPath(session.path)) {
+			untitledSessions.set(session.toString(), room.id);
+		}
 		const result: vscode.ChatResult = { metadata: { [ROOM_ID_KEY]: room.id } };
 
 		if (request.command === 'new') {
@@ -245,6 +256,162 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 
 	const participant = vscode.chat.createChatParticipant('arkestra.room', handler);
 	participant.iconPath = new vscode.ThemeIcon('organization');
+
+	// ---- Threads as native chat sessions: history, session list, the left column ----------
+	const sessionUri = (roomId: string) => vscode.Uri.from({ scheme: ROOM_SCHEME, path: `/room/${roomId}` });
+	const sessionParticipant = vscode.chat.createChatParticipant(ROOM_SCHEME, handler);
+	sessionParticipant.iconPath = new vscode.ThemeIcon('organization');
+	// ChatRequestTurn's constructor is internal in the typings; the runtime class takes these arguments.
+	const RequestTurn = vscode.ChatRequestTurn as unknown as new (prompt: string, command: string | undefined, references: [], participant: string, toolReferences: []) => vscode.ChatRequestTurn;
+
+	const allThreads = async (): Promise<ThreadSummary[]> => (await store.list()).map(state => summarize(loaded.get(state.id)?.state ?? state));
+	const busy = (roomId: string) => (loaded.get(roomId)?.roster ?? []).some(id => activity.get(roomId, id).state !== 'idle');
+
+	const controller = vscode.chat.createChatSessionItemController(ROOM_SCHEME, async () => {
+		const threads = await allThreads();
+		controller.items.replace(threads.map(t => {
+			const item = controller.createChatSessionItem(sessionUri(t.id), t.title);
+			item.description = [projectName(t.project), t.category].filter(Boolean).join(' · ') || undefined;
+			item.iconPath = new vscode.ThemeIcon(t.pinned ? 'pinned' : 'organization');
+			item.status = busy(t.id) ? vscode.ChatSessionStatus.InProgress : vscode.ChatSessionStatus.Completed;
+			if (t.lastAt) {
+				item.timing = { created: Date.parse(t.lastAt), lastRequestEnded: Date.parse(t.lastAt) };
+			}
+			return item;
+		}));
+	});
+	controller.newChatSessionItemHandler = async context => {
+		const room = await createRoom(titleFrom(context.request.prompt, vscode.l10n.t('Room')));
+		return controller.createChatSessionItem(sessionUri(room.id), room.state.title);
+	};
+
+	const contentProvider: vscode.ChatSessionContentProvider = {
+		provideChatSessionContent: async (resource): Promise<vscode.ChatSession> => {
+			const roomId = roomIdFromSessionPath(resource.path) ?? untitledSessions.get(resource.toString());
+			const room = await open(roomId);
+			if (room) {
+				await use(room);
+			}
+			const history = historyTurns(room?.messages ?? []).map(turn => turn.kind === 'request'
+				? new RequestTurn(turn.prompt, undefined, [], ROOM_SCHEME, [])
+				: new vscode.ChatResponseTurn2([new vscode.ChatResponseMarkdownPart(turn.markdown)], { metadata: room ? { [ROOM_ID_KEY]: room.id } : {} }, ROOM_SCHEME));
+			return { ...(room ? { title: room.state.title } : {}), history, requestHandler: handler };
+		},
+	};
+
+	// The left column: threads of this project, then of the others.
+	const changedThreads = new vscode.EventEmitter<void>();
+	type Node = { kind: 'project'; label: string; group: ProjectThreads; current: boolean } | { kind: 'category'; name: string; threads: readonly ThreadSummary[] } | { kind: 'thread'; thread: ThreadSummary };
+	const currentProject = () => vscode.workspace.workspaceFolders?.[0]?.uri.toString();
+	const threadsOf = (group: ProjectThreads): Node[] => [
+		...group.pinned.map(thread => ({ kind: 'thread' as const, thread })),
+		...group.categories.map(c => ({ kind: 'category' as const, name: c.name, threads: c.threads })),
+		...group.uncategorized.map(thread => ({ kind: 'thread' as const, thread })),
+	];
+	const treeProvider: vscode.TreeDataProvider<Node> = {
+		onDidChangeTreeData: changedThreads.event,
+		getChildren: async node => {
+			if (!node) {
+				const { current, others } = groupThreads(await allThreads(), currentProject());
+				const here = projectName(current.project) || vscode.l10n.t('No project');
+				return [
+					{ kind: 'project', label: vscode.l10n.t('Threads · {0}', here), group: current, current: true },
+					...others.map(group => ({ kind: 'project' as const, label: projectName(group.project) || vscode.l10n.t('No project'), group, current: false })),
+				];
+			}
+			return node.kind === 'project' ? threadsOf(node.group)
+				: node.kind === 'category' ? node.threads.map(thread => ({ kind: 'thread' as const, thread }))
+					: [];
+		},
+		getTreeItem: node => {
+			if (node.kind === 'project') {
+				const item = new vscode.TreeItem(node.label, node.current ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
+				item.description = node.current ? undefined : String(node.group.count);
+				item.contextValue = 'project';
+				return item;
+			}
+			if (node.kind === 'category') {
+				const item = new vscode.TreeItem(node.name, vscode.TreeItemCollapsibleState.Expanded);
+				item.iconPath = new vscode.ThemeIcon('tag');
+				item.description = String(node.threads.length);
+				return item;
+			}
+			const t = node.thread;
+			const item = new vscode.TreeItem(t.title, vscode.TreeItemCollapsibleState.None);
+			item.id = t.id;
+			item.iconPath = new vscode.ThemeIcon(busy(t.id) ? 'loading~spin' : t.pinned ? 'pinned' : 'comment-discussion');
+			item.description = t.lastAt ? new Date(t.lastAt).toLocaleString(vscode.env.language, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : undefined;
+			item.tooltip = vscode.l10n.t('{0} agents', t.agents);
+			item.contextValue = t.pinned ? 'thread.pinned' : 'thread';
+			item.command = { command: 'arkestra.rooms.openThread', title: vscode.l10n.t('Open'), arguments: [t.id] };
+			return item;
+		},
+	};
+	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+	const refreshThreads: () => void = () => {
+		clearTimeout(refreshTimer);
+		refreshTimer = setTimeout(() => {
+			changedThreads.fire();
+			void controller.refreshHandler(new vscode.CancellationTokenSource().token);
+		}, 300);
+	};
+	refreshThreadsLater = refreshThreads;
+	const threadId = (arg: unknown) => typeof arg === 'string' ? arg : (arg as { thread?: ThreadSummary } | undefined)?.thread?.id;
+	const editRoom = async (arg: unknown, edit: (room: Room) => void) => {
+		const room = await open(threadId(arg));
+		if (room) {
+			edit(room);
+			await store.save(room.state);
+			refreshThreads();
+		}
+	};
+
+	context.subscriptions.push(
+		sessionParticipant,
+		controller,
+		changedThreads,
+		vscode.chat.registerChatSessionContentProvider(ROOM_SCHEME, contentProvider, sessionParticipant),
+		vscode.window.createTreeView('arkestra.threads', { treeDataProvider: treeProvider, showCollapseAll: true }),
+		activity.onDidChange(refreshThreads),
+		currentChanged.event(refreshThreads),
+		vscode.workspace.onDidChangeWorkspaceFolders(refreshThreads),
+		vscode.commands.registerCommand('arkestra.rooms.openThread', async (arg: unknown, column?: unknown) => {
+			const id = threadId(arg) ?? (await currentRoom())?.id;
+			if (id) {
+				await vscode.commands.executeCommand('vscode.open', sessionUri(id), typeof column === 'number' ? { viewColumn: column } : undefined);
+			}
+		}),
+		vscode.commands.registerCommand('arkestra.rooms.newThread', async () => {
+			const room = await createRoom(vscode.l10n.t('Room'));
+			refreshThreads();
+			await vscode.commands.executeCommand('vscode.open', sessionUri(room.id));
+		}),
+		vscode.commands.registerCommand('arkestra.rooms.pin', arg => editRoom(arg, room => { room.state.pinned = true; })),
+		vscode.commands.registerCommand('arkestra.rooms.unpin', arg => editRoom(arg, room => { delete room.state.pinned; })),
+		vscode.commands.registerCommand('arkestra.rooms.rename', async (arg: unknown) => {
+			const room = await open(threadId(arg));
+			const title = room && (await vscode.window.showInputBox({ title: vscode.l10n.t('Rename thread'), value: room.state.title }))?.trim();
+			if (room && title) {
+				await editRoom(room.id, r => { r.state.title = title; });
+			}
+		}),
+		vscode.commands.registerCommand('arkestra.rooms.setCategory', async (arg: unknown) => {
+			const room = await open(threadId(arg));
+			if (!room) {
+				return;
+			}
+			const existing = [...new Set((await allThreads()).map(t => t.category).filter((c): c is string => !!c))].sort();
+			const none = vscode.l10n.t('No category');
+			const other = vscode.l10n.t('New category…');
+			const pick = await vscode.window.showQuickPick([...existing, other, none], { title: vscode.l10n.t('Category of “{0}”', room.state.title) });
+			const category = pick === other ? (await vscode.window.showInputBox({ title: vscode.l10n.t('New category') }))?.trim() : pick;
+			if (pick === none) {
+				await editRoom(room.id, r => { delete r.state.category; });
+			} else if (category) {
+				await editRoom(room.id, r => { r.state.category = category; });
+			}
+		}),
+	);
 
 	context.subscriptions.push(
 		participant,

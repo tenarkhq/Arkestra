@@ -7,5 +7,19 @@
   "command.agents": "Agents in this room and who can join",
   "command.new": "New room",
   "command.open": "Open a room",
-  "showAgents": "Show the agents of this room"
+  "showAgents": "Show the agents of this room",
+  "session.displayName": "Arkestra thread",
+  "session.description": "A thread shared by any number of agents",
+  "session.welcomeTitle": "New thread",
+  "session.welcomeMessage": "Every agent in the thread answers in turn and sees the whole thread. Invite more with /invite.",
+  "session.inputPlaceholder": "Write to the agents of this thread",
+  "threads.container": "Threads",
+  "threads.view": "Threads",
+  "threads.empty": "No threads yet.\n[New thread](command:arkestra.rooms.newThread)",
+  "command.newThread": "New thread",
+  "command.openThread": "Open thread",
+  "command.pin": "Pin thread",
+  "command.unpin": "Unpin thread",
+  "command.setCategory": "Set category…",
+  "command.rename": "Rename thread…"
 }
