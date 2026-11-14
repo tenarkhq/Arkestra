@@ -52,7 +52,7 @@ export function classify(host) {
 
 /** product.json keys whose presence makes the app call Microsoft by itself. */
 const PRODUCT_MUST_BE_EMPTY = [
-	'updateUrl', 'voiceWsUrl', 'tunnelApplicationName', 'tunnelApplicationConfig', 'aiConfig', 'appCenter', 'crashReporter',
+	'voiceWsUrl', 'tunnelApplicationName', 'tunnelApplicationConfig', 'aiConfig', 'appCenter', 'crashReporter',
 	'tasConfig', 'surveys', 'configurationSync.store', 'editSessions.store', 'sendASmile', 'npsSurveyUrl', 'releaseNotesUrl',
 	'defaultChatAgent.entitlementUrl', 'defaultChatAgent.tokenEntitlementUrl', 'defaultChatAgent.managedSettingsUrl', 'defaultChatAgent.mcpRegistryDataUrl',
 ];
@@ -78,6 +78,10 @@ export function staticCheck(tree) {
 		if (value !== undefined && value !== '' && value !== null) {
 			problems.push(`product.json ${key} is set: ${JSON.stringify(value).slice(0, 100)}`);
 		}
+	}
+	// Updates (AR33) come from Arkestra's own feed; VS Code's default asks Microsoft.
+	if (product.updateUrl && classify(new URL(product.updateUrl).host) === 'microsoft') {
+		problems.push(`product.json updateUrl is a Microsoft service: ${product.updateUrl}`);
 	}
 	const gallery = product.extensionsGallery?.serviceUrl ?? '';
 	if (!gallery || classify(new URL(gallery).host) === 'microsoft') {

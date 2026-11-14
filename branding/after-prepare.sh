@@ -5,8 +5,10 @@
 set -e
 cd vscode
 
-# VSCodium's update feed would offer VSCodium builds; Arkestra has none yet.
-jq 'del(.updateUrl)' product.json > product.json.tmp && mv product.json.tmp product.json
+# AR33 · Updates come from Arkestra's own feed and releases, never VSCodium's.
+jq '.updateUrl = "https://raw.githubusercontent.com/tenarkhq/Arkestra/refs/heads/versions" |
+    .downloadUrl = "https://github.com/tenarkhq/Arkestra/releases"' product.json > product.json.tmp && mv product.json.tmp product.json
+grep -q '"updateUrl": "https://raw.githubusercontent.com/tenarkhq/Arkestra/' product.json
 
 brand() {
   [[ -f "$1" ]] || return 0
