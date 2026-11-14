@@ -35,6 +35,11 @@ export class RoomStore {
 		}
 	}
 
+	/** Deletes a room for good. */
+	async remove(id: string): Promise<void> {
+		await fs.rm(this.file(id), { force: true });
+	}
+
 	/** Every stored room, newest activity first. */
 	async list(): Promise<RoomState[]> {
 		let names: string[];
