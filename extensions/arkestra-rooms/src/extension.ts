@@ -16,6 +16,7 @@ import { templateForm } from './templateForm';
 import { ChangesUi } from './changesView';
 import { InlineEdits } from './inlineEditUi';
 import { References } from './referencesUi';
+import { Permissions, type PermissionsApi } from './permissionsUi';
 import { GitTemplateIO, createWorkTrees } from './templates/gitio';
 import { TemplateRun } from './templates/run';
 import type { Role } from './templates/signals';
@@ -25,6 +26,8 @@ import { ROOM_ID_KEY, ROOM_SCHEME, groupThreads, historyTurns, projectName, room
 /** What adapter extensions (Claude Code, Codex, OpenAI, ACP) receive. */
 export interface ArkestraRoomsApi {
 	registerAgent(agent: Agent): vscode.Disposable;
+	/** Permission lists per machine and project; adapters ask here before an agent acts. */
+	readonly permissions: PermissionsApi;
 }
 
 const ACTIVE_ROOM = 'arkestra.rooms.active';
@@ -717,8 +720,11 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}),
 	);
 
+	const permissions = new Permissions(machine => machine === 'local' ? vscode.l10n.t('this machine') : machine);
+	context.subscriptions.push(permissions);
 	return {
 		registerAgent: agent => new vscode.Disposable(registry.register(agent).dispose),
+		permissions,
 	};
 }
 

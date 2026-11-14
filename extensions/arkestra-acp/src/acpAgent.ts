@@ -41,7 +41,12 @@ export interface AcpOptions {
 	readonly remote?: boolean;
 	readonly files?: FileAccess;
 	/** Asks the user; resolves to the chosen option id, or undefined when dismissed. */
-	readonly askPermission: (agentName: string, title: string, options: readonly PermissionOption[], signal: AbortSignal) => Promise<string | undefined>;
+	readonly askPermission: (agentName: string, title: string, options: readonly PermissionOption[], signal: AbortSignal, toolCall: unknown) => Promise<string | undefined>;
+	/**
+	 * The permission lists' deny side for what the agent does through the client itself
+	 * (writing a file, starting a terminal): 'deny' refuses it, even when the agent did not ask.
+	 */
+	readonly refuses?: (request: { tool: 'Bash' | 'Edit'; command?: string; path?: string; title: string }) => boolean;
 }
 
 interface RoomSession {
@@ -302,12 +307,19 @@ export class AcpAgent implements Agent {
 			if (this.planning.has(p.sessionId)) {
 				throw new RpcError(-32603, PLAN_REFUSAL);
 			}
+			if (this.options.refuses?.({ tool: 'Edit', path: p.path, title: `Write ${p.path}` })) {
+				throw new RpcError(-32603, `${DENY_REFUSAL}: ${p.path}`);
+			}
 			await this.files.write(p.path, p.content);
 			return null;
 		});
 		peer.serve('terminal/create', async p => {
 			if (this.planning.has(p.sessionId)) {
 				throw new RpcError(-32603, PLAN_REFUSAL);
+			}
+			const command = [p.command, ...(Array.isArray(p.args) ? p.args : [])].join(' ');
+			if (this.options.refuses?.({ tool: 'Bash', command, title: `Run: ${command}` })) {
+				throw new RpcError(-32603, `${DENY_REFUSAL}: ${command}`);
 			}
 			return this.terminals.create(p);
 		});
@@ -325,13 +337,14 @@ export class AcpAgent implements Agent {
 				const reject = options.find(o => o.kind === 'reject_once') ?? options.find(o => o.kind === 'reject_always');
 				return reject ? { outcome: { outcome: 'selected', optionId: reject.optionId } } : { outcome: { outcome: 'cancelled' } };
 			}
-			const chosen = await this.options.askPermission(this.name, describeToolCall(p.toolCall ?? {}), options, signal);
+			const chosen = await this.options.askPermission(this.name, describeToolCall(p.toolCall ?? {}), options, signal, p.toolCall ?? {});
 			return chosen && !signal.aborted ? { outcome: { outcome: 'selected', optionId: chosen } } : { outcome: { outcome: 'cancelled' } };
 		});
 	}
 }
 
 const PLAN_REFUSAL = 'Plan mode: nothing may be changed in this turn. Write the plan instead.';
+const DENY_REFUSAL = 'Refused by the permission list';
 
 interface AcpModes {
 	currentModeId?: string;

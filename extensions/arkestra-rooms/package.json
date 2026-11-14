@@ -217,6 +217,11 @@
         "title": "%inline.agent%",
         "category": "Arkestra",
         "icon": "$(person)"
+      },
+      {
+        "command": "arkestra.permissions.open",
+        "title": "%permissions.open%",
+        "category": "Arkestra"
       }
     ],
     "chatSessions": [
@@ -488,7 +493,60 @@
         "mac": "cmd+backspace",
         "when": "editorTextFocus && arkestra.inlineEditPending"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Arkestra",
+      "properties": {
+        "arkestra.permissions.machines": {
+          "type": "object",
+          "scope": "application",
+          "default": {},
+          "markdownDescription": "%permissions.machines%",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "allow": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "deny": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "arkestra.permissions.project": {
+          "type": "object",
+          "scope": "resource",
+          "default": {
+            "allow": [],
+            "deny": []
+          },
+          "markdownDescription": "%permissions.project%",
+          "properties": {
+            "allow": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "deny": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
   },
   "scripts": {
     "compile": "gulp compile-extension:arkestra-rooms",

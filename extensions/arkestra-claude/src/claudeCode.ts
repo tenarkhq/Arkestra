@@ -12,8 +12,10 @@ export interface ClaudeCodeOptions {
 	/** CLI command, `claude` unless configured. */
 	readonly command: string;
 	readonly model?: string;
-	/** Claude Code permission mode for headless turns; allow lists come later. */
+	/** Claude Code permission mode for headless turns. */
 	readonly permissionMode: string;
+	/** The machine's and project's permission lists (AR22), passed as Claude Code's own allow and deny flags. */
+	readonly permissionRules?: () => { readonly allow: readonly string[]; readonly deny: readonly string[] };
 	readonly cwd: () => string | undefined;
 	/** The stored API key, or undefined to use the CLI's own login. */
 	readonly apiKey: () => Promise<string | undefined>;
@@ -133,6 +135,7 @@ export class ClaudeCodeAgent implements Agent {
 		if (session.sessionId) {
 			args.push('--resume', session.sessionId);
 		}
+		args.push(...permissionArgs(this.options.permissionRules?.()));
 		if (this.options.model) {
 			args.push('--model', this.options.model);
 		}
@@ -211,4 +214,17 @@ export class ClaudeCodeAgent implements Agent {
 			child.on('close', code => { clearTimeout(timer); resolve({ code, out, err: err.trim().split('\n').at(-1) || undefined }); });
 		});
 	}
+}
+
+/** Claude Code's flags for the permission lists; the rule syntax is its own. `*` alone means every tool. */
+export function permissionArgs(rules?: { readonly allow: readonly string[]; readonly deny: readonly string[] }): string[] {
+	if (!rules) {
+		return [];
+	}
+	const every = ['Bash', 'Edit', 'Write', 'MultiEdit', 'Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'];
+	const fix = (list: readonly string[]) => [...new Set(list.map(r => r.trim()).filter(Boolean).flatMap(r => (r === '*' ? every : [r])))];
+	const allow = fix(rules.allow);
+	const deny = fix(rules.deny);
+	// One argument per rule: a rule may hold commas and spaces (`Bash(git log --format=%h,%s)`).
+	return [...(allow.length ? ['--allowedTools', ...allow] : []), ...(deny.length ? ['--disallowedTools', ...deny] : [])];
 }

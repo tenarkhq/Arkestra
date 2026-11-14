@@ -6,7 +6,7 @@
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
-import type { Agent, AgentEvent, Message, Readiness, TurnInput } from './rooms';
+import type { Agent, AgentEvent, Message, PermissionRequest, Readiness, TurnInput } from './rooms';
 import { RpcClient, type Notification } from './rpc';
 
 export type CodexAuth = { readonly mode: 'subscription' } | { readonly mode: 'apiKey'; readonly key: string | undefined };
@@ -26,6 +26,15 @@ export interface CodexOptions {
 	readonly spawn?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 	/** Who this instance is: the local Codex, or Codex on an SSH machine. */
 	readonly identity?: AgentIdentity;
+	/**
+	 * The permission lists (AR22). While the machine or project has rules, Codex asks before
+	 * commands it does not trust ("untrusted") and the lists answer, else the user; without
+	 * rules it never asks and the sandbox alone limits it.
+	 */
+	readonly permissions?: {
+		active(): boolean;
+		ask(request: PermissionRequest, signal: AbortSignal): Promise<'allow' | 'deny' | undefined>;
+	};
 }
 
 export interface AgentIdentity {
@@ -88,6 +97,8 @@ export class CodexAgent implements Agent {
 	private readonly where: string;
 	private readonly threads = new Map<string, RoomThread>();
 	private server: { client: RpcClient; authKey: string; ready: Promise<void> } | undefined;
+	/** The running turns' approval answers per thread (server requests carry the thread id). */
+	private readonly approvals = new Map<string, (method: string, params: any) => Promise<unknown> | undefined>();
 
 	constructor(private readonly options: CodexOptions) {
 		({ id: this.id, name: this.name, where: this.where } = options.identity ?? { id: 'codex', name: 'Codex', where: 'local' });
@@ -180,7 +191,13 @@ export class CodexAgent implements Agent {
 		try {
 			// The sandbox is set on every turn: a Plan mode turn is read-only, and the override
 			// would otherwise carry over to the next turns.
-			const started = await client.request<{ turn: { id: string } }>('turn/start', { threadId, input: [{ type: 'text', text, text_elements: [] }], sandboxPolicy: sandboxPolicy(input.mode === 'plan' ? 'read-only' : this.options.sandbox) });
+			const ruled = !!this.options.permissions?.active();
+			this.approvals.set(threadId, (method, params) => this.approve(method, params, signal));
+			const started = await client.request<{ turn: { id: string } }>('turn/start', {
+				threadId, input: [{ type: 'text', text, text_elements: [] }],
+				sandboxPolicy: sandboxPolicy(input.mode === 'plan' ? 'read-only' : this.options.sandbox),
+				approvalPolicy: ruled ? 'untrusted' : 'never',
+			});
 			turnId = started.turn.id;
 			if (signal.aborted) {
 				interrupt();
@@ -198,6 +215,7 @@ export class CodexAgent implements Agent {
 			input.transcript.forEach(m => room.seen.add(m.id));
 			this.threads.set(input.roomId, room);
 		} finally {
+			this.approvals.delete(threadId);
 			signal.removeEventListener('abort', interrupt);
 			subscriptions.forEach(d => d.dispose());
 		}
@@ -206,6 +224,24 @@ export class CodexAgent implements Agent {
 	dispose(): void {
 		this.server?.client.dispose();
 		this.server = undefined;
+	}
+
+	/** A command or file change Codex asks about: the permission lists answer, else the user. */
+	private approve(method: string, params: any, signal: AbortSignal): Promise<unknown> | undefined {
+		const permissions = this.options.permissions;
+		let request: PermissionRequest;
+		if (method === 'item/commandExecution/requestApproval') {
+			const command = typeof params?.command === 'string' ? params.command : '';
+			request = { tool: 'Bash', command, title: command ? `Run: ${command}` : (params?.reason ?? 'Run a command') };
+		} else if (method === 'item/fileChange/requestApproval') {
+			request = { tool: 'Edit', ...(params?.grantRoot ? { path: params.grantRoot } : {}), title: params?.reason ?? 'Change files' };
+		} else {
+			return undefined;
+		}
+		if (!permissions) {
+			return Promise.resolve({ decision: 'decline' });
+		}
+		return permissions.ask(request, signal).then(d => ({ decision: d === 'allow' ? 'accept' : 'decline' }));
 	}
 
 	private async ensureServer(auth: CodexAuth): Promise<RpcClient> {
@@ -227,6 +263,7 @@ export class CodexAgent implements Agent {
 		}
 		const child = (this.options.spawn ?? nodeSpawn)(this.options.command, ['app-server'], { env, stdio: ['pipe', 'pipe', 'pipe'] });
 		const client = new RpcClient(child);
+		client.onRequest((method, params) => this.approvals.get(params?.threadId)?.(method, params));
 		const ready = (async () => {
 			await client.request('initialize', { clientInfo: { name: 'arkestra', title: 'Arkestra', version: '0.1.0' }, capabilities: null });
 			client.notify('initialized');
