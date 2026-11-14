@@ -92,6 +92,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				cwd: { value: () => undefined },
 				identity: { value: { id: `claude@${machine.id}`, name: `Claude · ${machine.name}`, where: machine.name } },
 				permissionRules: { value: () => api.permissions?.rules(machine.id) ?? { allow: [], deny: [] } },
+				// The machine's own Claude Code login, unless an API key is asked for outright.
+				apiKey: { value: async () => config().get<string>('auth') === 'apiKey' ? context.secrets.get(KEY) : undefined },
 			});
 			return [api.registerAgent(withActions(new ClaudeCodeAgent(options), actions(machine.id)))];
 		});

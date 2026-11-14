@@ -64,11 +64,24 @@ export function envLine(env: NodeJS.ProcessEnv | undefined): string {
  * while the script reads stdin: EOF (the connection closed, a turn was cancelled) stops it.
  * A CLI that reads stdin itself sees that EOF directly.
  */
+/**
+ * A non-interactive SSH command gets neither ~/.profile nor most of ~/.bashrc, so CLIs installed
+ * per user (~/.local/bin, npm, bun, volta, nvm) are not on its PATH although the user's own
+ * terminal finds them. These are the usual places, put in front when they exist.
+ */
+export const REMOTE_PATH = [
+	'for d in "$HOME"/.nvm/versions/node/*/bin /opt/homebrew/bin /usr/local/bin "$HOME/.cargo/bin" "$HOME/.volta/bin" "$HOME/.bun/bin" "$HOME/.npm-global/bin" "$HOME/bin" "$HOME/.local/bin"; do',
+	'  [ -d "$d" ] && case ":$PATH:" in *":$d:"*) ;; *) PATH="$d:$PATH" ;; esac',
+	'done',
+	'export PATH',
+].join('\n');
+
 export function remoteScript(command: string, args: readonly string[], folder: string | undefined, stopOnHangup = false): string {
 	const cli = [command, ...args].map(shQuote).join(' ');
 	return [
 		'IFS= read -r ARKESTRA_ENV || exit 97',
 		'eval "$(printf %s "$ARKESTRA_ENV" | base64 -d)" || exit 97',
+		REMOTE_PATH,
 		`cd ${folder ? remotePath(folder) : '"$HOME"'} || exit 98`,
 		...(stopOnHangup ? [
 			// sh gives background jobs /dev/null as stdin, so the watcher reads a saved copy.
@@ -138,6 +151,7 @@ export interface ProbeResult {
 
 const PROBE_SCRIPT = [
 	'IFS= read -r ARKESTRA_ENV || exit 97',
+	REMOTE_PATH,
 	`for c in ${KNOWN_CLIS.join(' ')}; do command -v "$c" >/dev/null 2>&1 && echo "$c"; done`,
 	'echo ARKESTRA_PROBE_OK',
 ].join('\n');
