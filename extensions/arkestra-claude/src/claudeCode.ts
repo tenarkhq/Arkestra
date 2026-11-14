@@ -4,7 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
-import type { Agent, AgentChoices, AgentEvent, Usage, Message, Readiness, TurnInput, WorkUpdate } from './rooms';
+import { homedir } from 'node:os';
+import type { Agent, AgentChoices, AgentEvent, ExistingSession, Usage, Message, Readiness, SessionEntry, TurnInput, WorkUpdate } from './rooms';
+import { LIST_SCRIPT, localListing, localSessionFile, parseHistory, parseListing, readScript } from './sessions';
 
 export type AuthMode = 'subscription' | 'apiKey';
 
@@ -40,6 +42,8 @@ interface RoomSession {
 	seen: Set<string>;
 	/** The shared rules' version this session was given. */
 	sharedVersion?: string;
+	/** An adopted session's folder (AR39): Claude Code finds a session only from its own folder. */
+	cwd?: string;
 }
 
 /** Turns transcript messages into the text Claude reads, author by author. */
@@ -223,6 +227,44 @@ export class ClaudeCodeAgent implements Agent {
 		return { ready: true };
 	}
 
+	/** The sessions Claude Code has on this agent's machine (AR39). */
+	async existingSessions(): Promise<readonly ExistingSession[]> {
+		return parseListing(this.options.spawn ? await this.shell(LIST_SCRIPT) : await localListing(homedir()));
+	}
+
+	async sessionHistory(sessionId: string): Promise<readonly SessionEntry[]> {
+		return parseHistory(this.options.spawn ? await this.shell(readScript(sessionId)) : await localSessionFile(homedir(), sessionId));
+	}
+
+	adoptSession(roomId: string, session: { readonly id: string; readonly cwd?: string }, seen: readonly string[]): void {
+		if (!this.sessions.has(roomId)) {
+			this.sessions.set(roomId, { sessionId: session.id, seen: new Set(seen), ...(session.cwd ? { cwd: session.cwd } : {}) });
+		}
+	}
+
+	/** A POSIX script on the agent's machine (an SSH machine); resolves to its output. */
+	private shell(script: string, timeoutMs = 60_000): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const child = this.options.spawn!('sh', ['-c', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+			const out: string[] = [];
+			let err = '';
+			const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('timeout')); }, timeoutMs);
+			child.stdout?.setEncoding('utf8');
+			child.stdout?.on('data', (c: string) => { out.push(c); });
+			child.stderr?.setEncoding('utf8');
+			child.stderr?.on('data', (c: string) => { err = (err + c).slice(-2000); });
+			child.on('error', e => { clearTimeout(timer); reject(e); });
+			child.on('close', code => {
+				clearTimeout(timer);
+				if (code === 0) {
+					resolve(out.join(''));
+				} else {
+					reject(new Error(err.trim().split('\n').at(-1) || `exited with ${code}`));
+				}
+			});
+		});
+	}
+
 	async turn(input: TurnInput, onEvent: (event: AgentEvent) => void, signal: AbortSignal): Promise<void> {
 		const session = this.sessions.get(input.roomId) ?? { seen: new Set<string>() };
 		const fresh = input.transcript.filter(m => !session.seen.has(m.id));
@@ -253,7 +295,10 @@ export class ClaudeCodeAgent implements Agent {
 			delete env.ANTHROPIC_API_KEY; // subscription: the CLI's own login
 		}
 
-		const child = (this.options.spawn ?? nodeSpawn)(this.options.command, args, { cwd: input.cwd ?? this.options.cwd(), env, stdio: ['ignore', 'pipe', 'pipe'] });
+		// An adopted session runs in its own folder; on an SSH machine through `cd` (the machine folder is the default there).
+		const remoteCwd = !input.cwd && session.cwd && this.options.spawn ? session.cwd : undefined;
+		const [command, commandArgs] = remoteCwd ? ['sh', ['-c', 'cd "$1" || exit 98; shift; exec "$@"', 'sh', remoteCwd, this.options.command, ...args]] : [this.options.command, args];
+		const child = (this.options.spawn ?? nodeSpawn)(command, commandArgs, { cwd: input.cwd ?? (this.options.spawn ? undefined : session.cwd) ?? this.options.cwd(), env, stdio: ['ignore', 'pipe', 'pipe'] });
 		const kill = () => child.kill('SIGTERM');
 		signal.addEventListener('abort', kill);
 

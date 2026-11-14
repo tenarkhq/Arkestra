@@ -77,9 +77,35 @@ export interface Agent {
 	turn(input: TurnInput, onEvent: (event: AgentEvent) => void, signal: AbortSignal): Promise<void>;
 	/** The models and efforts the user can choose from (AR38); an agent without it offers no choice. */
 	choices?(): Promise<AgentChoices>;
+	/** The sessions its CLI already has on its machine (AR39); an agent without it has none to offer. */
+	existingSessions?(): Promise<readonly ExistingSession[]>;
+	/** The messages of one of those sessions. */
+	sessionHistory?(sessionId: string): Promise<readonly SessionEntry[]>;
+	/**
+	 * Binds the room to an existing session: the next turn continues it (in its folder) and sends
+	 * only the messages not in `seen`. Does nothing while the room already has a session here.
+	 */
+	adoptSession?(roomId: string, session: { readonly id: string; readonly cwd?: string }, seen: readonly string[]): void;
 }
 
 /** What an agent can run with: its models, each with the reasoning efforts it knows (none: no effort choice). */
+/** A session the agent's own CLI already has on its machine (AR39): started in a terminal, an IDE, or earlier. */
+export interface ExistingSession {
+	readonly id: string;
+	readonly title: string;
+	/** The folder the session worked in, on the agent's machine. */
+	readonly cwd?: string;
+	/** ISO time of its last activity. */
+	readonly updatedAt: string;
+}
+
+/** One message of an existing session, as the thread shows it. */
+export interface SessionEntry {
+	readonly role: 'user' | 'agent';
+	readonly text: string;
+	readonly at?: string;
+}
+
 export interface AgentChoices {
 	readonly models: readonly { readonly id: string; readonly label: string; readonly detail?: string; readonly efforts?: readonly string[]; readonly defaultEffort?: string }[];
 }

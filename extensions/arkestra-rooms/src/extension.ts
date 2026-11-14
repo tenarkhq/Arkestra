@@ -7,8 +7,8 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { ActivityBoard, type AgentActivity } from './activity';
-import { AgentRegistry, type Agent, type InviteEntry } from './agent';
-import { AgentNotReadyError, Room, newRoomState } from './room';
+import { AgentRegistry, type Agent, type ExistingSession, type InviteEntry } from './agent';
+import { AgentNotReadyError, Room, importedRoomState, newRoomState } from './room';
 import { RoomStore } from './store';
 import { laneAgent, laneEntries, type LaneEntry } from './lanes';
 import { copyFile, mkdir, readFile, stat } from 'node:fs/promises';
@@ -710,7 +710,21 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 
 	// The left column: threads of this project, then of the others.
 	const changedThreads = new vscode.EventEmitter<void>();
-	type Node = { kind: 'project'; label: string; group: ProjectThreads; current: boolean } | { kind: 'category'; name: string; threads: readonly ThreadSummary[] } | { kind: 'thread'; thread: ThreadSummary };
+	type Node = { kind: 'project'; label: string; group: ProjectThreads; current: boolean } | { kind: 'category'; name: string; threads: readonly ThreadSummary[] } | { kind: 'thread'; thread: ThreadSummary }
+		| { kind: 'machines' } | { kind: 'sessionAgent'; agentId: string; name: string } | { kind: 'session'; agentId: string; session: ExistingSession } | { kind: 'note'; text: string };
+	// AR39 · The sessions the agents' CLIs already have on their machines; an SSH listing is slow, so kept for a while.
+	const sessionLists = new Map<string, { at: number; sessions: readonly ExistingSession[] }>();
+	const sessionAgents = () => registry.all().filter(a => a.existingSessions && a.sessionHistory && a.adoptSession).sort((a, b) => a.name.localeCompare(b.name));
+	const sessionsOf = async (agent: Agent): Promise<readonly ExistingSession[]> => {
+		const cached = sessionLists.get(agent.id);
+		if (cached && Date.now() - cached.at < 120_000) {
+			return cached.sessions;
+		}
+		const sessions = await agent.existingSessions!();
+		sessionLists.set(agent.id, { at: Date.now(), sessions });
+		return sessions;
+	};
+	const when = (iso: string) => iso ? new Date(iso).toLocaleString(vscode.env.language, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
 	const currentProject = () => vscode.workspace.workspaceFolders?.[0]?.uri.toString();
 	const threadsOf = (group: ProjectThreads): Node[] => [
 		...group.pinned.map(thread => ({ kind: 'thread' as const, thread })),
@@ -726,13 +740,59 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 				return [
 					{ kind: 'project', label: vscode.l10n.t('Threads · {0}', here), group: current, current: true },
 					...others.map(group => ({ kind: 'project' as const, label: projectName(group.project) || vscode.l10n.t('No project'), group, current: false })),
+					...(sessionAgents().length ? [{ kind: 'machines' as const }] : []),
 				];
+			}
+			if (node.kind === 'machines') {
+				return sessionAgents().map(a => ({ kind: 'sessionAgent' as const, agentId: a.id, name: a.name }));
+			}
+			if (node.kind === 'sessionAgent') {
+				const agent = registry.get(node.agentId);
+				if (!agent?.existingSessions) {
+					return [];
+				}
+				try {
+					const sessions = await sessionsOf(agent);
+					return sessions.length ? sessions.map(session => ({ kind: 'session' as const, agentId: agent.id, session })) : [{ kind: 'note', text: vscode.l10n.t('No sessions on this machine') }];
+				} catch (error) {
+					return [{ kind: 'note', text: vscode.l10n.t('Could not read the sessions: {0}', error instanceof Error ? error.message : String(error)) }];
+				}
 			}
 			return node.kind === 'project' ? threadsOf(node.group)
 				: node.kind === 'category' ? node.threads.map(thread => ({ kind: 'thread' as const, thread }))
 					: [];
 		},
 		getTreeItem: node => {
+			if (node.kind === 'machines') {
+				const item = new vscode.TreeItem(vscode.l10n.t('Sessions on the machines'), vscode.TreeItemCollapsibleState.Collapsed);
+				item.iconPath = new vscode.ThemeIcon('history');
+				item.tooltip = vscode.l10n.t('Claude Code and Codex sessions started outside Arkestra (a terminal, an IDE). Open one to continue it here.');
+				item.contextValue = 'machines';
+				return item;
+			}
+			if (node.kind === 'sessionAgent') {
+				const item = new vscode.TreeItem(node.name, vscode.TreeItemCollapsibleState.Collapsed);
+				item.id = `sessions:${node.agentId}`;
+				item.iconPath = new vscode.ThemeIcon(node.agentId.includes('@') ? 'remote' : 'vm');
+				item.contextValue = 'sessionAgent';
+				return item;
+			}
+			if (node.kind === 'session') {
+				const s = node.session;
+				const item = new vscode.TreeItem(s.title, vscode.TreeItemCollapsibleState.None);
+				item.id = `session:${node.agentId}:${s.id}`;
+				item.iconPath = new vscode.ThemeIcon('comment');
+				item.description = [s.cwd ? path.posix.basename(s.cwd) : '', when(s.updatedAt)].filter(Boolean).join(' · ');
+				item.tooltip = [s.title, s.cwd, when(s.updatedAt)].filter(Boolean).join('\n');
+				item.contextValue = 'session';
+				item.command = { command: 'arkestra.rooms.continueSession', title: vscode.l10n.t('Continue here'), arguments: [node.agentId, s] };
+				return item;
+			}
+			if (node.kind === 'note') {
+				const item = new vscode.TreeItem(node.text, vscode.TreeItemCollapsibleState.None);
+				item.iconPath = new vscode.ThemeIcon('info');
+				return item;
+			}
 			if (node.kind === 'project') {
 				const item = new vscode.TreeItem(node.label, node.current ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
 				item.description = node.current ? undefined : String(node.group.count);
@@ -799,6 +859,35 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		activity.onDidChange(refreshThreads),
 		currentChanged.event(refreshThreads),
 		vscode.workspace.onDidChangeWorkspaceFolders(refreshThreads),
+		vscode.commands.registerCommand('arkestra.rooms.refreshSessions', () => {
+			sessionLists.clear();
+			changedThreads.fire();
+		}),
+		vscode.commands.registerCommand('arkestra.rooms.continueSession', async (arg: unknown, sessionArg?: ExistingSession) => {
+			const node = arg as { agentId?: string; session?: ExistingSession } | undefined;
+			const agent = registry.get(typeof arg === 'string' ? arg : node?.agentId ?? '');
+			const session = sessionArg ?? node?.session;
+			if (!agent?.sessionHistory || !session) {
+				return;
+			}
+			// A session continued here before opens its thread again.
+			const before = (await store.list()).find(s => s.adopted?.[agent.id]?.session === session.id);
+			if (before) {
+				await vscode.commands.executeCommand('arkestra.rooms.openThread', before.id);
+				return;
+			}
+			try {
+				const entries = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Reading the {0} session…', agent.name) }, () => agent.sessionHistory!(session.id));
+				// A local session's folder is its project; an SSH machine's folder is not one here.
+				const project = !agent.id.includes('@') && session.cwd ? vscode.Uri.file(session.cwd).toString() : undefined;
+				const room = track(new Room(importedRoomState({ id: agent.id, name: agent.name }, session, entries, project), registry));
+				await store.save(room.state);
+				refreshThreads();
+				await vscode.commands.executeCommand('arkestra.rooms.openThread', room.id);
+			} catch (error) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('Could not read the session: {0}', error instanceof Error ? error.message : String(error)));
+			}
+		}),
 		vscode.commands.registerCommand('arkestra.rooms.openThread', async (arg: unknown, column?: unknown) => {
 			const id = threadId(arg) ?? (await currentRoom())?.id;
 			if (id) {

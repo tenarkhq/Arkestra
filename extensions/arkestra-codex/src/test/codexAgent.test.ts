@@ -7,7 +7,7 @@ import * as assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { CodexAgent, ROOM_PREAMBLE, codexLimits, codexModels, codexPlan, codexUsage, codexWork, describeItem, modelOverride, type CodexAuth } from '../codexAgent';
+import { CodexAgent, ROOM_PREAMBLE, codexHistory, codexSessions, codexLimits, codexModels, codexPlan, codexUsage, codexWork, describeItem, modelOverride, type CodexAuth } from '../codexAgent';
 import type { AgentEvent, Message } from '../rooms';
 
 const FAKE = `#!/usr/bin/env node
@@ -259,4 +259,25 @@ test('models from model/list, and the override a turn sends: chosen, kept, or ta
 	// Taken back: Codex would keep the old override, so the defaults go once.
 	assert.deepEqual(modelOverride({}, { model: 'gpt-5.5-mini', effort: 'low' }, models), { model: 'gpt-5.5', effort: 'medium' });
 	assert.deepEqual(modelOverride({}, undefined, models), {});
+});
+
+test('existing threads (AR39): the list as sessions, newest first, rooms\' own threads left out; a thread\'s turns as messages', () => {
+	const list = { data: [
+		{ id: 't1', preview: 'refactor the advisor\nand test', cwd: '/home/r/x', updatedAt: 1700000100 },
+		{ id: 't2', preview: '[You]\nhello from a room', updatedAt: 1700000300 },
+		{ id: 't3', preview: '', createdAt: '2026-11-14T10:00:00Z' },
+		{ nope: true },
+	] };
+	assert.deepEqual(codexSessions(list), [
+		{ id: 't3', title: 't3', updatedAt: '2026-11-14T10:00:00.000Z' },
+		{ id: 't1', title: 'refactor the advisor', cwd: '/home/r/x', updatedAt: new Date(1700000100 * 1000).toISOString() },
+	]);
+	assert.deepEqual(codexSessions(undefined), []);
+	const thread = { turns: [
+		{ items: [{ type: 'userMessage', content: [{ type: 'text', text: 'refactor' }, { type: 'image', url: 'x' }] }, { type: 'reasoning', text: 'hm' }, { type: 'agentMessage', text: 'Plan:' }, { type: 'commandExecution', command: 'ls' }, { type: 'agentMessage', text: 'Done.' }] },
+		{ items: [{ type: 'userMessage', content: [{ type: 'text', text: 'tests?' }] }, { type: 'agentMessage', text: 'Added.' }] },
+	] };
+	assert.deepEqual(codexHistory(thread), [
+		{ role: 'user', text: 'refactor' }, { role: 'agent', text: 'Plan:\n\nDone.' }, { role: 'user', text: 'tests?' }, { role: 'agent', text: 'Added.' },
+	]);
 });
