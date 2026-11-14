@@ -13,8 +13,8 @@
   "session.welcomeTitle": "New thread",
   "session.welcomeMessage": "Every agent in the thread answers in turn and sees the whole thread. Invite more with /invite.",
   "session.inputPlaceholder": "Write to the agents of this thread",
-  "threads.container": "Threads",
-  "threads.view": "Threads",
+  "threads.container": "Arkestra",
+  "threads.view": "Chats",
   "threads.empty": "No threads yet.\n[New thread](command:arkestra.rooms.newThread)",
   "command.newThread": "New thread",
   "command.openThread": "Open thread",
@@ -63,5 +63,9 @@
   "command.refreshSessions": "Refresh the sessions",
   "command.archive": "Archive thread",
   "command.unarchive": "Restore from the archive",
-  "command.delete": "Delete thread"
+  "command.delete": "Delete thread",
+  "pinned.view": "Pinned",
+  "projects.view": "Projects",
+  "boards.view": "Boards",
+  "pinned.empty": "Nothing pinned yet. Pin a thread, a board or an artifact and it waits here."
 }
