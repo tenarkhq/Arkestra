@@ -1,9 +1,0 @@
-{
-	"version": "1.0.0",
-	"contents": {
-		"package": {
-			"description": "Szintaktikai kiemelést szolgáltat a .log kiterjesztésű fájlokban."
-		},
-		"bundle": {}
-	}
-}

@@ -1,6 +1,8 @@
 # Arkestra nyelvek
 
-A felület angolul és magyarul érhető el. A magyar szövegek a beépített `extensions/arkestra-language-pack-hu` nyelvi csomagban vannak: a VS Code-mag, a beépített bővítmények és az Arkestra saját bővítményei egy helyen. A felület nyelve az operációs rendszer nyelvét követi, és a **Configure Display Language** paranccsal bármikor váltható (újraindítás után érvényes).
+A felület most angol. A magyar nyelv (AR09) a backlogban van: a katalógus, a szójegyzék és az eszközök itt maradnak, de a nyelvi csomag nem kerül a buildbe, mert részleges fordítással magyar rendszeren vegyes nyelvű felületet adna.
+
+Amikor az AR09 folytatódik, a `pack.mjs` megírja a beépített `extensions/arkestra-language-pack-hu` csomagot: a VS Code-mag, a beépített bővítmények és az Arkestra saját bővítményei egy helyen. A felület nyelve akkor az operációs rendszer nyelvét követi, és a **Configure Display Language** paranccsal váltható.
 
 ## Hol mi van
 
