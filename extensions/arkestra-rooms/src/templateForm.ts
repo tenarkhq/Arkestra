@@ -40,8 +40,8 @@ async function text(title: string, prompt: string, value = '', optional = false)
 	return v === undefined ? undefined : v.trim();
 }
 
-export async function templateForm(registry: AgentRegistry, preset?: readonly string[]): Promise<TemplateRequest | undefined> {
-	const type = await pick<TemplateType>(vscode.l10n.t('New room from a 2ARK template'), [
+export async function templateForm(registry: AgentRegistry, preset?: readonly string[], task?: { type?: TemplateType; brief?: string }): Promise<TemplateRequest | undefined> {
+	const type = task?.type ?? await pick<TemplateType>(vscode.l10n.t('New room from a 2ARK template'), [
 		{ label: vscode.l10n.t('Coding'), detail: vscode.l10n.t('The coordinator splits the brief into slices; both agents work in parallel on their own branches, and the coordinator merges.'), value: 'coding' },
 		{ label: vscode.l10n.t('Code audit'), detail: vscode.l10n.t('A complete audit of the repository with evidence, by one agent or by both independently and merged; fixes optional.'), value: 'audit' },
 		{ label: vscode.l10n.t('Brief check'), detail: vscode.l10n.t('One agent reviews a document (a brief), the other fixes it, round after round, until the reviewer says PASS.'), value: 'review' },
@@ -71,7 +71,7 @@ export async function templateForm(registry: AgentRegistry, preset?: readonly st
 		if (!prompt) {
 			return undefined;
 		}
-		const source = await text(vscode.l10n.t('Brief check'), vscode.l10n.t('The document: a file path, or a GitHub file, issue or PR link. Empty: the task names it, or the fixer writes it.'), '', true);
+		const source = await text(vscode.l10n.t('Brief check'), vscode.l10n.t('The document: a file path, or a GitHub file, issue or PR link. Empty: the task names it, or the fixer writes it.'), task?.brief ?? '', true);
 		if (source === undefined) {
 			return undefined;
 		}
@@ -100,7 +100,7 @@ export async function templateForm(registry: AgentRegistry, preset?: readonly st
 	}
 
 	if (type === 'coding') {
-		const brief = await text(vscode.l10n.t('Coding'), vscode.l10n.t('The brief: text, or an issue or PR link, #123 or a task number on the first line (the agents read it themselves).'));
+		const brief = await text(vscode.l10n.t('Coding'), vscode.l10n.t('The brief: text, or an issue or PR link, #123 or a task number on the first line (the agents read it themselves).'), task?.brief ?? '');
 		const coordinator = brief && await pick(vscode.l10n.t('Who coordinates?'), whoItems(n => vscode.l10n.t('{0} coordinates', n)));
 		const plan = coordinator && await pick<'approve' | 'none'>(vscode.l10n.t('Slice plan'), [
 			{ label: vscode.l10n.t('Start at once'), value: 'none' },
@@ -124,7 +124,7 @@ export async function templateForm(registry: AgentRegistry, preset?: readonly st
 	]);
 	const lead = auditors === 'both' ? await pick(vscode.l10n.t('Who leads (merges, then fixes)?'), whoItems(n => n)) : auditors;
 	const since = lead && await text(vscode.l10n.t('Code audit'), vscode.l10n.t('Scope: changes since a branch, tag or commit (empty: the whole repository)'), '', true);
-	const focus = since !== undefined && lead ? await text(vscode.l10n.t('Code audit'), vscode.l10n.t('Focus (optional)'), '', true) : undefined;
+	const focus = since !== undefined && lead ? await text(vscode.l10n.t('Code audit'), vscode.l10n.t('Focus (optional)'), task?.brief ?? '', true) : undefined;
 	type Goal = { goal: 'doc' } | { goal: 'fix'; fix: 'approve' } | { goal: 'fix'; fix: 'auto'; levels: 'P0' | 'P1' | 'P2' | 'P3' };
 	const goal = focus !== undefined ? await pick<Goal>(vscode.l10n.t('After the audit'), [
 		{ label: vscode.l10n.t('Audit document only'), value: { goal: 'doc' } },

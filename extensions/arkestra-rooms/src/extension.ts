@@ -11,7 +11,8 @@ import { AgentRegistry, type Agent, type InviteEntry } from './agent';
 import { AgentNotReadyError, Room, newRoomState } from './room';
 import { RoomStore } from './store';
 import { laneAgent, laneEntries, type LaneEntry } from './lanes';
-import { copyFile, mkdir, stat } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, stat } from 'node:fs/promises';
+import { progressFromMarkdown, taskRooms, type TaskRoom } from './tasks';
 import { templateForm } from './templateForm';
 import { ChangesUi } from './changesView';
 import { InlineEdits } from './inlineEditUi';
@@ -33,7 +34,12 @@ export interface ArkestraRoomsApi {
 	registerAgent(agent: Agent): vscode.Disposable;
 	/** Permission lists per machine and project; adapters ask here before an agent acts. */
 	readonly permissions: PermissionsApi;
+	/** Rooms working on a task (an issue, a PR, a task number), for the project views. */
+	tasks(): Promise<TaskRoom[]>;
+	readonly onDidChangeTasks: vscode.Event<void>;
 }
+
+export type { TaskRoom };
 
 const ACTIVE_ROOM = 'arkestra.rooms.active';
 
@@ -658,6 +664,23 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}, 300);
 	};
 	refreshThreadsLater = refreshThreads;
+	const tasksChanged = new vscode.EventEmitter<void>();
+	context.subscriptions.push(tasksChanged, changedThreads.event(() => tasksChanged.fire()));
+	const tasks = async (): Promise<TaskRoom[]> => {
+		const states = (await store.list()).map(state => loaded.get(state.id)?.state ?? state);
+		const progress = new Map<string, { done: number; total: number }>();
+		await Promise.all(states.filter(s => s.template).map(async s => {
+			try {
+				const p = progressFromMarkdown(await readFile(path.join(context.globalStorageUri.fsPath, 'room-files', s.id, 'haladas.md'), 'utf8'));
+				if (p) {
+					progress.set(s.id, p);
+				}
+			} catch {
+				// no progress list yet
+			}
+		}));
+		return taskRooms(states, busy, id => progress.get(id));
+	};
 	const threadId = (arg: unknown) => typeof arg === 'string' ? arg : (arg as { thread?: ThreadSummary } | undefined)?.thread?.id;
 	const editRoom = async (arg: unknown, edit: (room: Room) => void) => {
 		const room = await open(threadId(arg));
@@ -683,8 +706,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 				await vscode.commands.executeCommand('vscode.open', sessionUri(id), typeof column === 'number' ? { viewColumn: column } : undefined);
 			}
 		}),
-		vscode.commands.registerCommand('arkestra.rooms.newTemplateRoom', async () => {
-			const req = await templateForm(registry, (await currentRoom())?.roster);
+		vscode.commands.registerCommand('arkestra.rooms.newTemplateRoom', async (arg?: unknown) => {
+			// From a project view: { type, brief } presets the form (the task's link as the brief).
+			const preset = arg && typeof arg === 'object' && !Array.isArray(arg) ? arg as { type?: 'coding' | 'audit' | 'review'; brief?: string } : undefined;
+			const req = await templateForm(registry, (await currentRoom())?.roster, preset);
 			if (!req) {
 				return;
 			}
@@ -799,6 +824,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	return {
 		registerAgent: agent => new vscode.Disposable(registry.register(agent).dispose),
 		permissions,
+		tasks,
+		onDidChangeTasks: tasksChanged.event,
 	};
 }
 

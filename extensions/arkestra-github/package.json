@@ -12,7 +12,8 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:arkestra.project"
   ],
   "main": "./out/extension",
   "capabilities": {
@@ -40,10 +41,25 @@
           "default": "",
           "scope": "resource",
           "markdownDescription": "%project%"
+        },
+        "arkestra.github.cardFields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "markdownDescription": "%cardFields%"
         }
       }
     },
     "commands": [
+      {
+        "command": "arkestra.github.openBoard",
+        "title": "%openBoard%",
+        "category": "Arkestra",
+        "icon": "$(project)"
+      },
       {
         "command": "arkestra.github.connect",
         "title": "%connect%",
@@ -79,7 +95,16 @@
         "title": "%refreshProject%",
         "category": "Arkestra"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "arkestra.github.openBoard",
+          "when": "view == arkestra.threads",
+          "group": "navigation@9"
+        }
+      ]
+    }
   },
   "scripts": {
     "compile": "gulp compile-extension:arkestra-github",
