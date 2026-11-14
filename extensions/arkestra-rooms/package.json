@@ -252,6 +252,12 @@
         "title": "%artifacts.open%",
         "category": "Arkestra",
         "icon": "$(layers)"
+      },
+      {
+        "command": "arkestra.rooms.chooseModel",
+        "title": "%chooseModel%",
+        "category": "Arkestra",
+        "icon": "$(settings)"
       }
     ],
     "chatSessions": [
@@ -446,6 +452,11 @@
           "command": "arkestra.checkpoints.show",
           "when": "view == arkestra.checkpoints && viewItem == checkpoint",
           "group": "1_show"
+        },
+        {
+          "command": "arkestra.rooms.chooseModel",
+          "when": "view == arkestra.threads && viewItem =~ /^thread/",
+          "group": "2_agents@1"
         }
       ],
       "commandPalette": [

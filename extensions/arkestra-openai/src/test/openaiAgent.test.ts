@@ -6,7 +6,7 @@ import { test, before, after } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { OpenAIAgent, ROOM_INSTRUCTIONS, parseEvent, toInput } from '../openaiAgent';
+import { OpenAIAgent, ROOM_INSTRUCTIONS, chatModels, isReasoning, parseEvent, toInput } from '../openaiAgent';
 import type { AgentEvent, Message } from '../rooms';
 
 const msg = (kind: 'user' | 'agent' | 'system', id: string, text: string): Message =>
@@ -31,6 +31,10 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 	requests.push({ method: req.method, url: req.url, auth: req.headers.authorization, body });
 	if (req.headers.authorization !== 'Bearer sk-good') {
 		res.writeHead(401, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: { message: 'Incorrect API key provided' } }));
+		return;
+	}
+	if (req.url === '/v1/models') {
+		res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'gpt-4.1' }, { id: 'text-embedding-3-large' }, { id: 'o4-mini' }, { id: 'gpt-6-astra' }, { id: 'gpt-realtime' }] }));
 		return;
 	}
 	if (req.url?.startsWith('/v1/models/')) {
@@ -106,4 +110,15 @@ test('system messages are labelled as the room', () => {
 test('usage from the completed response', () => {
 	assert.deepEqual(parseEvent({ type: 'response.completed', response: { usage: { input_tokens: 900, output_tokens: 100, input_tokens_details: { cached_tokens: 300 } } } }), { done: true, usage: { input: 900, output: 100, cached: 300, context: { used: 1000 } } });
 	assert.deepEqual(parseEvent({ type: 'response.completed', response: {} }), { done: true });
+});
+
+test('the thread\'s model and effort go in the request; the choices are the key\'s chat models', async () => {
+	requests.length = 0;
+	await agent().turn({ roomId: 'm', transcript: [msg('user', 'user', 'hi')], model: 'o4-mini', effort: 'high' }, () => { }, never());
+	assert.equal(requests[0].body.model, 'o4-mini');
+	assert.deepEqual(requests[0].body.reasoning, { effort: 'high' });
+	const c = await agent().choices();
+	assert.deepEqual(c.models.map(m => [m.id, m.efforts?.length ?? 0]), [['gpt-6-astra', 4], ['o4-mini', 4], ['gpt-4.1', 0]]);
+	assert.equal(isReasoning('gpt-4o'), false);
+	assert.deepEqual(chatModels(['dall-e-3', 'gpt-4o-audio-preview', 'o3']), ['o3']);
 });
