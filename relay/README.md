@@ -9,7 +9,8 @@ no open port; one that was away gets what it missed when it reconnects (Last-Eve
 GitHub ──webhook──▶ edge: nginx ─▶ relay (127.0.0.1:8787) ──SSE──▶ Arkestra IDE (arkestra-github)
 ```
 
-No dependencies: Node 18 or newer, one file (`server.mjs`).
+No dependencies: Node 18 or newer, three files (`server.mjs`, `remote.mjs`, and the phone page
+`remote-app.html` for Remote Control).
 
 ## Endpoints
 
@@ -18,6 +19,11 @@ No dependencies: Node 18 or newer, one file (`server.mjs`).
 | `POST /github/webhook` | GitHub's deliveries; refused (401) without a valid `X-Hub-Signature-256`. |
 | `GET /events` | The SSE stream for a client: `Authorization: Bearer <token>` (or `?token=`). |
 | `GET /healthz` | `{ ok, clients, buffered, lastEventAt }`. |
+| `GET /remote/<channel>/host` | Remote Control: the IDE's SSE stream (Bearer client token); events `hello`, `phones`, `cmd`. |
+| `POST /remote/<channel>/up` | The IDE sends an encrypted frame (Bearer); the newest per topic is kept while the IDE is online. |
+| `GET /remote/<channel>/down` | The phone's SSE stream: `status` (online/offline) and `frame` events. |
+| `POST /remote/<channel>/cmd` | An encrypted command from the phone; 503 while the IDE is offline. |
+| `GET /remote/app` | The phone page. |
 
 ## Deploying on the edge server (owner step)
 
@@ -25,7 +31,8 @@ No dependencies: Node 18 or newer, one file (`server.mjs`).
    server's name, then create the app (organization settings → Developer settings → GitHub
    Apps → New, with the permissions and events listed in the manifest). Set a webhook secret.
    Note the app's slug; the IDE's `arkestra.github.appSlug` setting takes it.
-2. **Copy the relay** to the server, e.g. `/opt/arkestra-relay/server.mjs`.
+2. **Copy the relay** to the server, e.g. `/opt/arkestra-relay/`: `server.mjs`, `remote.mjs` and
+   `remote-app.html` side by side (without the page, `/remote/app` answers 404).
 3. **Clients file** `/etc/arkestra-relay/clients.json` (mode 600, owned by the service user).
    One entry per IDE; the token is at least 24 characters (`openssl rand -hex 24`):
 
@@ -95,6 +102,24 @@ No dependencies: Node 18 or newer, one file (`server.mjs`).
 (stored in the OS keychain, never in settings). The status bar shows `live · 12 s` while the
 stream is open; **Arkestra: Show the GitHub event log** lists the events.
 
+## Remote Control (AR36)
+
+The threads on a phone, through this relay. **Remote Control: turn on** (or the radio
+tower in the status bar) makes a pairing: a channel id and an AES-256 key. **Remote Control: copy the
+pairing link** gives `https://EDGE_HOST/arkestra/remote/app#c=<channel>&k=<key>`; open it on the phone
+(send it to yourself) and add the page to the home screen.
+
+- **End to end encrypted.** Everything between the IDE and the phone is AES-256-GCM with the
+  channel id as additional data. The key stays after `#`, which the browser never sends; the
+  relay stores and forwards only ciphertext, and keeps nothing once the IDE goes offline.
+- **Which threads.** Every thread, or only the ones switched on (right click a thread →
+  Remote Control on/off). Turning a thread off takes it off the phones at once.
+- **What the phone does.** Thread list, a thread's messages, each agent's state (working,
+  waits for you and why, task list, sub-agents, background commands), model and effort per
+  agent, writing to the thread and stopping a running round. Approvals stay in the IDE.
+- **New pairing link** makes a new channel and key: the old link stops working at once.
+- The channel belongs to the client token that opened it; another client gets 409.
+
 ## Tests
 
-`node --test relay/server.test.mjs`
+`node --test relay/server.test.mjs relay/remote.test.mjs`

@@ -106,6 +106,46 @@
         "command": "arkestra.github.refreshProject",
         "title": "%refreshProject%",
         "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.remote.start",
+        "title": "%remote.start%",
+        "category": "Arkestra",
+        "icon": "$(radio-tower)"
+      },
+      {
+        "command": "arkestra.remote.stop",
+        "title": "%remote.stop%",
+        "category": "Arkestra",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "arkestra.remote.pair",
+        "title": "%remote.pair%",
+        "category": "Arkestra",
+        "icon": "$(key)"
+      },
+      {
+        "command": "arkestra.remote.copyLink",
+        "title": "%remote.copyLink%",
+        "category": "Arkestra",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "arkestra.remote.toggleAll",
+        "title": "%remote.toggleAll%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.remote.toggleThread",
+        "title": "%remote.toggleThread%",
+        "category": "Arkestra",
+        "icon": "$(radio-tower)"
+      },
+      {
+        "command": "arkestra.remote.menu",
+        "title": "%remote.menu%",
+        "category": "Arkestra"
       }
     ],
     "menus": {
@@ -114,6 +154,19 @@
           "command": "arkestra.github.openBoard",
           "when": "view == arkestra.threads",
           "group": "navigation@9"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "arkestra.remote.toggleThread",
+          "when": "view == arkestra.threads && viewItem =~ /^thread/",
+          "group": "3_remote@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "arkestra.remote.toggleThread",
+          "when": "false"
         }
       ]
     }
