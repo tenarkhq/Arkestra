@@ -1,0 +1,60 @@
+{
+  "name": "arkestra-claude",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "0.1.0",
+  "publisher": "vscode",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": ["AI"],
+  "extensionDependencies": ["vscode.arkestra-rooms"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension",
+  "capabilities": {
+    "virtualWorkspaces": false,
+    "untrustedWorkspaces": { "supported": false }
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Arkestra · Claude",
+      "properties": {
+        "arkestra.claude.auth": {
+          "type": "string",
+          "enum": ["auto", "subscription", "apiKey"],
+          "enumDescriptions": ["%auth.auto%", "%auth.subscription%", "%auth.apiKey%"],
+          "default": "auto",
+          "description": "%auth%"
+        },
+        "arkestra.claude.command": {
+          "type": "string",
+          "default": "claude",
+          "description": "%command%"
+        },
+        "arkestra.claude.model": {
+          "type": "string",
+          "default": "",
+          "description": "%model%"
+        },
+        "arkestra.claude.permissionMode": {
+          "type": "string",
+          "enum": ["default", "acceptEdits", "plan", "bypassPermissions"],
+          "default": "acceptEdits",
+          "description": "%permissionMode%"
+        }
+      }
+    },
+    "commands": [
+      { "command": "arkestra.claude.setApiKey", "title": "%setApiKey%", "category": "Arkestra" },
+      { "command": "arkestra.claude.clearApiKey", "title": "%clearApiKey%", "category": "Arkestra" }
+    ]
+  },
+  "scripts": {
+    "compile": "gulp compile-extension:arkestra-claude",
+    "watch": "gulp watch-extension:arkestra-claude"
+  },
+  "devDependencies": {
+    "@types/node": "24.x"
+  }
+}
