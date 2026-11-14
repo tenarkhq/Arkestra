@@ -15,6 +15,8 @@ import { copyFile, mkdir, readFile, stat } from 'node:fs/promises';
 import { progressItems, taskRooms, type TaskRoom } from './tasks';
 import { TURN_TEXT, turnState, workHtml } from './work';
 import { ActivityView } from './activityView';
+import { choiceLabel, effortsFor, fitChoice, type Choice } from './choice';
+import type { AgentChoices } from './agent';
 import { templateForm } from './templateForm';
 import { ChangesUi } from './changesView';
 import { InlineEdits } from './inlineEditUi';
@@ -39,6 +41,9 @@ export interface ArkestraRoomsApi {
 	/** Rooms working on a task (an issue, a PR, a task number), for the project views. */
 	tasks(): Promise<TaskRoom[]>;
 	readonly onDidChangeTasks: vscode.Event<void>;
+	/** What an agent can run with, and the choice per thread (AR38); the mobile view uses these too. */
+	agentChoices(agentId: string): Promise<AgentChoices | undefined>;
+	setChoice(roomId: string, agentId: string, choice: { model?: string; effort?: string }): Promise<void>;
 }
 
 export type { TaskRoom };
@@ -162,7 +167,80 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			await explain(pick.entry);
 			return undefined;
 		}
-		return invite(room, pick.entry.agent.id);
+		const joined = await invite(room, pick.entry.agent.id);
+		if (pick.entry.agent.choices && room.roster.includes(pick.entry.agent.id)) {
+			await chooseFor(room, pick.entry.agent.id, true);
+		}
+		return joined;
+	};
+
+	// Model and effort per agent and thread (AR38).
+	const choiceCache = new Map<string, { choices: AgentChoices; at: number }>();
+	const agentChoices = async (agentId: string): Promise<AgentChoices | undefined> => {
+		const agent = registry.get(agentId);
+		if (!agent?.choices) {
+			return undefined;
+		}
+		const cached = choiceCache.get(agentId);
+		if (cached && Date.now() - cached.at < 10 * 60_000) {
+			return cached.choices;
+		}
+		const choices = await agent.choices().catch(() => undefined);
+		if (choices?.models.length) {
+			choiceCache.set(agentId, { choices, at: Date.now() });
+		}
+		return choices;
+	};
+	const setChoice = async (room: Room, agentId: string, choice: Choice): Promise<void> => {
+		const fitted = fitChoice(choice, await agentChoices(agentId));
+		const all = { ...(room.state.choices ?? {}) };
+		if (fitted.model || fitted.effort) {
+			all[agentId] = { ...fitted };
+		} else {
+			delete all[agentId];
+		}
+		room.state.choices = all;
+		await store.save(room.state);
+		if (room === current) {
+			currentChanged.fire();
+		}
+	};
+	/** Asks the model, then the effort when the model has efforts. Esc keeps what was there. */
+	const chooseFor = async (room: Room, agentId: string, atInvite = false): Promise<void> => {
+		const agent = registry.get(agentId);
+		const name = agent?.name ?? agentId;
+		const choices = await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: vscode.l10n.t('Reading {0}\'s models…', name) }, () => agentChoices(agentId));
+		if (!choices?.models.length) {
+			if (!atInvite) {
+				void vscode.window.showInformationMessage(vscode.l10n.t('{0} offers no model choice.', name));
+			}
+			return;
+		}
+		const now = room.state.choices?.[agentId] ?? {};
+		type Item = vscode.QuickPickItem & { value: string | undefined };
+		const models: Item[] = [
+			{ label: `$(circle-slash) ${vscode.l10n.t('Default')}`, description: vscode.l10n.t('the agent\'s own setting'), value: undefined },
+			...choices.models.map(m => ({ label: m.label, description: [m.id !== m.label ? m.id : '', m.id === now.model ? vscode.l10n.t('chosen') : ''].filter(Boolean).join(' · '), ...(m.detail ? { detail: m.detail } : {}), value: m.id })),
+		];
+		const model = await vscode.window.showQuickPick(models, { title: vscode.l10n.t('Model for {0} in “{1}”', name, room.state.title), placeHolder: atInvite ? vscode.l10n.t('Esc: the agent\'s default') : undefined, matchOnDescription: true });
+		if (!model) {
+			return;
+		}
+		let effort = model.value === now.model ? now.effort : undefined;
+		const efforts = effortsFor(choices, model.value);
+		if (efforts.length) {
+			const picked = await vscode.window.showQuickPick<Item>([
+				{ label: `$(circle-slash) ${vscode.l10n.t('Default')}`, description: vscode.l10n.t('the model\'s own'), value: undefined },
+				...efforts.map(e => ({ label: e, ...(e === now.effort ? { description: vscode.l10n.t('chosen') } : {}), value: e })),
+			], { title: vscode.l10n.t('Effort for {0}', name) });
+			if (!picked) {
+				return;
+			}
+			effort = picked.value;
+		}
+		await setChoice(room, agentId, { ...(model.value ? { model: model.value } : {}), ...(effort ? { effort } : {}) });
+		const label = choiceLabel(room.state.choices?.[agentId], choices);
+		void vscode.window.setStatusBarMessage(label ? vscode.l10n.t('{0} in this thread: {1}', name, label) : vscode.l10n.t('{0} in this thread: its default model', name), 4000);
 	};
 
 	const invite = async (room: Room, agentId: string): Promise<string> => {
@@ -466,7 +544,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		agentsPanel.title = room ? vscode.l10n.t('Agents · {0}', room.state.title) : vscode.l10n.t('Agents');
 		agentsPanel.webview.html = agentsHtml(room ? room.roster.map(id => {
 			const agent = registry.get(id);
-			return { name: agent?.name ?? id, detail: agent?.detail ?? vscode.l10n.t('not available now'), activity: activity.get(room.id, id) };
+			return { id, name: agent?.name ?? id, detail: agent?.detail ?? vscode.l10n.t('not available now'), activity: activity.get(room.id, id), choice: choiceLabel(room.state.choices?.[id], choiceCache.get(id)?.choices), canChoose: !!agent?.choices };
 		}) : undefined);
 	};
 	const adoptAgentsPanel = (panel: vscode.WebviewPanel) => {
@@ -474,9 +552,12 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		panel.iconPath = new vscode.ThemeIcon('organization');
 		panel.webview.options = { enableScripts: true };
 		panel.onDidDispose(() => { agentsPanel = undefined; });
-		panel.webview.onDidReceiveMessage(async (message: { type?: string }) => {
+		panel.webview.onDidReceiveMessage(async (message: { type?: string; agentId?: string }) => {
 			if (message.type === 'invite') {
 				await vscode.commands.executeCommand('arkestra.rooms.invite', (await currentRoom())?.id);
+			}
+			if (message.type === 'choose' && typeof message.agentId === 'string') {
+				await vscode.commands.executeCommand('arkestra.rooms.chooseModel', (await currentRoom())?.id, message.agentId);
 			}
 		});
 		void renderAgents();
@@ -812,6 +893,21 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 				void vscode.window.showInformationMessage(message);
 			}
 		}),
+		vscode.commands.registerCommand('arkestra.rooms.chooseModel', async (arg?: unknown, agentArg?: unknown) => {
+			const id = typeof arg === 'string' ? arg : (arg as { thread?: { id: string } } | undefined)?.thread?.id;
+			const room = (id ? await open(id) : undefined) ?? await currentRoom();
+			if (!room) {
+				void vscode.window.showInformationMessage(vscode.l10n.t('Start a room in the chat with @room first.'));
+				return;
+			}
+			let agentId = typeof agentArg === 'string' ? agentArg : undefined;
+			if (!agentId) {
+				agentId = room.roster.length === 1 ? room.roster[0] : (await vscode.window.showQuickPick(room.roster.map(a => ({ label: registry.get(a)?.name ?? a, description: choiceLabel(room.state.choices?.[a], choiceCache.get(a)?.choices) || vscode.l10n.t('default'), id: a })), { title: vscode.l10n.t('Whose model and effort?') }))?.id;
+			}
+			if (agentId) {
+				await chooseFor(room, agentId);
+			}
+		}),
 		vscode.commands.registerCommand('arkestra.rooms.open', async () => {
 			const rooms = await store.list();
 			const pick = await vscode.window.showQuickPick(rooms.map(r => ({ label: r.title, description: `${r.roster.length} agent`, id: r.id })),
@@ -830,12 +926,22 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		permissions,
 		tasks,
 		onDidChangeTasks: tasksChanged.event,
+		agentChoices,
+		setChoice: async (roomId, agentId, choice) => {
+			const room = await open(roomId);
+			if (room) {
+				await setChoice(room, agentId, choice);
+			}
+		},
 	};
 }
 
 export function deactivate(): void { }
 
 interface AgentRow {
+	readonly id: string;
+	readonly choice: string;
+	readonly canChoose: boolean;
 	readonly name: string;
 	readonly detail: string;
 	readonly activity: AgentActivity;
@@ -871,6 +977,7 @@ function agentsHtml(rows: readonly AgentRow[] | undefined): string {
 				return `<div class="agent">
 					<div class="top"><span class="dot ${s.cls}"></span><b>${escapeHtml(r.name)}</b><span class="rings">${rings}</span><span class="mut when">${escapeHtml(time(r.activity.since))}</span></div>
 					<div class="mut">${escapeHtml(r.detail)}${line ? ` · ${escapeHtml(line)}` : ''}</div>
+					${r.canChoose ? `<div class="choice"><span>${escapeHtml(r.choice || vscode.l10n.t('default model'))}</span> <a href="#" data-choose="${escapeHtml(r.id)}">${escapeHtml(vscode.l10n.t('Model & effort…'))}</a></div>` : ''}
 					<div class="${s.cls}">${escapeHtml(s.text)}</div>
 					${r.activity.error ? `<div class="err">${escapeHtml(r.activity.error)}</div>` : ''}
 					${workHtml(r.activity.work, escapeHtml)}
@@ -896,6 +1003,8 @@ function agentsHtml(rows: readonly AgentRow[] | undefined): string {
 	.wait { color: var(--vscode-editorWarning-foreground); }
 	.err { color: var(--vscode-errorForeground); }
 	.dot.err { background: var(--vscode-errorForeground); }
+	.choice { font-size: .92em; }
+	.choice a { color: var(--vscode-textLink-foreground); text-decoration: none; margin-left: 6px; }
 	details.work { margin-top: 2px; }
 	details.work summary { cursor: pointer; color: var(--vscode-descriptionForeground); font-size: .92em; }
 	details.work ul, details.work ol { margin: 4px 0 2px; padding-left: 18px; }
@@ -914,6 +1023,9 @@ function agentsHtml(rows: readonly AgentRow[] | undefined): string {
 	<script nonce="${nonce}">
 		const vscode = acquireVsCodeApi();
 		document.getElementById('invite').addEventListener('click', () => vscode.postMessage({ type: 'invite' }));
+		for (const a of document.querySelectorAll('[data-choose]')) {
+			a.addEventListener('click', e => { e.preventDefault(); vscode.postMessage({ type: 'choose', agentId: a.getAttribute('data-choose') }); });
+		}
 	</script>
 </body></html>`;
 }

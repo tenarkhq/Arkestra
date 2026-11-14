@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
-import type { Agent, AgentEvent, Usage, Message, Readiness, TurnInput, WorkUpdate } from './rooms';
+import type { Agent, AgentChoices, AgentEvent, Usage, Message, Readiness, TurnInput, WorkUpdate } from './rooms';
 
 export type AuthMode = 'subscription' | 'apiKey';
 
@@ -171,6 +171,16 @@ function describeTool(name: string, input: any): string {
 	return typeof target === 'string' ? `${name} ${target.length > 80 ? target.slice(0, 77) + '…' : target}` : name;
 }
 
+/** Claude Code's models (aliases for the latest of each) and its efforts, as `claude --help` lists them. */
+export const CLAUDE_CHOICES: AgentChoices = {
+	models: [
+		{ id: 'opus', label: 'Opus', detail: 'the latest Opus', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+		{ id: 'sonnet', label: 'Sonnet', detail: 'the latest Sonnet', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+		{ id: 'fable', label: 'Fable', detail: 'the latest Fable', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+		{ id: 'haiku', label: 'Haiku', detail: 'the latest Haiku', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+	],
+};
+
 export class ClaudeCodeAgent implements Agent {
 	readonly id: string;
 	readonly name: string;
@@ -183,6 +193,11 @@ export class ClaudeCodeAgent implements Agent {
 
 	get detail(): string {
 		return `Claude Code${this.options.model ? ' · ' + this.options.model : ''} · ${this.where}`;
+	}
+
+	async choices(): Promise<AgentChoices> {
+		const own = this.options.model;
+		return own && !CLAUDE_CHOICES.models.some(m => m.id === own) ? { models: [{ id: own, label: own, detail: 'from the settings', efforts: CLAUDE_CHOICES.models[0].efforts }, ...CLAUDE_CHOICES.models] } : CLAUDE_CHOICES;
 	}
 
 	async readiness(): Promise<Readiness> {
@@ -222,8 +237,12 @@ export class ClaudeCodeAgent implements Agent {
 			args.push('--resume', session.sessionId);
 		}
 		args.push(...permissionArgs(this.options.permissionRules?.()));
-		if (this.options.model) {
-			args.push('--model', this.options.model);
+		// The thread's choice (AR38) wins over the setting; the effort goes only when one was chosen.
+		if (input.effort) {
+			args.push('--effort', input.effort);
+		}
+		if (input.model || this.options.model) {
+			args.push('--model', input.model || this.options.model!);
 		}
 
 		const env = { ...process.env };

@@ -154,3 +154,15 @@ test('work beside the answer: task list, sub-agents, background commands, polls,
 	const result = JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't9', is_error: false, content: [{ type: 'text', text: 'found it' }] }] } });
 	assert.deepEqual(work(result), [{ type: 'finished', id: 't9', ok: true, text: 'found it' }]);
 });
+
+test('the thread\'s model and effort go to the CLI; without a choice the setting\'s model, no effort', async () => {
+	const { agent, calls } = await setup();
+	await agent.turn({ roomId: 'm', transcript: [msg('user', 'user', 'hi')], model: 'opus', effort: 'max' }, () => { }, new AbortController().signal);
+	await agent.turn({ roomId: 'm2', transcript: [msg('user', 'user', 'hi')] }, () => { }, new AbortController().signal);
+	const [chosen, plain] = await calls();
+	const after = (c: { args: string[] }, flag: string) => c.args.includes(flag) ? c.args[c.args.indexOf(flag) + 1] : undefined;
+	assert.deepEqual([after(chosen, '--model'), after(chosen, '--effort')], ['opus', 'max']);
+	assert.deepEqual([after(plain, '--model'), after(plain, '--effort')], [undefined, undefined]);
+	const models = (await agent.choices()).models.map(m => m.id);
+	assert.deepEqual(models, ['opus', 'sonnet', 'fable', 'haiku']);
+});

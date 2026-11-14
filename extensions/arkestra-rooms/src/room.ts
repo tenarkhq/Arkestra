@@ -41,6 +41,8 @@ export interface RoomState {
 	mode?: 'plan';
 	/** Best-of-N runs of this room (AR24). */
 	best?: BestRun[];
+	/** The model and effort chosen per agent in this thread (AR38). */
+	choices?: Record<string, { model?: string; effort?: string }>;
 }
 
 export class AgentNotReadyError extends Error {
@@ -157,7 +159,8 @@ export class Room {
 		const shared = await this.shared?.().catch(() => undefined);
 		sink(agent, { kind: 'start' });
 		try {
-			await agent.turn({ roomId: this.id, transcript: [...this.state.messages], ...(this.state.mode === 'plan' ? { mode: 'plan' as const } : {}), ...(shared ? { shared } : {}) }, event => {
+			const choice = this.state.choices?.[agent.id];
+			await agent.turn({ roomId: this.id, transcript: [...this.state.messages], ...(this.state.mode === 'plan' ? { mode: 'plan' as const } : {}), ...(shared ? { shared } : {}), ...(choice?.model ? { model: choice.model } : {}), ...(choice?.effort ? { effort: choice.effort } : {}) }, event => {
 				if (event.kind === 'text') {
 					reply += reply ? `\n\n${event.text}` : event.text;
 				}

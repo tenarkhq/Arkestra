@@ -6,7 +6,7 @@
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
-import type { Agent, AgentEvent, Message, PermissionRequest, Readiness, TurnInput, Usage, WorkUpdate } from './rooms';
+import type { Agent, AgentChoices, AgentEvent, Message, PermissionRequest, Readiness, TurnInput, Usage, WorkUpdate } from './rooms';
 import { RpcClient, type Notification } from './rpc';
 
 export type CodexAuth = { readonly mode: 'subscription' } | { readonly mode: 'apiKey'; readonly key: string | undefined };
@@ -57,6 +57,35 @@ interface RoomThread {
 	sharedVersion?: string;
 	/** The thread's token totals at the last report, so a report adds only what is new. */
 	tokens?: TokenBreakdown;
+	/** The model and effort this thread was last told to use (Codex keeps an override for later turns). */
+	override?: { model?: string; effort?: string };
+}
+
+type CodexModel = AgentChoices['models'][number] & { readonly isDefault?: boolean };
+
+/** Codex's model list (model/list) as choices: visible models with their reasoning efforts. */
+export function codexModels(data: unknown): CodexModel[] {
+	const list = Array.isArray((data as any)?.data) ? (data as any).data : [];
+	return list.filter((m: any) => !m?.hidden && (typeof m?.model === 'string' || typeof m?.id === 'string')).map((m: any) => ({
+		id: m.model ?? m.id,
+		label: m.displayName || m.model || m.id,
+		...(m.description ? { detail: m.description } : {}),
+		...(Array.isArray(m.supportedReasoningEfforts) && m.supportedReasoningEfforts.length ? { efforts: m.supportedReasoningEfforts.map((e: any) => e?.reasoningEffort ?? e).filter((e: unknown) => typeof e === 'string') } : {}),
+		...(typeof m.defaultReasoningEffort === 'string' ? { defaultEffort: m.defaultReasoningEffort } : {}),
+		...(m.isDefault ? { isDefault: true } : {}),
+	}));
+}
+
+/**
+ * What turn/start gets for the thread's choice. A choice taken back has to be undone by
+ * sending the defaults, since Codex keeps an override for the following turns.
+ */
+export function modelOverride(want: { model?: string; effort?: string }, last: RoomThread['override'], models: readonly CodexModel[]): { model?: string; effort?: string } {
+	const fallback = models.find(m => m.isDefault);
+	const model = want.model ?? (last?.model ? fallback?.id : undefined);
+	const of = models.find(m => m.id === (want.model ?? fallback?.id));
+	const effort = want.effort ?? (last?.effort ? of?.defaultEffort : undefined);
+	return { ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
 }
 
 interface TokenBreakdown {
@@ -141,6 +170,7 @@ export class CodexAgent implements Agent {
 	private readonly where: string;
 	private readonly threads = new Map<string, RoomThread>();
 	private server: { client: RpcClient; authKey: string; ready: Promise<void> } | undefined;
+	private models: { list: CodexModel[]; at: number } | undefined;
 	/** The running turns' approval answers per thread (server requests carry the thread id). */
 	private readonly approvals = new Map<string, (method: string, params: any) => Promise<unknown> | undefined>();
 
@@ -150,6 +180,24 @@ export class CodexAgent implements Agent {
 
 	get detail(): string {
 		return `Codex${this.options.model ? ' · ' + this.options.model : ''} · ${this.where}`;
+	}
+
+	async choices(): Promise<AgentChoices> {
+		return { models: await this.modelList() };
+	}
+
+	private async modelList(): Promise<CodexModel[]> {
+		if (this.models && Date.now() - this.models.at < 10 * 60_000) {
+			return this.models.list;
+		}
+		try {
+			const client = await this.ensureServer(await this.options.auth());
+			const list = codexModels(await client.request('model/list', {}));
+			this.models = { list, at: Date.now() };
+			return list;
+		} catch {
+			return this.models?.list ?? [];
+		}
 	}
 
 	async readiness(): Promise<Readiness> {
@@ -270,11 +318,17 @@ export class CodexAgent implements Agent {
 				}
 				return asked;
 			});
+			// The thread's model and effort (AR38); a choice taken back sends the defaults once.
+			const override = input.model || input.effort || room.override?.model || room.override?.effort
+				? modelOverride({ ...(input.model ? { model: input.model } : {}), ...(input.effort ? { effort: input.effort } : {}) }, room.override, await this.modelList())
+				: {};
 			const started = await client.request<{ turn: { id: string } }>('turn/start', {
 				threadId, input: [{ type: 'text', text, text_elements: [] }],
 				sandboxPolicy: sandboxPolicy(input.mode === 'plan' ? 'read-only' : this.options.sandbox),
 				approvalPolicy: ruled ? 'untrusted' : 'never',
+				...override,
 			});
+			room.override = { ...(input.model ? { model: input.model } : {}), ...(input.effort ? { effort: input.effort } : {}) };
 			turnId = started.turn.id;
 			if (signal.aborted) {
 				interrupt();

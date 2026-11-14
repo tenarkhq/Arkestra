@@ -4,7 +4,7 @@
  *  Nothing is stored at OpenAI (store: false); each turn sends the thread.
  *--------------------------------------------------------------------------------------------*/
 
-import type { Agent, AgentEvent, Message, Readiness, TurnInput, Usage } from './rooms';
+import type { Agent, AgentChoices, AgentEvent, Message, Readiness, TurnInput, Usage } from './rooms';
 
 export interface OpenAIOptions {
 	readonly model: string;
@@ -83,18 +83,35 @@ export class OpenAIAgent implements Agent {
 		}
 	}
 
+	/** The key's chat models; reasoning models get the efforts the Responses API knows. */
+	async choices(): Promise<AgentChoices> {
+		const key = await this.options.apiKey();
+		const own = { id: this.options.model, label: this.options.model, detail: 'from the settings', ...(isReasoning(this.options.model) ? { efforts: REASONING_EFFORTS } : {}) };
+		if (!key) {
+			return { models: [own] };
+		}
+		try {
+			const res = await this.http('/models', key, { method: 'GET' }, AbortSignal.timeout(10_000));
+			const data = res.ok ? await res.json() as { data?: { id?: string }[] } : {};
+			return { models: [own, ...chatModels((data.data ?? []).map(m => m.id ?? '')).filter(id => id !== own.id).map(id => ({ id, label: id, ...(isReasoning(id) ? { efforts: REASONING_EFFORTS } : {}) }))] };
+		} catch {
+			return { models: [own] };
+		}
+	}
+
 	async turn(input: TurnInput, onEvent: (event: AgentEvent) => void, signal: AbortSignal): Promise<void> {
 		const key = await this.options.apiKey();
 		if (!key) {
 			throw new Error('No OpenAI API key stored');
 		}
+		const effort = input.effort ?? this.options.reasoningEffort;
 		const body = {
-			model: this.options.model,
+			model: input.model || this.options.model,
 			instructions: input.shared ? `${ROOM_INSTRUCTIONS}\n\n${input.shared.text}` : ROOM_INSTRUCTIONS,
 			input: toInput(input.transcript, this.id),
 			stream: true,
 			store: false,
-			...(this.options.reasoningEffort ? { reasoning: { effort: this.options.reasoningEffort } } : {}),
+			...(effort ? { reasoning: { effort } } : {}),
 		};
 		let res: Response;
 		try {
@@ -177,4 +194,16 @@ async function errorText(res: Response): Promise<string> {
 		}
 	} catch { /* not JSON */ }
 	return `OpenAI API ${res.status}${raw ? ': ' + raw.slice(0, 200) : ''}`;
+}
+
+export const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high'] as const;
+
+/** Reasoning models take `reasoning.effort`: the o-series and GPT-5 onwards. */
+export function isReasoning(model: string): boolean {
+	return /^(o\d|gpt-(?:[5-9]|\d{2}))/.test(model);
+}
+
+/** The chat models among a key's models (no embeddings, audio, images, moderation), newest names first. */
+export function chatModels(ids: readonly string[]): string[] {
+	return ids.filter(id => /^(gpt-|o\d|chatgpt-)/.test(id) && !/(embedding|audio|realtime|transcribe|tts|image|moderation|search|instruct)/.test(id)).sort().reverse().slice(0, 40);
 }

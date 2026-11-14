@@ -7,7 +7,7 @@ import * as assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { CodexAgent, ROOM_PREAMBLE, codexLimits, codexPlan, codexUsage, codexWork, describeItem, type CodexAuth } from '../codexAgent';
+import { CodexAgent, ROOM_PREAMBLE, codexLimits, codexModels, codexPlan, codexUsage, codexWork, describeItem, modelOverride, type CodexAuth } from '../codexAgent';
 import type { AgentEvent, Message } from '../rooms';
 
 const FAKE = `#!/usr/bin/env node
@@ -245,4 +245,18 @@ test('work beside the answer: the plan as a task list, sub-agents from collab ca
 	assert.deepEqual(codexWork({ type: 'subAgentActivity', agentThreadId: 'th3', agentPath: 'reviewer', kind: 'started' }, false), [{ type: 'subagent', id: 'th3', name: 'reviewer', status: 'running' }]);
 	assert.deepEqual(codexWork({ type: 'subAgentActivity', agentThreadId: 'th3', kind: 'interrupted' }, true), [{ type: 'finished', id: 'th3', ok: false }]);
 	assert.deepEqual(codexWork({ type: 'commandExecution' }, false), []);
+});
+
+test('models from model/list, and the override a turn sends: chosen, kept, or taken back to the defaults', () => {
+	const models = codexModels({ data: [
+		{ id: 'm1', model: 'gpt-5.5', displayName: 'GPT-5.5', isDefault: true, defaultReasoningEffort: 'medium', supportedReasoningEfforts: [{ reasoningEffort: 'low', description: '' }, { reasoningEffort: 'high', description: '' }] },
+		{ id: 'm2', model: 'gpt-5.5-mini', displayName: 'Mini', supportedReasoningEfforts: [] },
+		{ id: 'm3', model: 'secret', hidden: true },
+	] });
+	assert.deepEqual(models.map(m => [m.id, m.label, m.efforts ?? null]), [['gpt-5.5', 'GPT-5.5', ['low', 'high']], ['gpt-5.5-mini', 'Mini', null]]);
+	assert.deepEqual(modelOverride({ model: 'gpt-5.5-mini' }, undefined, models), { model: 'gpt-5.5-mini' });
+	assert.deepEqual(modelOverride({ effort: 'high' }, undefined, models), { effort: 'high' });
+	// Taken back: Codex would keep the old override, so the defaults go once.
+	assert.deepEqual(modelOverride({}, { model: 'gpt-5.5-mini', effort: 'low' }, models), { model: 'gpt-5.5', effort: 'medium' });
+	assert.deepEqual(modelOverride({}, undefined, models), {});
 });

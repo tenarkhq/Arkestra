@@ -64,6 +64,9 @@ export interface TurnInput {
 	readonly shared?: { readonly text: string; readonly version: string };
 	/** The folder this turn works in, when not the project (a Best-of-N attempt's work tree). Local agents only. */
 	readonly cwd?: string;
+	/** The model and reasoning effort chosen for this agent in this thread (AR38); unset: the agent's own default. */
+	readonly model?: string;
+	readonly effort?: string;
 }
 
 export interface Agent {
@@ -72,6 +75,13 @@ export interface Agent {
 	readonly detail: string;
 	readiness(): Promise<Readiness>;
 	turn(input: TurnInput, onEvent: (event: AgentEvent) => void, signal: AbortSignal): Promise<void>;
+	/** The models and efforts the user can choose from (AR38); an agent without it offers no choice. */
+	choices?(): Promise<AgentChoices>;
+}
+
+/** What an agent can run with: its models, each with the reasoning efforts it knows (none: no effort choice). */
+export interface AgentChoices {
+	readonly models: readonly { readonly id: string; readonly label: string; readonly detail?: string; readonly efforts?: readonly string[]; readonly defaultEffort?: string }[];
 }
 
 export interface ArkestraRoomsApi {
