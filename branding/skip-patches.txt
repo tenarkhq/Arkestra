@@ -1,0 +1,6 @@
+# VSCodium patches Arkestra does not apply, one file name per line.
+# 52/53 delete VS Code's built-in Agent Host: its Claude agent (Claude Agent
+# SDK, runs natively on the user's own Claude login or API key, no GitHub)
+# and its optional Copilot agent. Arkestra keeps both: other agents stay usable.
+52-ext-copilot-remove-it.json
+53-ext-copilot-remove-it.patch

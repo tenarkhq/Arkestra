@@ -126,6 +126,27 @@ VSCodium. Microsoft's own extensions cannot be used in a fork; open
 equivalents or built-in features replace them (for example basedpyright for
 Pylance, clangd for C/C++, Open Remote - SSH for Remote-SSH).
 
+## Building
+
+The base is VSCodium's build scripts, vendored unchanged in
+`vendor/vscodium` (MIT; the pinned upstream commit is in
+`vendor/vscodium/UPSTREAM_COMMIT`). Arkestra adds only its own layer:
+
+- `branding/arkestra.env`: the name, binary and repository the VSCodium
+  scripts build with.
+- `branding/product.json`: Arkestra's product keys (names, data folders, URL
+  protocol, macOS bundle id, Windows app ids), merged over VSCodium's.
+- `branding/skip-patches.txt`: VSCodium patches Arkestra does not apply. It
+  keeps VS Code's built-in Agent Host, with its Claude agent (own Claude login
+  or API key, no GitHub) and its optional Copilot agent.
+- `branding/after-prepare.sh`: replaces the remaining VSCodium names and
+  links, removes VSCodium's update feed, and keeps the built-in AI features on
+  by default.
+
+`scripts/prepare.sh [work-dir]` makes a work copy, fetches the pinned VS Code
+source and applies all of the above. Building from the work copy uses
+VSCodium's `build.sh`; the CI builds for macOS, Windows and Linux come next.
+
 ## Not decided yet
 
 - The app icon.

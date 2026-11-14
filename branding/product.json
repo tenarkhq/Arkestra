@@ -1,0 +1,33 @@
+{
+  "nameShort": "Arkestra",
+  "nameLong": "Arkestra",
+  "applicationName": "arkestra",
+  "dataFolderName": ".arkestra",
+  "linuxIconName": "arkestra",
+  "urlProtocol": "arkestra",
+  "serverApplicationName": "arkestra-server",
+  "serverDataFolderName": ".arkestra-server",
+  "tunnelApplicationName": "arkestra-tunnel",
+  "darwinBundleIdentifier": "dev.tenark.arkestra",
+  "win32AppUserModelId": "Tenark.Arkestra",
+  "win32DirName": "Arkestra",
+  "win32MutexName": "arkestra",
+  "win32NameVersion": "Arkestra",
+  "win32RegValueName": "Arkestra",
+  "win32ShellNameShort": "Arkestra",
+  "win32TunnelServiceMutex": "arkestra-tunnelservice",
+  "win32TunnelMutex": "arkestra-tunnel",
+  "win32AppId": "{{0A89561C-2039-477F-92C8-52C5785A3B4F}",
+  "win32x64AppId": "{{43BF5A77-4FDF-4A83-ACFB-27B8C2E6C92C}",
+  "win32arm64AppId": "{{9D5548DC-9E81-4209-BC93-3F0BE0AAB374}",
+  "win32UserAppId": "{{5899B8EE-2AB7-4969-8C02-DC8DFDE9D317}",
+  "win32x64UserAppId": "{{4867D484-B252-45E0-99C1-F34D7DBF0A6D}",
+  "win32arm64UserAppId": "{{AC2F2E63-EA81-4FEC-95A1-02C8054D6AF2}",
+  "win32ContextMenu": {
+    "x64": { "clsid": "6E14FC2E-EEA4-4C5B-A04B-7A218BEDC0A1" },
+    "arm64": { "clsid": "BA1B3938-B0EA-4A5A-B112-F2005FC67CD8" }
+  },
+  "licenseUrl": "https://github.com/tenarkhq/Arkestra/blob/main/LICENSE",
+  "reportIssueUrl": "https://github.com/tenarkhq/Arkestra/issues/new",
+  "downloadUrl": "https://github.com/tenarkhq/Arkestra/releases"
+}
