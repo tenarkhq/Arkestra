@@ -38,5 +38,11 @@
   "changes.open": "Open change",
   "checkpoints.restore": "Restore this checkpoint",
   "checkpoints.show": "Show what it changed",
-  "checkpoints.refresh": "Refresh"
+  "checkpoints.refresh": "Refresh",
+  "inline.edit": "Edit in place with an agent (⌘K ⌘K)",
+  "inline.accept": "Accept the in-place proposal",
+  "inline.reject": "Reject the in-place proposal",
+  "inline.followUp": "Follow up on the in-place proposal",
+  "inline.diff": "Show the in-place proposal as a diff",
+  "inline.agent": "Choose the agent for in-place edits"
 }

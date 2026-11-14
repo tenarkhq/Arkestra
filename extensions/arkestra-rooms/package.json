@@ -173,6 +173,42 @@
         "title": "%checkpoints.refresh%",
         "category": "Arkestra",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "arkestra.inline.edit",
+        "title": "%inline.edit%",
+        "category": "Arkestra",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "arkestra.inline.accept",
+        "title": "%inline.accept%",
+        "category": "Arkestra",
+        "icon": "$(check)"
+      },
+      {
+        "command": "arkestra.inline.reject",
+        "title": "%inline.reject%",
+        "category": "Arkestra",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "arkestra.inline.followUp",
+        "title": "%inline.followUp%",
+        "category": "Arkestra",
+        "icon": "$(comment)"
+      },
+      {
+        "command": "arkestra.inline.diff",
+        "title": "%inline.diff%",
+        "category": "Arkestra",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "arkestra.inline.agent",
+        "title": "%inline.agent%",
+        "category": "Arkestra",
+        "icon": "$(person)"
       }
     ],
     "chatSessions": [
@@ -387,9 +423,56 @@
         {
           "command": "arkestra.checkpoints.show",
           "when": "false"
+        },
+        {
+          "command": "arkestra.inline.accept",
+          "when": "arkestra.inlineEditPending"
+        },
+        {
+          "command": "arkestra.inline.reject",
+          "when": "arkestra.inlineEditPending"
+        },
+        {
+          "command": "arkestra.inline.followUp",
+          "when": "arkestra.inlineEditPending"
+        },
+        {
+          "command": "arkestra.inline.diff",
+          "when": "arkestra.inlineEditPending"
+        },
+        {
+          "command": "arkestra.inline.edit",
+          "when": "editorIsOpen && !editorReadonly"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "arkestra.inline.edit",
+          "when": "!editorReadonly",
+          "group": "1_arkestra@1"
         }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "arkestra.inline.edit",
+        "key": "ctrl+k ctrl+k",
+        "mac": "cmd+k cmd+k",
+        "when": "editorTextFocus && !editorReadonly && !selectionAnchorSet"
+      },
+      {
+        "command": "arkestra.inline.accept",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && arkestra.inlineEditPending"
+      },
+      {
+        "command": "arkestra.inline.reject",
+        "key": "ctrl+backspace",
+        "mac": "cmd+backspace",
+        "when": "editorTextFocus && arkestra.inlineEditPending"
+      }
+    ]
   },
   "scripts": {
     "compile": "gulp compile-extension:arkestra-rooms",
