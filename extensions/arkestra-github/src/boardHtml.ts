@@ -14,6 +14,7 @@ button.primary { background: var(--vscode-button-background); color: var(--vscod
 button:hover { filter: brightness(1.1); }
 select, input { background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); border-radius: 4px; padding: 2px 6px; }
 a { color: var(--vscode-textLink-foreground); cursor: pointer; text-decoration: none; }
+.pin.on { border-color: var(--vscode-focusBorder); color: var(--vscode-focusBorder); }
 header { position: sticky; top: 0; z-index: 2; background: var(--vscode-editor-background); border-bottom: 1px solid var(--vscode-panel-border); padding: 8px 14px; display: flex; flex-direction: column; gap: 8px; }
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .title { font-weight: 600; font-size: 14px; }
@@ -288,6 +289,8 @@ function headerEl() {
 			h('span', { class: 'spacer' }),
 			h('div', { class: 'tabs' }, ['board', 'table', 'plan', 'graph'].map(t => h('button', { class: ui.tab === t ? 'on' : '', onclick: () => { ui.tab = t; save(); draw(); } }, { board: 'Board', table: 'Table', plan: 'Plan', graph: 'Graph' }[t]))),
 			h('button', { title: 'Read the project again', onclick: () => post({ type: 'refresh' }) }, '↻'),
+			h('button', { class: 'pin' + (model.pinned ? ' on' : ''), title: model.pinned ? 'Unpin this board' : 'Pin this board: its tab stays and it comes first when opening a board', onclick: () => post({ type: 'togglePin' }) }, model.pinned ? 'Pinned' : 'Pin'),
+			h('button', { title: 'Open another project\'s board next to this one', onclick: () => post({ type: 'openBoard' }) }, '+ Board'),
 			h('button', { class: 'primary', onclick: () => { ui.form = !ui.form; draw(); } }, '+ New issue')),
 		ui.form ? newIssueForm() : null,
 		h('div', { class: 'row' }, search, model.filters.map(f => {
@@ -526,6 +529,7 @@ function emptyEl(s) {
 }
 window.addEventListener('message', (e) => {
 	const m = e.data;
+	if ('ref' in m) vscode.setState(Object.assign({}, vscode.getState(), { ref: m.ref })); // the tab reopens on the same project
 	if (m.type === 'model') { model = m.model; screen = null; draw(); }
 	if (m.type === 'screen') { screen = m.screen; draw(); }
 });

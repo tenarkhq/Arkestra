@@ -11,7 +11,7 @@
   "signIn": "Sign in to GitHub for the project sync",
   "setProject": "Follow a GitHub Project in this workspace…",
   "refreshProject": "Read the GitHub Project again",
-  "openBoard": "Open the project views (Board, Table, Plan, Graph)",
+  "openBoard": "Open a board (Board, Table, Plan, Graph): several at once, pinned ones first…",
   "cardFields": "The project fields the board's cards show, by name (for example `Line`, `Executor`, `Review`). Empty: the first four fields besides Status.",
   "laneField": "The project field the Plan view's release lanes come from (for example `Line`). Empty: a field named Line, Release, Milestone or Version.",
   "weightField": "The number field that weights a task in the lanes' progress (for example `Estimate`). Empty: a field named Estimate, Size or Points; without one, every task weighs the same.",

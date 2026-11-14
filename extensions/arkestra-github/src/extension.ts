@@ -12,7 +12,7 @@ import { RelayClient, describe, type RelayEvent, type RelayState } from './relay
 import { graphqlClient } from './graphql';
 import { PROJECT_LIST_QUERY, parseProjectList, parseProjectRef, type FieldInput, type ProjectChoice, type ProjectSnapshot } from './project';
 import { ProjectSync, type JournalEntry, type SyncStatus } from './sync';
-import { ProjectBoard } from './boardView';
+import { ProjectBoards, type BoardLease, type BoardSource } from './boardView';
 import { RemoteControl } from './remoteUi';
 
 const TOKEN = 'arkestra.github.relayToken';
@@ -69,6 +69,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 	let lastEventAt: number | undefined;
 	let client: RelayClient | undefined;
 	let sync: ProjectSync | undefined;
+	/** The projects open on a board besides the workspace's own, by "owner/number" (lower case). */
+	const extra = new Map<string, { sync: ProjectSync; status: SyncStatus; users: number; changed: vscode.EventEmitter<void> }>();
 	let syncStatus: SyncStatus = { kind: 'idle' };
 	let token: string | undefined;
 
@@ -131,6 +133,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 		if (!url || !relayToken) {
 			state = { kind: 'off' };
 			sync?.setRelayState(state);
+			extra.forEach(x => x.sync.setRelayState(state));
 			paint();
 			return;
 		}
@@ -141,6 +144,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 				log.info(`GitHub → ${describe(e)}`);
 				events.fire(e);
 				sync?.handleEvent(e);
+				extra.forEach(x => x.sync.handleEvent(e));
 				paint();
 			},
 			onState: s => {
@@ -151,6 +155,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 					log.info('relay: connected');
 				}
 				sync?.setRelayState(s);
+				extra.forEach(x => x.sync.setRelayState(s));
 				states.fire(s);
 				paint();
 			},
@@ -222,7 +227,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 
 	context.subscriptions.push(
 		events, states, projectChanged, syncChanged, journalAdded, log, item,
-		{ dispose: () => { clearInterval(ticker); clearTimeout(saveTimer); client?.stop(); sync?.dispose(); } },
+		{ dispose: () => { clearInterval(ticker); clearTimeout(saveTimer); client?.stop(); sync?.dispose(); extra.forEach(x => { x.sync.dispose(); x.changed.dispose(); }); } },
 		vscode.commands.registerCommand('arkestra.github.connect', async () => {
 			const config = vscode.workspace.getConfiguration('arkestra.github');
 			const url = (await vscode.window.showInputBox({ title: vscode.l10n.t('GitHub relay'), prompt: vscode.l10n.t('The relay\'s address on the edge server'), value: config.get<string>('relayUrl') ?? '', placeHolder: 'https://edge.example.com/arkestra', ignoreFocusOut: true }))?.trim();
@@ -315,10 +320,14 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 		context.secrets.onDidChange(e => { if (e.key === TOKEN) { void restartRelay(); } }),
 		vscode.authentication.onDidChangeSessions(e => { if (e.provider.id === 'github') { token = undefined; void restartSync(); } }),
 	);
-	// The Board and Table views (AR30) follow the project, the sync state, the journal and the relay.
+	// The Board and Table views (AR30): the workspace's project and any other, several at once.
 	const boardChanged = new vscode.EventEmitter<void>();
-	const board = new ProjectBoard({
-		configured: () => !!parseProjectRef(vscode.workspace.getConfiguration('arkestra.github').get<string>('project') ?? ''),
+	const workspaceRef = () => {
+		const ref = parseProjectRef(vscode.workspace.getConfiguration('arkestra.github').get<string>('project') ?? '');
+		return ref ? `${ref.owner.toLowerCase()}/${ref.number}` : undefined;
+	};
+	const workspaceSource: BoardSource = {
+		configured: () => !!workspaceRef(),
 		signedIn: () => !!token,
 		snapshot: () => sync?.snapshot,
 		status: () => syncStatus,
@@ -330,9 +339,125 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 		addDependency: (blocked, blocking) => need().addDependency(blocked, blocking),
 		removeDependency: (blocked, blocking) => need().removeDependency(blocked, blocking),
 		refresh: async () => { await need().refresh(); },
+	};
+	/** Another project's sync, kept while a board shows it. */
+	const otherProject = (key: string): BoardLease => {
+		let x = extra.get(key);
+		if (!x) {
+			const ref = parseProjectRef(key)!;
+			const changed = new vscode.EventEmitter<void>();
+			const entry = { status: { kind: 'idle' } as SyncStatus, users: 0, changed, sync: undefined as unknown as ProjectSync };
+			const cache = cacheKey(ref.owner, ref.number);
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			entry.sync = new ProjectSync({
+				graphql: graphqlClient(async () => token ??= await githubToken(false)),
+				owner: ref.owner,
+				number: ref.number,
+				initial: context.globalState.get<ProjectSnapshot>(cache),
+				onChange: snap => {
+					changed.fire();
+					clearTimeout(timer);
+					timer = setTimeout(() => void context.globalState.update(cache, snap), 2000);
+				},
+				onStatus: st => {
+					entry.status = st;
+					if (st.kind === 'error') {
+						log.warn(`project ${key}: ${st.message}`);
+					}
+					changed.fire();
+				},
+				onJournal: e => {
+					log.info(`${key} ${e.direction === 'in' ? 'GitHub → here' : 'here → GitHub'} ${e.item ? `${e.item} · ` : ''}${e.text}`);
+					changed.fire();
+				},
+			});
+			entry.sync.setRelayState(state);
+			void entry.sync.refresh().catch(() => { /* shown on the board */ });
+			extra.set(key, entry);
+			x = entry;
+		}
+		const e = x;
+		e.users++;
+		const s = e.sync;
+		const onDidChange = (listener: () => unknown) => vscode.Disposable.from(e.changed.event(listener), states.event(() => listener()));
+		let released = false;
+		return {
+			source: {
+				configured: () => true,
+				signedIn: () => !!token,
+				snapshot: () => s.snapshot,
+				status: () => e.status,
+				live: () => state.kind === 'live',
+				journal: () => s.journal,
+				onDidChange,
+				setField: (itemId, field, value) => s.setField(itemId, field, value),
+				createIssue: (repository, title, body, fields) => s.createIssue(repository, title, body, fields),
+				addDependency: (blocked, blocking) => s.addDependency(blocked, blocking),
+				removeDependency: (blocked, blocking) => s.removeDependency(blocked, blocking),
+				refresh: async () => { await s.refresh(); },
+			},
+			release: () => {
+				if (released) {
+					return;
+				}
+				released = true;
+				if (--e.users === 0) {
+					s.dispose();
+					e.changed.dispose();
+					extra.delete(key);
+				}
+			},
+		};
+	};
+	const PINS = 'arkestra.github.pinnedProjects';
+	const pins = () => context.globalState.get<string[]>(PINS) ?? [];
+	const boards = new ProjectBoards({
+		acquire: ref => !ref || ref === workspaceRef() ? { source: workspaceSource, release: () => undefined } : otherProject(ref),
+		isPinned: ref => pins().includes(ref),
+		setPinned: async (ref, pinned) => { await context.globalState.update(PINS, pinned ? [...new Set([...pins(), ref])] : pins().filter(p => p !== ref)); },
+		pick: async () => {
+			type Pick = vscode.QuickPickItem & { ref?: string; workspace?: true; manual?: true };
+			const own = workspaceRef();
+			let projects: ProjectChoice[] = [];
+			let listError: string | undefined;
+			try {
+				token ??= await githubToken(true);
+				projects = parseProjectList(await graphqlClient(async () => token)(PROJECT_LIST_QUERY, {}));
+			} catch (error) {
+				listError = error instanceof Error ? error.message : String(error);
+			}
+			const keyOf = (p: ProjectChoice) => `${p.owner.toLowerCase()}/${p.number}`;
+			const titleOf = (key: string) => projects.find(p => keyOf(p) === key)?.title ?? key;
+			const pinned = pins().filter(k => k !== own);
+			const items: Pick[] = [
+				...(own ? [{ label: `$(home) ${titleOf(own)}`, description: `${own} · ${vscode.l10n.t('this workspace')}${pins().includes(own) ? ` · ${vscode.l10n.t('pinned')}` : ''}`, workspace: true as const }] : []),
+				...pinned.map(k => ({ label: `$(pinned) ${titleOf(k)}`, description: `${k} · ${vscode.l10n.t('pinned')}`, ref: k })),
+				{ label: '', kind: vscode.QuickPickItemKind.Separator },
+				...projects.filter(p => keyOf(p) !== own && !pinned.includes(keyOf(p))).map(p => ({ label: p.title, description: `${keyOf(p)}${p.closed ? ` · ${vscode.l10n.t('closed')}` : ''}`, ref: keyOf(p) })),
+				{ label: `$(edit) ${vscode.l10n.t('Enter owner/number or a project URL…')}`, ...(listError ? { detail: vscode.l10n.t('The list could not be read: {0}', listError) } : {}), manual: true },
+			];
+			const pick = await vscode.window.showQuickPick(items, { title: vscode.l10n.t('Open a board'), placeHolder: vscode.l10n.t('Pinned boards first; several can be open at once'), matchOnDescription: true });
+			if (!pick) {
+				return undefined;
+			}
+			if (pick.workspace) {
+				return { ref: undefined };
+			}
+			if (pick.ref) {
+				return { ref: pick.ref };
+			}
+			const text = await vscode.window.showInputBox({
+				title: vscode.l10n.t('Open a board'),
+				prompt: vscode.l10n.t('owner/number or the project\'s URL'),
+				placeHolder: 'tenarkhq/3',
+				validateInput: v => parseProjectRef(v) ? undefined : vscode.l10n.t('owner/number, e.g. tenarkhq/3, or https://github.com/orgs/<org>/projects/<n>'),
+			});
+			const ref = text ? parseProjectRef(text) : undefined;
+			return ref ? { ref: `${ref.owner.toLowerCase()}/${ref.number}` } : undefined;
+		},
 	}, context.workspaceState);
 	context.subscriptions.push(
-		boardChanged, board,
+		boardChanged, boards,
 		projectChanged.event(() => boardChanged.fire()),
 		syncChanged.event(() => boardChanged.fire()),
 		journalAdded.event(() => boardChanged.fire()),
