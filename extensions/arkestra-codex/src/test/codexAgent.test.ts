@@ -7,7 +7,7 @@ import * as assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { CodexAgent, ROOM_PREAMBLE, codexLimits, codexUsage, describeItem, type CodexAuth } from '../codexAgent';
+import { CodexAgent, ROOM_PREAMBLE, codexLimits, codexPlan, codexUsage, codexWork, describeItem, type CodexAuth } from '../codexAgent';
 import type { AgentEvent, Message } from '../rooms';
 
 const FAKE = `#!/usr/bin/env node
@@ -233,4 +233,16 @@ test('usage: token reports add only what is new; the context is the last call; q
 		{ label: 'week', usedPercent: 40 },
 	]);
 	assert.deepEqual(codexLimits(null), []);
+});
+
+test('work beside the answer: the plan as a task list, sub-agents from collab calls and activity', () => {
+	assert.deepEqual(codexPlan([{ step: 'Read', status: 'completed' }, { step: 'Write', status: 'inProgress' }, { step: 'Ship', status: 'pending' }, { nope: 1 }]),
+		{ type: 'todos', items: [{ text: 'Read', status: 'completed' }, { text: 'Write', status: 'in_progress' }, { text: 'Ship', status: 'pending' }] });
+	assert.deepEqual(codexWork({ type: 'collabAgentToolCall', tool: 'spawnAgent', model: 'gpt-5.5', prompt: 'Check the tests\nmore', receiverThreadIds: ['th2'], agentsStates: { th2: { status: 'pendingInit' } } }, false),
+		[{ type: 'subagent', id: 'th2', name: 'gpt-5.5', task: 'Check the tests', status: 'running' }]);
+	assert.deepEqual(codexWork({ type: 'collabAgentToolCall', tool: 'wait', receiverThreadIds: ['th2'], agentsStates: { th2: { status: 'completed', message: 'all pass' } } }, true),
+		[{ type: 'finished', id: 'th2', ok: true, text: 'all pass' }]);
+	assert.deepEqual(codexWork({ type: 'subAgentActivity', agentThreadId: 'th3', agentPath: 'reviewer', kind: 'started' }, false), [{ type: 'subagent', id: 'th3', name: 'reviewer', status: 'running' }]);
+	assert.deepEqual(codexWork({ type: 'subAgentActivity', agentThreadId: 'th3', kind: 'interrupted' }, true), [{ type: 'finished', id: 'th3', ok: false }]);
+	assert.deepEqual(codexWork({ type: 'commandExecution' }, false), []);
 });

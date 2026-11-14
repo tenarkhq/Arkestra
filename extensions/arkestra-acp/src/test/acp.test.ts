@@ -8,7 +8,7 @@ import * as assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { AcpAgent, describeToolCall, formatMessages, type AcpOptions } from '../acpAgent';
+import { AcpAgent, acpPlan, describeToolCall, formatMessages, type AcpOptions } from '../acpAgent';
 import { readAgents, registryId, splitCommandLine } from '../config';
 import { Terminals, keepTail, remoteFiles, sliceLines } from '../host';
 import { spawn } from 'node:child_process';
@@ -36,9 +36,12 @@ async function setup(env: Record<string, string> = {}, askPermission: AcpOptions
 	return { agent, dir, file, log };
 }
 
+/** The turn's text and tool events; its work events (waiting, task list) go to `work`. */
+const work: AgentEvent[] = [];
 async function turn(agent: AcpAgent, roomId: string, transcript: Message[], signal = new AbortController().signal, mode?: 'plan') {
 	const events: AgentEvent[] = [];
-	await agent.turn({ roomId, transcript, ...(mode ? { mode } : {}) }, e => events.push(e), signal);
+	work.length = 0;
+	await agent.turn({ roomId, transcript, ...(mode ? { mode } : {}) }, e => (e.kind === 'work' ? work : events).push(e), signal);
 	return events;
 }
 
@@ -54,6 +57,8 @@ test('a turn: chunks become whole messages, files, terminal and permission work,
 			{ kind: 'text', text: 'file=two exit=0 out:v1 permission=yes' },
 		]);
 		assert.deepEqual(asked, ['Fake: Edit state.py [reject_once,allow_once]']);
+		// While the question is open the agent waits for the user; after the answer it does not.
+		assert.deepEqual(work, [{ kind: 'work', work: { type: 'waiting', reason: 'asks: Edit state.py' } }, { kind: 'work', work: { type: 'waiting' } }]);
 		assert.equal(await readFile(`${file}.out/new.txt`, 'utf8'), 'written');
 		const lines = await log();
 		assert.match(lines[0], /^new \//);
@@ -229,4 +234,9 @@ test('permission lists: the question carries the tool call; a denied write or co
 	} finally {
 		agent.dispose();
 	}
+});
+
+test('an ACP plan update is the agent\'s task list', () => {
+	assert.deepEqual(acpPlan([{ content: 'Read', status: 'completed', priority: 'high' }, { content: 'Write', status: 'in_progress' }, { content: 'Ship' }, 7]),
+		{ type: 'todos', items: [{ text: 'Read', status: 'completed' }, { text: 'Write', status: 'in_progress' }, { text: 'Ship', status: 'pending' }] });
 });

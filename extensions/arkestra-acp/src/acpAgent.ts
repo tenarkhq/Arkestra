@@ -6,7 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn as nodeSpawn } from 'node:child_process';
-import type { Agent, AgentEvent, Message, Readiness, TurnInput } from './rooms';
+import type { Agent, AgentEvent, Message, Readiness, TurnInput, WorkUpdate } from './rooms';
 import { AUTH_REQUIRED, JsonRpcPeer, RpcError, type Notification } from './jsonrpc';
 import { Terminals, localFiles, sliceLines, type FileAccess, type SpawnFn } from './host';
 
@@ -101,6 +101,8 @@ export class AcpAgent implements Agent {
 	private readonly terminals: Terminals;
 	/** Abort signals of the running turns per session, for permission prompts. */
 	private readonly running = new Map<string, AbortSignal>();
+	/** Each running turn's event sink: a permission request shows that the agent waits for the user. */
+	private readonly emitters = new Map<string, (event: AgentEvent) => void>();
 	/** Sessions whose running turn is a Plan mode turn: writes, terminals and permissions are refused. */
 	private readonly planning = new Set<string>();
 
@@ -211,6 +213,9 @@ export class AcpAgent implements Agent {
 						onEvent({ kind: 'tool', text: `${describeToolCall(update)} · failed` });
 					}
 					break;
+				case 'plan':
+					onEvent({ kind: 'work', work: acpPlan(update.entries) });
+					break;
 				case 'usage_update': {
 					// ACP session usage: tokens in the context, the window, and the cost so far.
 					const used = typeof update.used === 'number' ? update.used : undefined;
@@ -225,6 +230,7 @@ export class AcpAgent implements Agent {
 		const cancel = () => peer.notify('session/cancel', { sessionId });
 		signal.addEventListener('abort', cancel);
 		this.running.set(sessionId, signal);
+		this.emitters.set(sessionId, onEvent);
 		// Plan mode: the agent's own plan mode when it has one; the client side refuses changes either way.
 		const plan = input.mode === 'plan';
 		const restoreMode = plan && room.modes?.available.includes('plan') && room.modes.current !== 'plan' ? room.modes.current : undefined;
@@ -266,6 +272,7 @@ export class AcpAgent implements Agent {
 			}
 			signal.removeEventListener('abort', cancel);
 			this.running.delete(sessionId);
+			this.emitters.delete(sessionId);
 			subscription.dispose();
 		}
 	}
@@ -353,10 +360,19 @@ export class AcpAgent implements Agent {
 				const reject = options.find(o => o.kind === 'reject_once') ?? options.find(o => o.kind === 'reject_always');
 				return reject ? { outcome: { outcome: 'selected', optionId: reject.optionId } } : { outcome: { outcome: 'cancelled' } };
 			}
-			const chosen = await this.options.askPermission(this.name, describeToolCall(p.toolCall ?? {}), options, signal, p.toolCall ?? {});
+			const emit = this.emitters.get(p.sessionId);
+			emit?.({ kind: 'work', work: { type: 'waiting', reason: `asks: ${describeToolCall(p.toolCall ?? {})}` } });
+			const chosen = await this.options.askPermission(this.name, describeToolCall(p.toolCall ?? {}), options, signal, p.toolCall ?? {})
+				.finally(() => emit?.({ kind: 'work', work: { type: 'waiting' } }));
 			return chosen && !signal.aborted ? { outcome: { outcome: 'selected', optionId: chosen } } : { outcome: { outcome: 'cancelled' } };
 		});
 	}
+}
+
+/** An ACP plan update as the agent's task list. */
+export function acpPlan(entries: unknown): WorkUpdate {
+	const status = (s: unknown) => s === 'completed' || s === 'in_progress' ? s : 'pending';
+	return { type: 'todos', items: (Array.isArray(entries) ? entries : []).filter((e: any) => typeof e?.content === 'string').map((e: any) => ({ text: e.content, status: status(e.status) })) };
 }
 
 const PLAN_REFUSAL = 'Plan mode: nothing may be changed in this turn. Write the plan instead.';

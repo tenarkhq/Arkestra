@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
-import type { Agent, AgentEvent, Usage, Message, Readiness, TurnInput } from './rooms';
+import type { Agent, AgentEvent, Usage, Message, Readiness, TurnInput, WorkUpdate } from './rooms';
 
 export type AuthMode = 'subscription' | 'apiKey';
 
@@ -77,12 +77,25 @@ export function parseLine(line: string): { events: AgentEvent[]; sessionId?: str
 	// The latest model call's input is how full the context is.
 	const u = data.type === 'assistant' ? data.message?.usage : undefined;
 	const contextUsed = u ? (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0) : undefined;
+	// A sub-agent's own messages carry its Task call's id: its task list and tools are not the agent's.
+	const top = !data.parent_tool_use_id;
 	if (data.type === 'assistant' && Array.isArray(data.message?.content)) {
 		for (const block of data.message.content) {
 			if (block?.type === 'text' && typeof block.text === 'string' && block.text) {
 				events.push({ kind: 'text', text: block.text });
 			} else if (block?.type === 'tool_use' && typeof block.name === 'string') {
 				events.push({ kind: 'tool', text: describeTool(block.name, block.input) });
+				const work = top ? workOf(block) : undefined;
+				if (work) {
+					events.push({ kind: 'work', work });
+				}
+			}
+		}
+	}
+	if (top && data.type === 'user' && Array.isArray(data.message?.content)) {
+		for (const block of data.message.content) {
+			if (block?.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+				events.push({ kind: 'work', work: { type: 'finished', id: block.tool_use_id, ok: !block.is_error, ...(resultText(block.content) ? { text: resultText(block.content) } : {}) } });
 			}
 		}
 	}
@@ -112,6 +125,45 @@ export function rateLimit(info: any): { label: string; usedPercent: number; rese
 	const labels: Record<string, string> = { five_hour: '5h', seven_day: 'week', seven_day_opus: 'week · Opus', seven_day_sonnet: 'week · Sonnet' };
 	const resets = typeof info.resetsAt === 'number' ? new Date(info.resetsAt * 1000).toISOString() : undefined;
 	return { label: labels[info.rateLimitType] ?? String(info.rateLimitType ?? 'limit'), usedPercent: Math.round(used <= 1 ? used * 100 : used), ...(resets ? { resetsAt: resets } : {}) };
+}
+
+/** What a tool call means for the Activity view: the task list, a sub-agent, a background command, a chapter. */
+export function workOf(block: { id?: string; name: string; input?: any }): WorkUpdate | undefined {
+	const input = block.input ?? {};
+	const id = typeof block.id === 'string' ? block.id : '';
+	if (block.name === 'TodoWrite' && Array.isArray(input.todos)) {
+		const status = (s: unknown) => s === 'completed' || s === 'in_progress' ? s : 'pending';
+		return { type: 'todos', items: input.todos.filter((t: any) => typeof t?.content === 'string').map((t: any) => ({ text: t.status === 'in_progress' && typeof t.activeForm === 'string' ? t.activeForm : t.content, status: status(t.status) })) };
+	}
+	if ((block.name === 'Task' || block.name === 'Agent') && id) {
+		return { type: 'subagent', id, name: typeof input.subagent_type === 'string' && input.subagent_type ? input.subagent_type : 'sub-agent', ...(typeof input.description === 'string' ? { task: input.description } : {}), status: 'running' };
+	}
+	if (block.name === 'Bash' && input.run_in_background && id && typeof input.command === 'string') {
+		return { type: 'background', id, command: input.command, status: 'running' };
+	}
+	if ((block.name === 'BashOutput' || block.name === 'TaskOutput') && id) {
+		const target = input.bash_id ?? input.shell_id ?? input.task_id;
+		return typeof target === 'string' ? { type: 'poll', id, target } : undefined;
+	}
+	if ((block.name === 'KillShell' || block.name === 'KillBash' || block.name === 'TaskStop') && id) {
+		const target = input.shell_id ?? input.bash_id ?? input.task_id;
+		return typeof target === 'string' ? { type: 'poll', id, target, kill: true } : undefined;
+	}
+	if (/mark_chapter$/.test(block.name) && typeof input.title === 'string') {
+		return { type: 'chapter', title: input.title, ...(typeof input.summary === 'string' ? { summary: input.summary } : {}) };
+	}
+	return undefined;
+}
+
+function resultText(content: unknown): string | undefined {
+	if (typeof content === 'string') {
+		return content;
+	}
+	if (Array.isArray(content)) {
+		const text = content.map((c: any) => typeof c?.text === 'string' ? c.text : '').join('\n').trim();
+		return text || undefined;
+	}
+	return undefined;
 }
 
 function describeTool(name: string, input: any): string {
