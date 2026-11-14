@@ -109,7 +109,8 @@
         {
           "id": "arkestra.machines",
           "name": "%machines.view%",
-          "icon": "$(remote)"
+          "icon": "$(remote)",
+          "visibility": "hidden"
         }
       ]
     },
