@@ -1,0 +1,10 @@
+{
+	"version": "1.0.0",
+	"contents": {
+		"package": {
+			"displayName": "Powershell nyelvi alapok",
+			"description": "Kódtöredékeket és szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket és a kódrészek bezárását a Powershell-fájlokban."
+		},
+		"bundle": {}
+	}
+}

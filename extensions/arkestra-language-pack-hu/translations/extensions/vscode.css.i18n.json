@@ -1,0 +1,10 @@
+{
+	"version": "1.0.0",
+	"contents": {
+		"package": {
+			"displayName": "CSS nyelvi alapok",
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a CSS-, LESS- és SCSS-fájlokban."
+		},
+		"bundle": {}
+	}
+}

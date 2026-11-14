@@ -1,0 +1,10 @@
+{
+	"version": "1.0.0",
+	"contents": {
+		"package": {
+			"displayName": "Tomorrow Night Blue téma",
+			"description": "Tomorrow Night Blue téma a Visual Studio Code-hoz"
+		},
+		"bundle": {}
+	}
+}

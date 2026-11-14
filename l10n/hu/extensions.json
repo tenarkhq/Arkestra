@@ -1,0 +1,1059 @@
+{
+	"vscode.arkestra-claude": {
+		"bundle": {
+			"Anthropic API key for Claude": "Anthropic API-kulcs a Claude-hoz",
+			"Claude Code CLI not found": "A Claude Code CLI nem található",
+			"Claude Code is not signed in": "A Claude Code nincs bejelentkezve",
+			"Claude sign-in": "Claude-bejelentkezés",
+			"Installation guide": "Telepítési útmutató",
+			"Sign in": "Bejelentkezés",
+			"Use an API key": "API-kulcs használata"
+		},
+		"package": {
+			"auth": "Hogyan jelentkezik be a Claude.",
+			"auth.apiKey": "Mindig a tárolt API-kulcs.",
+			"auth.auto": "A tárolt API-kulcs, ha van; különben a Claude Code bejelentkezés (előfizetés).",
+			"auth.subscription": "Mindig a Claude Code bejelentkezés (előfizetés).",
+			"clearApiKey": "Claude API-kulcs eltávolítása",
+			"command": "A Claude Code CLI parancsa.",
+			"description": "Claude az Arkestra szobáiban a saját Claude Code CLI-n keresztül, előfizetéssel vagy API-kulccsal.",
+			"displayName": "Arkestra · Claude",
+			"model": "A Claude válaszainak modellje, például opus vagy sonnet. Üresen: a CLI alapértelmezése.",
+			"permissionMode": "A Claude Code engedélyezési módja a szobában futó válaszokhoz.",
+			"setApiKey": "Claude API-kulcs megadása"
+		}
+	},
+	"vscode.arkestra-codex": {
+		"bundle": {
+			"Codex CLI not found": "A Codex CLI nem található",
+			"Codex is not signed in": "A Codex nincs bejelentkezve",
+			"Codex sign-in": "Codex-bejelentkezés",
+			"Installation guide": "Telepítési útmutató",
+			"No Codex API key stored": "Nincs tárolt Codex API-kulcs",
+			"OpenAI API key for Codex": "OpenAI API-kulcs a Codexhez",
+			"Sign in": "Bejelentkezés",
+			"Use an API key": "API-kulcs használata"
+		},
+		"package": {
+			"auth": "Hogyan jelentkezik be a Codex.",
+			"auth.apiKey": "Mindig a tárolt API-kulcs. A saját Codex-bejelentkezésétől külön marad.",
+			"auth.auto": "A tárolt API-kulcs, ha van; különben a Codex CLI ChatGPT-bejelentkezése (előfizetés).",
+			"auth.subscription": "Mindig a Codex CLI ChatGPT-bejelentkezése (előfizetés).",
+			"clearApiKey": "Codex API-kulcs eltávolítása",
+			"command": "A Codex CLI parancsa.",
+			"description": "Codex az Arkestra szobáiban a saját Codex CLI-n keresztül, ChatGPT-bejelentkezéssel vagy API-kulccsal.",
+			"displayName": "Arkestra · Codex",
+			"model": "A Codex válaszainak modellje. Üresen: a CLI alapértelmezése.",
+			"sandbox": "Mihez nyúlhatnak a Codex parancsai a szobában futó válaszok közben.",
+			"sandbox.full": "Nincs homokozó.",
+			"sandbox.readOnly": "Csak fájlok olvasása.",
+			"sandbox.workspaceWrite": "Bármi olvasható, írni csak a munkaterületen belül lehet.",
+			"setApiKey": "Codex API-kulcs megadása"
+		}
+	},
+	"vscode.arkestra-connections": {
+		"bundle": {
+			"Access": "Elérés",
+			"Another host (user@host)…": "Másik gép (felhasználó@gép)…",
+			"CLIs": "CLI-k",
+			"Check": "Ellenőrzés",
+			"Connections": "Kapcsolatok",
+			"Host from ~/.ssh/config": "Gép a ~/.ssh/config fájlból",
+			"Machine": "Gép",
+			"Name shown next to its agents": "Az ügynökei mellett megjelenő név",
+			"New SSH connection": "Új SSH-kapcsolat",
+			"Project folder on the machine (empty: home folder)": "Projektmappa a gépen (üresen: a saját mappa)",
+			"Remove": "Eltávolítás",
+			"Remove the connection {0}? Its agents leave the invite list.": "Eltávolítja a(z) {0} kapcsolatot? Az ügynökei kikerülnek a meghívható ügynökök közül.",
+			"SSH destination, for example dev@server.example.com": "SSH-cél, például dev@server.example.com",
+			"Status": "Állapot",
+			"This machine": "Ez a gép",
+			"Where agents run: this machine or over SSH. Each machine shows the agent CLIs it has.": "Hol futnak az ügynökök: ezen a gépen vagy SSH-n. Minden gépnél látszik, milyen ügynök-CLI-k vannak rajta.",
+			"checking…": "ellenőrzés…",
+			"local": "helyi",
+			"no agent CLI found": "nem található ügynök-CLI",
+			"reachable": "elérhető",
+			"unreachable": "nem érhető el"
+		},
+		"package": {
+			"add": "Új SSH-kapcsolat",
+			"description": "Hol futnak az ügynökök: ezen a gépen vagy más gépeken SSH-n.",
+			"displayName": "Arkestra · Kapcsolatok",
+			"machine.folder": "Projektmappa a gépen; a ~/… a távoli saját mappa. Üresen: a saját mappa.",
+			"machine.host": "SSH-cél: egy álnév a ~/.ssh/config fájlból vagy felhasználó@gép.",
+			"machine.id": "Állandó azonosító: betűk, számjegyek és kötőjelek.",
+			"machine.name": "A gép ügynökei mellett megjelenő név.",
+			"machine.port": "SSH-port, ha nem az alapértelmezett vagy a ~/.ssh/config szerinti.",
+			"machines": "Gépek, amelyeken az ügynökök SSH-n futhatnak. A kulcsok az SSH-ügynöktől és a ~/.ssh/config fájlból jönnek; jelszót nem kér.",
+			"show": "Kapcsolatok",
+			"sshCommand": "Az OpenSSH-kliens parancsa."
+		}
+	},
+	"vscode.arkestra-openai": {
+		"bundle": {
+			"Change model": "Modell módosítása",
+			"Model {0} is not available to this key": "A(z) {0} modell nem érhető el ezzel a kulccsal",
+			"No OpenAI API key stored": "Nincs tárolt OpenAI API-kulcs",
+			"OpenAI API key for GPT": "OpenAI API-kulcs a GPT-hez",
+			"OpenAI API key rejected": "Az OpenAI elutasította az API-kulcsot",
+			"Set API key": "API-kulcs megadása",
+			"Usage and billing": "Használat és számlázás"
+		},
+		"package": {
+			"baseUrl": "Az OpenAI API alap-URL-je. Csak kompatibilis végponthoz változtassa meg.",
+			"clearApiKey": "OpenAI API-kulcs eltávolítása",
+			"description": "GPT az Arkestra szobáiban az OpenAI API-n keresztül, a saját API-kulccsal.",
+			"displayName": "Arkestra · OpenAI",
+			"model": "A GPT válaszainak OpenAI-modellje.",
+			"reasoningEffort": "Gondolkodási erőfeszítés a gondolkodó modellekhez. Alapértelmezés: a modell sajátja.",
+			"setApiKey": "OpenAI API-kulcs megadása"
+		}
+	},
+	"vscode.arkestra-rooms": {
+		"bundle": {
+			"Agents": "Ügynökök",
+			"Agents · {0}": "Ügynökök · {0}",
+			"Category of “{0}”": "„{0}” kategóriája",
+			"Free lane": "Szabad sáv",
+			"In this room: {0}": "Ebben a szobában: {0}",
+			"Invite an agent": "Ügynök meghívása",
+			"Invite an agent into “{0}”": "Ügynök meghívása ide: „{0}”",
+			"It receives the thread from the beginning": "Az elejétől megkapja a szálat",
+			"Lane": "Sáv",
+			"Name of the new room": "Az új szoba neve",
+			"New category": "Új kategória",
+			"New category…": "Új kategória…",
+			"New room: **{0}**. Invite agents with /invite.": "Új szoba: **{0}**. Ügynököket a /invite paranccsal hívhat meg.",
+			"No agent in this lane yet.": "Ebben a sávban még nincs ügynök.",
+			"No agent named \"{0}\".": "Nincs „{0}” nevű ügynök.",
+			"No category": "Nincs kategória",
+			"No other agent is known yet.": "Még nincs más ismert ügynök.",
+			"No project": "Nincs projekt",
+			"No room yet. Start one in the chat with @room.": "Még nincs szoba. Indítson egyet a csevegésben a @room megszólítással.",
+			"Nobody in this room yet.": "Ebben a szobában még nincs senki.",
+			"Nothing written in this thread yet.": "Ebben a szálban még nem írt semmit.",
+			"Open": "Megnyitás",
+			"Open a room": "Szoba megnyitása",
+			"Rename thread": "Szál átnevezése",
+			"Room": "Szoba",
+			"Start a room in the chat with @room first.": "Előbb indítson egy szobát a csevegésben a @room megszólítással.",
+			"There is no agent in this room yet. Invite one with /invite.": "Ebben a szobában még nincs ügynök. A /invite paranccsal hívhat meg egyet.",
+			"Threads · {0}": "Szálak · {0}",
+			"idle": "tétlen",
+			"idle · last: {0}": "tétlen · utoljára: {0}",
+			"nobody yet": "még senki",
+			"not available now": "most nem érhető el",
+			"not ready": "nem kész",
+			"ready": "kész",
+			"waiting for its turn": "a sorára vár",
+			"working": "dolgozik",
+			"working · {0}": "dolgozik · {0}",
+			"{0} agents": "{0} ügynök",
+			"{0} cannot join now: {1}": "{0} most nem tud csatlakozni: {1}",
+			"{0} joined and received the thread from the beginning.": "{0} csatlakozott, és az elejétől megkapta a szálat."
+		},
+		"package": {
+			"command.agents": "A szoba ügynökei és akik csatlakozhatnak",
+			"command.invite": "Ügynök meghívása ebbe a szálba",
+			"command.new": "Új szoba",
+			"command.newThread": "Új szál",
+			"command.open": "Szoba megnyitása",
+			"command.openThread": "Szál megnyitása",
+			"command.pin": "Szál kitűzése",
+			"command.rename": "Szál átnevezése…",
+			"command.setCategory": "Kategória beállítása…",
+			"command.unpin": "Kitűzés megszüntetése",
+			"description": "Egy szál, amelyen bármennyi ügynök osztozik, és amelyhez bármikor csatlakozhatnak.",
+			"displayName": "Arkestra · Szobák",
+			"room.description": "A szoba minden ügynöke sorban válaszol, a teljes szál ismeretében",
+			"room.fullName": "Arkestra-szoba",
+			"session.description": "Szál, amelyen bármennyi ügynök osztozik",
+			"session.displayName": "Arkestra-szál",
+			"session.inputPlaceholder": "Üzenet a szál ügynökeinek",
+			"session.welcomeMessage": "A szál minden ügynöke sorban válaszol, és látja a teljes szálat. Továbbiakat a /invite paranccsal hívhat meg.",
+			"session.welcomeTitle": "Új szál",
+			"showAgents": "A szoba ügynökeinek megjelenítése",
+			"showLane": "Ügynök sávjának megjelenítése",
+			"threads.container": "Szálak",
+			"threads.empty": "Még nincs szál.\n[Új szál](command:arkestra.rooms.newThread)",
+			"threads.view": "Szálak"
+		}
+	},
+	"vscode.arkestra-themes": {
+		"bundle": {},
+		"package": {
+			"description": "Az Arkestra sötét és világos témája: hűvös semleges tónusok korall, menta, borostyán és ibolya kiemelésekkel.",
+			"displayName": "Arkestra-témák",
+			"themeDark": "Arkestra sötét",
+			"themeLight": "Arkestra világos"
+		}
+	},
+	"vscode.arkestra-workspace": {
+		"bundle": {
+			"Delete a saved layout": "Mentett elrendezés törlése",
+			"Layout": "Elrendezés",
+			"Layout “{0}” saved.": "A(z) „{0}” elrendezés elmentve.",
+			"Layout: click to switch": "Elrendezés: kattintson a váltáshoz",
+			"Mozaik": "Mozaik",
+			"Name of this layout": "Az elrendezés neve",
+			"One lane per agent on top; the room, the code and a terminal below": "Felül ügynökönként egy sáv, alul a szoba, a kód és egy terminál",
+			"Pult · per agent": "Pult · ügynökönként",
+			"Save layout": "Elrendezés mentése",
+			"Saved": "Mentett",
+			"The room beside the agents, the code and a terminal": "A szoba az ügynökök, a kód és egy terminál mellett",
+			"current": "jelenlegi",
+			"{0} tiles": "{0} csempe"
+		},
+		"package": {
+			"config.defaultLayout": "Az első indításkor megnyíló elrendezés. Az állapotsorról bármikor válthat.",
+			"config.mozaik": "Mozaik: a szoba az ügynökök, a kód és egy terminál mellett.",
+			"config.pult": "Pult: felül ügynökönként egy sáv, alul a szoba, a kód és egy terminál.",
+			"config.title": "Arkestra-elrendezés",
+			"deleteLayout": "Mentett elrendezés törlése…",
+			"description": "Mozaik és Pult: a szoba, az ügynökök, a kód és a terminálok csempékként, amelyeket húzhat, feloszthat és elrendezésként menthet.",
+			"displayName": "Arkestra · Munkaterület",
+			"layout": "Elrendezés váltása…",
+			"mosaic": "Mozaik elrendezés",
+			"pult": "Pult elrendezés (ügynökönként egy sáv)",
+			"saveLayout": "Elrendezés mentése…"
+		}
+	},
+	"vscode.bat": {
+		"bundle": {},
+		"package": {
+			"description": "Kódtöredékeket és szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket és a kódrészek bezárását a Windows kötegfájlokban (batch).",
+			"displayName": "Windows kötegfájl (batch) nyelvi alapok"
+		}
+	},
+	"vscode.clojure": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a Clojure-fájlokban.",
+			"displayName": "Clojure nyelvi alapok"
+		}
+	},
+	"vscode.coffeescript": {
+		"bundle": {},
+		"package": {
+			"description": "Kódtöredékeket és szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket és a kódrészek bezárását a CoffeeScript-fájlokban.",
+			"displayName": "CoffeeScript nyelvi alapok"
+		}
+	},
+	"vscode.configuration-editing": {
+		"bundle": {},
+		"package": {
+			"description": "Funkciók (fejlett IntelliSense, automatikus javítás) konfigurációt tartalmazó fájlokhoz, például a beállításokhoz, az indítási konfigurációkhoz és a kiegészítőjavaslatokat tartalmazó fájlokhoz.",
+			"displayName": "Konfigurációszerkesztő"
+		}
+	},
+	"vscode.cpp": {
+		"bundle": {},
+		"package": {
+			"description": "Kódtöredékeket és szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket és a kódrészek bezárását a C/C++-fájlokban.",
+			"displayName": "C/C++ nyelvi alapok"
+		}
+	},
+	"vscode.csharp": {
+		"bundle": {},
+		"package": {
+			"description": "Kódtöredékeket és szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket és a kódrészek bezárását a C#-fájlokban.",
+			"displayName": "C# nyelvi alapok"
+		}
+	},
+	"vscode.css": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a CSS-, LESS- és SCSS-fájlokban.",
+			"displayName": "CSS nyelvi alapok"
+		}
+	},
+	"vscode.css-language-features": {
+		"bundle": {},
+		"package": {
+			"css.colorDecorators.enable.deprecationMessage": "Az `css.colorDecorators.enable` beállítás elavult az `editor.colorDecorators` bevezetése miatt.",
+			"css.completion.completePropertyWithSemicolon.desc": "Insert semicolon at end of line when completing CSS properties",
+			"css.completion.triggerPropertyValueCompletion.desc": "By default, VS Code triggers property value completion after selecting a CSS property. Use this setting to disable this behavior.",
+			"css.customData.desc": "A list of relative file paths pointing to JSON files following the [custom data format](https://github.com/Microsoft/vscode-css-languageservice/blob/master/docs/customData.md).\n\nVS Code loads custom data on startup to enhance its CSS support for the custom CSS properties, at directives, pseudo classes and pseudo elements you specify in the JSON files.\n\nThe file paths are relative to workspace and only workspace folder settings are considered.",
+			"css.lint.argumentsInColorFunction.desc": "Érvénytelen számú paraméter.",
+			"css.lint.boxModel.desc": "Ne használja a `width` és `height` tulajdonságokat a `padding` vagy `border` tulajdonságok használata esetén!",
+			"css.lint.compatibleVendorPrefixes.desc": "Gyártóspecifikus előtag használata esetén sorolja fel a többi gyártóspecifikus tulajdonságot is!",
+			"css.lint.duplicateProperties.desc": "Duplikált stílusdefiníciók kerülése.",
+			"css.lint.emptyRules.desc": "Üres szabálykészletek kerülése.",
+			"css.lint.float.desc": "Kerülje a `float` használatát! A floatok olyan CSS-t eredményeznek, ami könnyen elromlik, ha az elrendezés valamely aspektusa változik.",
+			"css.lint.fontFaceProperties.desc": "A `@font-face`-szabályokban az `src` és a `font-family` tulajdonságot is definiálni kell.",
+			"css.lint.hexColorLength.desc": "A hexadecimális formában megadott színeknek három vagy hat hexadecimális számjegyből kell állniuk.",
+			"css.lint.idSelector.desc": "A szelektorok nem tartalmazhatnak azonosítókat, mivel az ilyen szabályok túl szorosan kötődnek a HTML-hez.",
+			"css.lint.ieHack.desc": "Az IE-hackek csak akkor szükségesek, ha szükséges az IE7 vagy korábbi böngészők támogatása",
+			"css.lint.importStatement.desc": "Az importálási utasítások nem párhuzamosan töltenek be.",
+			"css.lint.important.desc": "Kerülje az `!important` használatát! Azt jelzi, hogy a CSS struktúrája átláthatatlanná vált, és refaktorálásra szorul.",
+			"css.lint.propertyIgnoredDueToDisplay.desc": "A tulajdonság figyelmen kívül van hagyva a display miatt. Pl. `display:inline` esetén a `width`, a `height`, a `margin-top`, a `margin-bottom` és a `float` tulajdonságoknak nincs hatása.",
+			"css.lint.universalSelector.desc": "Az univerzális szelektor (`*`) lassú működést eredményez.",
+			"css.lint.unknownAtRules.desc": "Ismeretlen @-szabály",
+			"css.lint.unknownProperties.desc": "Ismeretlen tulajdonság.",
+			"css.lint.unknownVendorSpecificProperties.desc": "Ismeretlen gyártóspecifikus tulajdonság.",
+			"css.lint.validProperties.desc": "Tulajdonságok listája, amelyek nincsenek validálva az `unknownProperties` szabály alapján.",
+			"css.lint.vendorPrefix.desc": "Gyártóspecifikus előtag használata esetén adja meg a szabványos tulajdonság értékét is!",
+			"css.lint.zeroUnits.desc": "Nullához nem kell megadni mértékegységet.",
+			"css.trace.server.desc": "A VS Code és a CSS nyelvi szerver közötti kommunikáció naplózása.",
+			"css.validate.desc": "Összes validálás engedélyezése vagy letiltása.",
+			"css.validate.title": "Meghatározza a CSS-validáció működését és a problémák súlyosságát.",
+			"description": "Széleskörű nyelvi támogatás CSS-, LESS- és SCSS-fájlokhoz.",
+			"displayName": "CSS nyelvi funkciók",
+			"less.colorDecorators.enable.deprecationMessage": "A `less.colorDecorators.enable` beállítás elavult az `editor.colorDecorators` bevezetése miatt.",
+			"less.completion.completePropertyWithSemicolon.desc": "Insert semicolon at end of line when completing CSS properties",
+			"less.completion.triggerPropertyValueCompletion.desc": "By default, VS Code triggers property value completion after selecting a CSS property. Use this setting to disable this behavior.",
+			"less.lint.argumentsInColorFunction.desc": "Érvénytelen számú paraméter.",
+			"less.lint.boxModel.desc": "Ne használja a `width` és `height` tulajdonságokat a `padding` vagy `border` tulajdonságok használata esetén!",
+			"less.lint.compatibleVendorPrefixes.desc": "Gyártóspecifikus előtag használata esetén sorolja fel a többi gyártóspecifikus tulajdonságot is!",
+			"less.lint.duplicateProperties.desc": "Duplikált stílusdefiníciók kerülése.",
+			"less.lint.emptyRules.desc": "Üres szabálykészletek kerülése.",
+			"less.lint.float.desc": "Kerülje a `float` használatát! A floatok olyan CSS-t eredményeznek, ami könnyen elromlik, ha az elrendezés valamely aspektusa változik.",
+			"less.lint.fontFaceProperties.desc": "A `@font-face`-szabályokban az `src` és a `font-family` tulajdonságot is definiálni kell.",
+			"less.lint.hexColorLength.desc": "A hexadecimális formában megadott színeknek három vagy hat hexadecimális számjegyből kell állniuk.",
+			"less.lint.idSelector.desc": "A szelektorok nem tartalmazhatnak azonosítókat, mivel az ilyen szabályok túl szorosan kötődnek a HTML-hez.",
+			"less.lint.ieHack.desc": "Az IE-hackek csak akkor szükségesek, ha szükséges az IE7 vagy korábbi böngészők támogatása",
+			"less.lint.importStatement.desc": "Az importálási utasítások nem párhuzamosan töltenek be.",
+			"less.lint.important.desc": "Kerülje az `!important` használatát! Azt jelzi, hogy a CSS struktúrája átláthatatlanná vált, és refaktorálásra szorul.",
+			"less.lint.propertyIgnoredDueToDisplay.desc": "A tulajdonság figyelmen kívül van hagyva a display miatt. Pl. `display:inline` esetén a `width`, a `height`, a `margin-top`, a `margin-bottom` és a `float` tulajdonságoknak nincs hatása.",
+			"less.lint.universalSelector.desc": "Az univerzális szelektor (`*`) lassú működést eredményez.",
+			"less.lint.unknownAtRules.desc": "Ismeretlen @-szabály",
+			"less.lint.unknownProperties.desc": "Ismeretlen tulajdonság.",
+			"less.lint.unknownVendorSpecificProperties.desc": "Ismeretlen gyártóspecifikus tulajdonság.",
+			"less.lint.validProperties.desc": "Tulajdonságok listája, amelyek nincsenek validálva az `unknownProperties` szabály alapján.",
+			"less.lint.vendorPrefix.desc": "Gyártóspecifikus előtag használata esetén adja meg a szabványos tulajdonság értékét is!",
+			"less.lint.zeroUnits.desc": "Nullához nem kell megadni mértékegységet.",
+			"less.validate.desc": "Összes validálás engedélyezése vagy letiltása.",
+			"less.validate.title": "Meghatározza a LESS-validáció működését és a problémák súlyosságát.",
+			"scss.colorDecorators.enable.deprecationMessage": "Az `scss.colorDecorators.enable` beállítás elavult az `editor.colorDecorators` bevezetése miatt.",
+			"scss.completion.completePropertyWithSemicolon.desc": "Insert semicolon at end of line when completing CSS properties",
+			"scss.completion.triggerPropertyValueCompletion.desc": "By default, VS Code triggers property value completion after selecting a CSS property. Use this setting to disable this behavior.",
+			"scss.lint.argumentsInColorFunction.desc": "Érvénytelen számú paraméter.",
+			"scss.lint.boxModel.desc": "Ne használja a `width` és `height` tulajdonságokat a `padding` vagy `border` tulajdonságok használata esetén!",
+			"scss.lint.compatibleVendorPrefixes.desc": "Gyártóspecifikus előtag használata esetén sorolja fel a többi gyártóspecifikus tulajdonságot is!",
+			"scss.lint.duplicateProperties.desc": "Duplikált stílusdefiníciók kerülése.",
+			"scss.lint.emptyRules.desc": "Üres szabálykészletek kerülése.",
+			"scss.lint.float.desc": "Kerülje a `float` használatát! A floatok olyan CSS-t eredményeznek, ami könnyen elromlik, ha az elrendezés valamely aspektusa változik.",
+			"scss.lint.fontFaceProperties.desc": "A `@font-face`-szabályokban az `src` és a `font-family` tulajdonságot is definiálni kell.",
+			"scss.lint.hexColorLength.desc": "A hexadecimális formában megadott színeknek három vagy hat hexadecimális számjegyből kell állniuk.",
+			"scss.lint.idSelector.desc": "A szelektorok nem tartalmazhatnak azonosítókat, mivel az ilyen szabályok túl szorosan kötődnek a HTML-hez.",
+			"scss.lint.ieHack.desc": "Az IE-hackek csak akkor szükségesek, ha szükséges az IE7 vagy korábbi böngészők támogatása",
+			"scss.lint.importStatement.desc": "Az importálási utasítások nem párhuzamosan töltenek be.",
+			"scss.lint.important.desc": "Kerülje az `!important` használatát! Azt jelzi, hogy a CSS struktúrája átláthatatlanná vált, és refaktorálásra szorul.",
+			"scss.lint.propertyIgnoredDueToDisplay.desc": "A tulajdonság figyelmen kívül van hagyva a display miatt. Pl. `display:inline` esetén a `width`, a `height`, a `margin-top`, a `margin-bottom` és a `float` tulajdonságoknak nincs hatása.",
+			"scss.lint.universalSelector.desc": "Az univerzális szelektor (`*`) lassú működést eredményez.",
+			"scss.lint.unknownAtRules.desc": "Ismeretlen @-szabály",
+			"scss.lint.unknownProperties.desc": "Ismeretlen tulajdonság.",
+			"scss.lint.unknownVendorSpecificProperties.desc": "Ismeretlen gyártóspecifikus tulajdonság.",
+			"scss.lint.validProperties.desc": "Tulajdonságok listája, amelyek nincsenek validálva az `unknownProperties` szabály alapján.",
+			"scss.lint.vendorPrefix.desc": "Gyártóspecifikus előtag használata esetén adja meg a szabványos tulajdonság értékét is!",
+			"scss.lint.zeroUnits.desc": "Nullához nem kell megadni mértékegységet.",
+			"scss.validate.desc": "Összes validálás engedélyezése vagy letiltása.",
+			"scss.validate.title": "Meghatározza az SCSS-validáció működését és a problémák súlyosságát."
+		}
+	},
+	"vscode.debug-auto-launch": {
+		"bundle": {},
+		"package": {
+			"description": "Segédcsomag, ami elvégzi a folyamatok automatikus csatolását, ha a node-hibakereső bővítmények nem aktívak.",
+			"displayName": "Node hibakeresés automatikus csatolása",
+			"toggle.auto.attach": "Automatikus csatlakozás be- és kikapcsolása"
+		}
+	},
+	"vscode.debug-server-ready": {
+		"bundle": {},
+		"package": {}
+	},
+	"vscode.docker": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a Docker-fájlokban.",
+			"displayName": "Docker nyelvi alapok"
+		}
+	},
+	"vscode.emmet": {
+		"bundle": {},
+		"package": {
+			"command.balanceIn": "Egyensúlyozás (belefé)",
+			"command.balanceOut": "Egyensúlyozás (kifelé)",
+			"command.decrementNumberByOne": "Csökkentés 1-gyel",
+			"command.decrementNumberByOneTenth": "Csökkentés 0,1-gyel",
+			"command.decrementNumberByTen": "Csökkentés 10-zel",
+			"command.evaluateMathExpression": "Matematikai kifejezés kiértékelése",
+			"command.incrementNumberByOne": "Növelés 1-gyel",
+			"command.incrementNumberByOneTenth": "Növelés 0,1-gyel",
+			"command.incrementNumberByTen": "Növelés 10-zel",
+			"command.matchTag": "Ugrás az illeszkedő párra",
+			"command.mergeLines": "Sorok összeolvasztása",
+			"command.nextEditPoint": "Ugrás a következő szerkesztési pontra",
+			"command.prevEditPoint": "Ugrás az előző szerkesztési pontra",
+			"command.reflectCSSValue": "CSS-érték tükrözése",
+			"command.removeTag": "Elem eltávolítása",
+			"command.selectNextItem": "Következő elem kiválasztása",
+			"command.selectPrevItem": "Előző elem kiválasztása",
+			"command.splitJoinTag": "Elem szétbontása/összeolvasztása",
+			"command.toggleComment": "Megjegyzés ki-/bekapcsolása",
+			"command.updateTag": "Elem módosítása",
+			"command.wrapWithAbbreviation": "Becsomagolás rövidítéssel",
+			"description": "Emmet-támogatás a VS Code-hoz",
+			"emmetExclude": "Azon nyelvek listája, ahol az Emmet-rövidítések ne legyenek kibontva.",
+			"emmetExtensionsPath": "Egy Emmet-profilokat és -kódtöredékeket tartalmazó mappa elérési útja.",
+			"emmetIncludeLanguages": "Emmet-rövidítések engedélyezése olyan nyelvek esetében, amelyek alapértelmezés szerint nem támogatottak. Egy megfeleltetést kell felvenni a nyelv és egy Emmet által támogatott nyelv között.\nPl.: `{\"vue-html\": \"html\", \"javascript\": \"javascriptreact\"}`",
+			"emmetOptimizeStylesheetParsing": "Ha az értéke `false`, az egész fájl fel lesz dolgozva annak meghatározásához, hogy az aktuális pozíció ércényes-e Emmet-rövidítések kibontásához. Ha az értéke `true`, csak az aktuális pozíció körüli tartalom lesz feldolgozva a CSS/SCSS/LESS-fájlokban.",
+			"emmetPreferences": "Beállítások, melyek módosítják az Emmet műveleteinek és feloldó algoritmusainak viselkedését.",
+			"emmetPreferencesAllowCompactBoolean": "Ha az értéke true, a logikai értékeket tartalmazó attribútumok esetén a rövidített jelölés lesz használva",
+			"emmetPreferencesBemElementSeparator": "Elemelválasztó osztályok megadásánál BEM-szűrő használata esetén",
+			"emmetPreferencesBemModifierSeparator": "Módosító elválasztó osztályok megadásánál BEM-szűrő használata esetén",
+			"emmetPreferencesCssAfter": "A CSS-tulajdonság végére helyezett szimbólum CSS-rövidítések kibontásánál",
+			"emmetPreferencesCssBetween": "A CSS-tulajdonság és az érték közé helyezett szimbólum CSS-rövidítések kibontásánál",
+			"emmetPreferencesCssFuzzySearchMinScore": "A minimális pontszám (0-tól 1-ig), amit egy fuzzy keresési találatnak el kell érnie. Az alacsonyabb értékek álpozitív találatokat eredményezhetnek, míg a magasabb értékek szűkítik a lehetséges találatok számát.",
+			"emmetPreferencesCssMozProperties": "CSS-tulajdonságok vesszővel ellátott listája, melyek 'moz' gyártói előtagot kapnak azoknál az Emmet-rövidtéseknél, melyek `-` karakterrel kezdődnek. Állítsa üres szövegre, ha soha nem szeretne 'moz' előtagot használni.",
+			"emmetPreferencesCssMsProperties": "CSS-tulajdonságok vesszővel ellátott listája, melyek 'ms' gyártói előtagot kapnak azoknál az Emmet-rövidtéseknél, melyek `-` karakterrel kezdődnek. Állítsa üres szövegre, ha soha nem szeretne 'ms' előtagot használni.",
+			"emmetPreferencesCssOProperties": "CSS-tulajdonságok vesszővel ellátott listája, melyek 'o' gyártói előtagot kapnak azoknál az Emmet-rövidtéseknél, melyek `-` karakterrel kezdődnek. Állítsa üres szövegre, ha soha nem szeretne 'o' előtagot használni.",
+			"emmetPreferencesCssWebkitProperties": "CSS-tulajdonságok vesszővel ellátott listája, melyek 'webkit' gyártói előtagot kapnak azoknál az Emmet-rövidtéseknél, melyek `-` karakterrel kezdődnek. Állítsa üres szövegre, ha soha nem szeretne 'webkit' előtagot használni.",
+			"emmetPreferencesFilterCommentAfter": "Annak a megjegyzésnek a definíciója, ami az illeszkedő elem mögé kerül a megjegyzésszűrő alkalmazása esetén.",
+			"emmetPreferencesFilterCommentBefore": "Annak a megjegyzésnek a definíciója, ami az illeszkedő elem elé kerül a megjegyzésszűrő alkalmazása esetén.",
+			"emmetPreferencesFilterCommentTrigger": "Attribútumnevek vesszővel elválasztott listája, amelyeknek léteznie kell a megjegyzésszűrő alkalmazásához.",
+			"emmetPreferencesFloatUnit": "A lebegőpontos számok alapértelmezett mértékegysége",
+			"emmetPreferencesFormatForceIndentTags": "Azon elemek neveit tartalmazó tömb, melyek mindig kapnak belső indentálást",
+			"emmetPreferencesFormatNoIndentTags": "Azon elemek neveit tartalmazó tömb, melyek nem kapnak belső indentálást",
+			"emmetPreferencesIntUnit": "Az egész számok alapértelmezett mértékegysége",
+			"emmetPreferencesSassAfter": "A CSS-tulajdonság végére helyezett szimbólum CSS-rövidítések kibontásánál Sass-fájlokban",
+			"emmetPreferencesSassBetween": "A CSS-tulajdonság és az érték közé helyezett szimbólum CSS-rövidítések kibontásánál Sass-fájlokban",
+			"emmetPreferencesStylusAfter": "A CSS-tulajdonság végére helyezett szimbólum CSS-rövidítések kibontásánál Stylus-fájlokban",
+			"emmetPreferencesStylusBetween": "A CSS-tulajdonság és az érték közé helyezett szimbólum CSS-rövidítések kibontásánál Stylus-fájlokban",
+			"emmetShowAbbreviationSuggestions": "Lehetséges Emmet-rövidítések megjelenítése javaslatként. Nem használható a stíluslapokon vagy ha az emmet.showExpandedAbbreviation értéke `\"never\"`.",
+			"emmetShowExpandedAbbreviation": "Kibontott Emmet-rövidítések megjelenítése javaslatként. Az `\"inMarkupAndStylesheetFilesOnly\"` beállítás csak a html, haml, jade, slim, xml, xsl, css, scss, sass, less és stylus típusú tartalmat jelenti. Az `\"always\"` beállítás a fájl egészére vonatkozik a jelölőnyelvtől/css-től függetlenül.",
+			"emmetShowSuggestionsAsSnippets": "Ha az értéke `true`, akkor az emmetes javaslatok kódtöredékként jelennek meg, ami lehetővé teszi az `#editor.snippetSuggestions#` beállítás alapján történő rendezésüket.",
+			"emmetSyntaxProfiles": "Konkrét szintaktika profiljának meghatározása vagy saját profil használata adott szabályokkal.",
+			"emmetTriggerExpansionOnTab": "Ha engedélyezve van, akkor az Emmet-rövidítések a Tab billentyű lenyomásával bonthatók ki.",
+			"emmetVariables": "Az Emmet-kódrészletekben használt változók"
+		}
+	},
+	"vscode.extension-editing": {
+		"bundle": {},
+		"package": {
+			"description": "Lintelési funkciót biztosít kiegészítőfejlesztéshez.",
+			"displayName": "Kiegészítőfejlesztés"
+		}
+	},
+	"vscode.fsharp": {
+		"bundle": {},
+		"package": {
+			"description": "Kódtöredékeket és szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket és a kódrészek bezárását az F#-fájlokban.",
+			"displayName": "F# nyelvi alapok"
+		}
+	},
+	"vscode.git": {
+		"bundle": {},
+		"package": {
+			"colors.added": "A hozzáadott erőforrások színe.",
+			"colors.conflict": "A konfliktusos erőforrások színe.",
+			"colors.deleted": "A törölt erőforrások színe.",
+			"colors.ignored": "A figyelmen kívül hagyott erőforrások színe.",
+			"colors.modified": "A módosított erőforrások színe.",
+			"colors.submodule": "Az almodulokhoz tartozó erőforrások színe",
+			"colors.untracked": "A nem követett erőforrások színe.",
+			"command.addRemote": "Add Remote",
+			"command.branch": "Ág létrehozása...",
+			"command.checkout": "Checkout adott helyre...",
+			"command.clean": "Módosítások elvetése",
+			"command.cleanAll": "Összes módosítás elvetése",
+			"command.clone": "Klónozás",
+			"command.close": "Forráskódtár bezárása",
+			"command.commitAll": "Teljes beadás",
+			"command.commitAllAmend": "Összes beadása (commint) javítással",
+			"command.commitAllSigned": "Összes beadása (commit) aláírással",
+			"command.commitEmpty": "Üres beadás (commit)",
+			"command.commitStaged": "Előjegyzettek beadása (commit)",
+			"command.commitStagedAmend": "Előjegyzettek beadása (commit) javítással (amend)",
+			"command.commitStagedSigned": "Előjegyzettek beadása (commit) aláírással",
+			"command.createTag": "Create Tag",
+			"command.deleteBranch": "Ág törlése...",
+			"command.deleteTag": "Delete Tag",
+			"command.fetch": "Lekérés (fetch)",
+			"command.fetchAll": "Lekérés (fetch) az összes távoli forrásból",
+			"command.fetchPrune": "Lekérés (fetch, takarítással)",
+			"command.init": "Forráskódtár előkészítése",
+			"command.merge": "Ág beolvasztása...",
+			"command.openChange": "Módosítások megnyitása",
+			"command.openFile": "Fájl megnyitása",
+			"command.openHEADFile": "Fájl megnyitása (HEAD)",
+			"command.openRepository": "Forráskódtár megnyitása",
+			"command.pull": "Letöltés",
+			"command.pullFrom": "Pullozás...",
+			"command.pushForce": "Push (kényszerített)",
+			"command.pushTo": "Push...",
+			"command.pushToForce": "Push adoott helyre (kényszerített)",
+			"command.refresh": "Frissítés",
+			"command.renameBranch": "Ág átnevezése...",
+			"command.restoreCommitTemplate": "Beadási (commit) sablon helyreállítása",
+			"command.revealInExplorer": "Megjelenítés az oldalsávon",
+			"command.revertChange": "Változtatás visszavonása",
+			"command.revertSelectedRanges": "Kijelölt területek visszaállítása",
+			"command.showOutput": "Git-kimenet megjelenítése",
+			"command.stage": "Módosítások előjegyzése beadásra",
+			"command.stageAll": "Összes módosítás előjegyzése beadásra",
+			"command.stageChange": "Változás előjegyzése beadásra",
+			"command.stageSelectedRanges": "Kijelölt területek előjegyzése beadásra",
+			"command.stashApply": "Stash alkalmazása...",
+			"command.stashApplyLatest": "Legutóbbi stash alkalmazása...",
+			"command.stashIncludeUntracked": "Stash (a nem követett fájlokkal együtt)",
+			"command.stashPop": "Stash visszaállítása...",
+			"command.stashPopLatest": "Legutóbbi stash visszaállítása",
+			"command.sync": "Szinkronizálás",
+			"command.syncRebase": "Szinkronizálás (rebase)",
+			"command.timelineCopyCommitId": "Copy Commit ID",
+			"command.timelineOpenDiff": "Módosítások megnyitása",
+			"command.undoCommit": "Legutolsó beadás (commit) visszavonása",
+			"command.unstage": "Módosítások előjegyzésének törlése",
+			"command.unstageAll": "Minden módosítás előjegyzésének törlése",
+			"command.unstageSelectedRanges": "Kijelölt területek előjegyzésének törlése",
+			"config.allowForcePush": "Meghatározza, hogy engedélyezve van-e a kényszerített push (a lease opcióval vagy anélkül)",
+			"config.alwaysShowStagedChangesResourceGroup": "Mindig jelenjen meg a beadásra előjegyzett módosításokat tartalmazó csoport.",
+			"config.alwaysSignOff": "Meghatározza az aláírás (signoff) használatát az összes commit esetén.",
+			"config.autoRepositoryDetection": "Meghatározza, hogy a forráskódtárak mikor legyenek automatikusan felderítve.",
+			"config.autoRepositoryDetection.false": "Automatikus forráskódtár-keresés letiltása.",
+			"config.autoRepositoryDetection.openEditors": "Keresés a megnyitott fájlok szülőmappáiban.",
+			"config.autoRepositoryDetection.subFolders": "Keresés a jelenleg megnyitott mappa almappáiban.",
+			"config.autoRepositoryDetection.true": "Keresés a jelenleg megnyitott mappa almappáiban és a megnyitott fájlok szülőkönyvtáraiban is.",
+			"config.autofetch": "Beadások (commitok) automatikus lekérése az aktuális Git-forráskódtár alapértelmezett távoli forrásától",
+			"config.autofetchPeriod": "Duration in seconds between each automatic git fetch, when `git.autofetch` is enabled.",
+			"config.autorefresh": "Meghatározza, hogy engedélyezve van-e az automatikus frissítés.",
+			"config.branchValidationRegex": "Az új ágnevek validálására szolgáló reguláris kifejezés.",
+			"config.branchWhitespaceChar": "Az a karakter, amire az új ágnevekben cserélve lesznek a szóközkaraketerek.",
+			"config.checkoutType": "Meghatározza, hogy milyen típusú ágak vannak kilistázva a `Checkout adott helyre...` parancs futtatásakor.",
+			"config.checkoutType.local": "Csak a helyi ágak jelenjenek meg.",
+			"config.checkoutType.remote": "Csak a távoli ágak jelenjenek meg.",
+			"config.checkoutType.tags": "Csak a címkék jelenjenek meg.",
+			"config.confirmForcePush": "Meghatározza, hogy legyen-e megerősítés kényszerített push esetén.",
+			"config.confirmSync": "Megerősítés kérése git forráskódtárak szinkronizálása előtt.",
+			"config.countBadge.all": "Összes módosítás számának megjelenítése.",
+			"config.countBadge.off": "Számláló kikapcsolása.",
+			"config.countBadge.tracked": "Csak a követett módosítások számának megjelenítése.",
+			"config.decorations.enabled": "Meghatározza, hogy a Git megjelölje-e színnel és jelvénnyekkel a fájlokat a fájlkezelőben és a nyitott szerkesztőablakok nézetben.",
+			"config.defaultCloneDirectory": "Git-forráskódtárak klónozásának alapértelmezett helye.",
+			"config.detectSubmodules": "Meghatározza, hogy automatikusan fel legyenek-e derítve a git almodulok.",
+			"config.detectSubmodulesLimit": "Korlátozza a felderített git almodulok számát.",
+			"config.discardAllScope": "Meghatározza, hogy milyen módosítások kerülnek elvetésre az \"Összes módosítás elvetése\" parancs kiadása esetén. `all` esetén minden módosítás elvetődik. `tracked` esetén csak a követett fájlok módosításai vetődnek el. `prompt` esetén a parancs minden futtatásánál felugrik egy párbeszédablak.",
+			"config.enableCommitSigning": "Commit GPG-vel történő aláírásának engedélyezése.",
+			"config.enableSmartCommit": "Összes módosítás beadása (commit), ha nincsenek előjegyzett módosítások.",
+			"config.enabled": "Meghatározza, hogy a git engedélyezve van-e.",
+			"config.ignoreLegacyWarning": "Régi gittel kapcsolatos figyelmeztetés figyelmen kívül hagyása.",
+			"config.ignoreLimitWarning": "A túl sok módosítás esetén megjelenő figyelmeztetés figyelmen kívül hagyása.",
+			"config.ignoreMissingGitWarning": "A Git hiánya esetén megjelenő figyelmeztetés figyelmen kívül hagyása.",
+			"config.ignoredRepositories": "A figyelmen kívül hagyott git-forráskódtárak listája.",
+			"config.inputValidation": "Meghatározza, hogy mikor jelenjen meg a beadási üzenet validálása.",
+			"config.inputValidationLength": "Meghatározza, hogy hány karakter után jelenik meg figyelmeztetés a beadási üzenet írásánál.",
+			"config.inputValidationSubjectLength": "Controls the commit message subject length threshold for showing a warning. Unset it to inherit the value of `config.inputValidationLength`.",
+			"config.openDiffOnClick": "Meghatározza, hogy változásra kattintáskor egy differenciaszerkesztő nyíljon-e meg. Ha nem, akkor egy szokásos szerkesztőablak nyílik meg.",
+			"config.path": "A git végrehajtható fájl neve és elérési útja Windowson. Pl.: `C:\\Program Files\\Git\\bin\\git.exe`.",
+			"config.postCommitCommand": "Git parancs futtatása sikeres beadás (commit) után.",
+			"config.postCommitCommand.none": "Ne futtasson egyetlen parancsot sem beadás (commit) után.",
+			"config.postCommitCommand.push": "„Git Push” futtatása sikeres beadás (commit) után.",
+			"config.postCommitCommand.sync": "„Git szinkronizáció” futtatása sikeres beadás (commit) után.",
+			"config.promptToSaveFilesBeforeCommit": "Meghatározza, hogy a Git ellenőrizze-e, hogy van-e mentetlen fájl beadás (commit) előtt.",
+			"config.rebaseWhenSync": "A git rebase-t használjon a szinkronizáció parancs futtatása során.",
+			"config.scanRepositories": "Git-forráskódtárak keresési útvonalainak listája.",
+			"config.showInlineOpenFileAction": "Meghatározza, hogy megjelenjen-e a sorok között egy 'Fájl megnyitása' művelet a git változások nézetén.",
+			"config.showProgress": "Meghatározza, hogy a git-műveletek végrehajtása közben megjelenjen-e a folyamatjelző.",
+			"config.showPushSuccessNotification": "Meghatározza, hogy megjelenjen-e egy jelzés, ha a push sikeres volt.",
+			"config.smartCommitChanges.tracked": "Automatically staged tracked changes only.",
+			"config.useForcePushWithLease": "Meghatározza, hogy kényszerített push esetén a biztonságosabb force-with-lease változat van-e használva.",
+			"description": "Git verziókezelő integráció",
+			"view.workbench.cloneRepository": "You can also clone a repository from a URL. To learn more about how to use git and source control in VS Code [read our docs](https://aka.ms/vscode-scm).\n[Clone Repository](command:git.clone)",
+			"view.workbench.scm.disabled": "If you would like to use git features, please enable git in your [settings](command:workbench.action.openSettings?%5B%22git.enabled%22%5D).\nTo learn more about how to use git and source control in VS Code [read our docs](https://aka.ms/vscode-scm).",
+			"view.workbench.scm.empty": "In order to use git features, you can open a folder containing a git repository or clone from a URL.\n[Open Folder](command:vscode.openFolder)\n[Clone Repository](command:git.clone)\nTo learn more about how to use git and source control in VS Code [read our docs](https://aka.ms/vscode-scm).",
+			"view.workbench.scm.emptyWorkspace": "The workspace currently open doesn't have any folders containing git repositories.\n[Add Folder to Workspace](command:workbench.action.addRootFolder)\nTo learn more about how to use git and source control in VS Code [read our docs](https://aka.ms/vscode-scm).",
+			"view.workbench.scm.folder": "The folder currently open doesn't have a git repository.\n[Initialize Repository](command:git.init?%5Btrue%5D)\nTo learn more about how to use git and source control in VS Code [read our docs](https://aka.ms/vscode-scm).",
+			"view.workbench.scm.missing": "A valid git installation was not detected, more details can be found in the [git output](command:git.showOutput).\nPlease [install git](https://git-scm.com/), or learn more about how to use git and source control in VS Code in [our docs](https://aka.ms/vscode-scm).\nIf you're using a different version control system, you can [search the Marketplace](command:workbench.extensions.search?%22%40category%3A%5C%22scm%20providers%5C%22%22) for additional extensions.",
+			"view.workbench.scm.workspace": "The workspace currently open doesn't have any folders containing git repositories.\n[Initialize Repository](command:git.init)\nTo learn more about how to use git and source control in VS Code [read our docs](https://aka.ms/vscode-scm)."
+		}
+	},
+	"vscode.github-authentication": {
+		"bundle": {},
+		"package": {}
+	},
+	"vscode.go": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a Go-fájlokban.",
+			"displayName": "Go nyelvi alapok"
+		}
+	},
+	"vscode.groovy": {
+		"bundle": {},
+		"package": {
+			"description": "Kódtöredékeket és szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a Groovy-fájlokban.",
+			"displayName": "Groovy nyelvi alapok"
+		}
+	},
+	"vscode.handlebars": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a Handlebars-fájlokban.",
+			"displayName": "Handlebars nyelvi alapok"
+		}
+	},
+	"vscode.hlsl": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a HLSL-fájlokban.",
+			"displayName": "HLSL nyelvi alapok"
+		}
+	},
+	"vscode.html": {
+		"bundle": {},
+		"package": {
+			"displayName": "HTML nyelvi alapok"
+		}
+	},
+	"vscode.html-language-features": {
+		"bundle": {},
+		"package": {
+			"displayName": "HTML nyelvi funkciók",
+			"html.autoClosingTags": "HTML-elemek automatikus lezárásának engedélyezése vagy tetiltása.",
+			"html.customData.desc": "A list of relative file paths pointing to JSON files following the [custom data format](https://github.com/Microsoft/vscode-html-languageservice/blob/master/docs/customData.md).\n\nVS Code loads custom data on startup to enhance its HTML support for the custom HTML tags, attributes and attribute values you specify in the JSON files.\n\nThe file paths are relative to workspace and only workspace folder settings are considered.",
+			"html.format.contentUnformatted.desc": "Azon elemek vesszővel elválasztott listája, melyek ne legyenek újraformázva. `null` érték esetén a `pre` elemre vonatkozik a beállítás.",
+			"html.format.enable.desc": "Alapértelmezett HTML-formázó engedélyezése vagy letiltása.",
+			"html.format.extraLiners.desc": "Azon elemek veszővel elválasztott listája, amelyek előtt lennie kell egy extra új sornak. `null` érték esetén a `\"head,body,/html\"` érték van használva.",
+			"html.format.indentHandlebars.desc": "`{{#foo}}` és `{{/foo}}` formázása és indentálása.",
+			"html.format.maxPreserveNewLines.desc": "Az egymás után megőrzött sortörések maximális száma. Ha nem szeretné korlátozni, használja a `null` értéket!",
+			"html.format.preserveNewLines.desc": "Meghatározza, hogy az elemek előtt lévő sortörések meg legyenek-e hagyva. Csak elemek előtt működik, elemek belsejében vagy szövegben nem.",
+			"html.format.unformatted.desc": "Azon elemek vesszővel elválasztott listája, melyek ne legyenek újraformázva. `null` érték esetén a https://www.w3.org/TR/html5/dom.html#phrasing-content oldalon listázott elemekre vonatkozik a beállítás.",
+			"html.format.wrapAttributes.alignedmultiple": "Sortörés, ha a sorhossz túl lett lépve, az attribútumok függőlegesen igazítva legyenek.",
+			"html.format.wrapAttributes.auto": "Az attribútumok csak akkor vannak tördelve, ha a sorhossz túl lett lépve.",
+			"html.format.wrapAttributes.desc": "Attribútumok tördelése.",
+			"html.format.wrapAttributes.force": "Minden egyes attribútum tördelve van, kivéve az elsőt.",
+			"html.format.wrapAttributes.forcealign": "Minden egyes attribútum tördelve van, kivéve az elsőt, és igazítva vannak.",
+			"html.format.wrapAttributes.forcemultiline": "Minden egyes attribútum tördelve van.",
+			"html.format.wrapAttributes.preserve": "Preserve wrapping of attributes",
+			"html.format.wrapLineLength.desc": "Maximális karakterszám soronként (0 = letiltás)",
+			"html.suggest.html5.desc": "Meghatározza, hogy a beépített HTML nyelvi támogatás ajánl-e HTML5-ös elemeket, tulajdonságokat és értékeket.",
+			"html.trace.server.desc": "A VS Code és a HTML nyelvi szerver közötti kommunikáció naplózása.",
+			"html.validate.scripts": "Meghatározza, hogy a beépített HTML nyelvi támogatás validálja-e a beágyazott parancsafájlokat.",
+			"html.validate.styles": "Meghatározza, hogy a beépített HTML nyelvi támogatás validálja-e a beágyazott stílusfájlokat."
+		}
+	},
+	"vscode.ini": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket az Ini-fájlokban.",
+			"displayName": "Ini nyelvi alapok"
+		}
+	},
+	"vscode.java": {
+		"bundle": {},
+		"package": {
+			"description": "Kódtöredékeket és szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket és a kódrészek bezárását a Java-fájlokban.",
+			"displayName": "Java nyelvi alapok"
+		}
+	},
+	"vscode.javascript": {
+		"bundle": {},
+		"package": {
+			"description": "Kódtöredékeket és szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket és a kódrészek bezárását a JavaScript-fájlokban.",
+			"displayName": "JavaScript nyelvi alapok"
+		}
+	},
+	"vscode.json": {
+		"bundle": {},
+		"package": {
+			"displayName": "JSON nyelvi alapok"
+		}
+	},
+	"vscode.json-language-features": {
+		"bundle": {},
+		"package": {
+			"description": "Széleskörű nyelvi támogatás JSON-fájlokhoz.",
+			"json.clickToRetry": "Kattintson az újrapróbálkozáshoz!",
+			"json.colorDecorators.enable.deprecationMessage": "A `json.colorDecorators.enable` beállítás elavult az `editor.colorDecorators` bevezetése miatt.",
+			"json.colorDecorators.enable.desc": "Színdekorátorok engedélyezése vagy letiltása",
+			"json.format.enable.desc": "Alapértelmezett JSON-formázó engedélyezése vagy letiltása.",
+			"json.schemaResolutionErrorMessage": "Nem sikerült feloldani a sémát.",
+			"json.schemas.desc": "Sémák hozzárendelése JSON-fájlokhoz a jelenlegi projektben",
+			"json.schemas.schema.desc": "Az adott URL-cím sémadefiníciója. A sémát csak a séma URL-címéhez való fölösleges lekérdezések megakadályozása érdekében kell megadni.",
+			"json.schemas.url.desc": "Egy séma URL-címe vagy egy séma relatív elérési útja az aktuális könyvtárban",
+			"json.tracing.desc": "A VS Code és a JSON nyelvi szerver közötti kommunikáció naplózása."
+		}
+	},
+	"vscode.less": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket és a kódrészek bezárását a C/C++-fájlokban.",
+			"displayName": "Less nyelvi alapok"
+		}
+	},
+	"vscode.log": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat a .log kiterjesztésű fájlokban."
+		}
+	},
+	"vscode.lua": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a Lua-fájlokban.",
+			"displayName": "Lua nyelvi alapok"
+		}
+	},
+	"vscode.make": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a Make-fájlokban.",
+			"displayName": "Make nyelvi alapok"
+		}
+	},
+	"vscode.markdown-language-features": {
+		"bundle": {},
+		"package": {
+			"configuration.markdown.links.openLocation.description": "Controls where links in markdown files should be opened.",
+			"configuration.markdown.preview.openMarkdownLinks.description": "Controls how links to other markdown files in the markdown preview should be opened.",
+			"configuration.markdown.preview.openMarkdownLinks.inEditor": "Próbálja megnyitni a hivatkozásokat a szerkesztőablakban",
+			"configuration.markdown.preview.openMarkdownLinks.inPreview": "Próbálja megnyitni a hivatkozásokat a Markdown-előnézetben",
+			"description": "Széleskörű nyelvi támogatás Markdown-fájlokhoz.",
+			"displayName": "Markdown nyelvi funkciók",
+			"markdown.preview.breaks.desc": "Sets how line-breaks are rendered in the markdown preview. Setting it to 'true' creates a <br> for every newline.",
+			"markdown.preview.doubleClickToSwitchToEditor.desc": "Kattintson duplán a markdown-előnézetre a szerkesztőre való átváltáshoz.",
+			"markdown.preview.fontFamily.desc": "Meghatározza a markdown-előnézeten használt betűkészletet.",
+			"markdown.preview.fontSize.desc": "Meghatározza a markdown-előnézet betűméretét, pixelekben.",
+			"markdown.preview.lineHeight.desc": "Meghatározza a markdown-előnézeten használt sormagasságot. Az érték relatív a betűmérethez képest.",
+			"markdown.preview.linkify": "URL-szerű szövegek hivatkozássá alakításának engedélyezése vagy letiltása a markdown-előnézetben.",
+			"markdown.preview.markEditorSelection.desc": "Az aktuális kijelölés megjelölése a markdown-előnézeten",
+			"markdown.preview.scrollEditorWithPreview.desc": "Amikor a markdown-előnézetet görgetik, a szerkesztőnézet is aktualizálódik",
+			"markdown.preview.scrollPreviewWithEditor.desc": "Amikor a markdown-szerkesztőnézetet görgetik, az előnézet is aktualizálódik.",
+			"markdown.preview.title": "Betekintő megnyitása",
+			"markdown.preview.toggleLock.title": "Előnézet rögzítésének be- és kikapcsolása",
+			"markdown.previewSide.title": "Előnézet megnyitása oldalt",
+			"markdown.showLockedPreviewToSide.title": "Rögzített előnézet megnyitása oldalt",
+			"markdown.showPreviewSecuritySelector.title": "Az előnézet biztonsági beállításainak módosítása",
+			"markdown.showSource.title": "Forrás megjelenítése",
+			"markdown.styles.dec": "CSS-stíluslapok URL-címeinek vagy helyi elérési útjainak listája, amelyek a markdown-előnézeten használva vannak. A relatív elérési utak az intézőben megnyitott mappához képest vannak relatívan értelmezve. Ha nincs mappa megnyitva, akkor a markdown-fájl elréséi útjához képest. Minden '\\' karaktert '\\\\' formában kell megadni."
+		}
+	},
+	"vscode.merge-conflict": {
+		"bundle": {},
+		"package": {
+			"command.accept.all-both": "Változások elfogadása mindkét oldalról",
+			"command.accept.all-current": "Összes aktuális elfogadása",
+			"command.accept.all-incoming": "Összes beérkező változás elfogadása",
+			"command.accept.both": "Változás elfogadása mindkét oldalról",
+			"command.accept.current": "Helyi változtatás elfogadása",
+			"command.accept.incoming": "Beérkező változtatás elfogadása",
+			"command.accept.selection": "Kijelölt változtatás elfogadása",
+			"command.category": "Összeolvasztási konfliktus",
+			"command.compare": "Aktuális konfliktus összehasonlítása",
+			"command.next": "Következő konfliktus",
+			"command.previous": "Előző konfliktus",
+			"config.autoNavigateNextConflictEnabled": "Automatikus ugrás a következő összeolvasztási konfliktusra az összeolvasztási konfliktus megoldása után.",
+			"config.codeLensEnabled": "Összeolvasztási konfliktust jelző kódlencsék megjelenítése a szerkesztőablakban.",
+			"config.decoratorsEnabled": "Összeolvasztási konfliktust jelző dekorátorok megjelenítése a szerkesztőablakban.",
+			"config.title": "Összeolvasztási konfliktus",
+			"description": "Kiemelés és parancsok a sorok között sorok között megjelenített összeolvasztási konfliktusok esetén.",
+			"displayName": "Összeolvasztási konfliktus"
+		}
+	},
+	"vscode.npm": {
+		"bundle": {},
+		"package": {
+			"command.debug": "Hibakeresés",
+			"command.openScript": "Megnyitás",
+			"command.refresh": "Frissítés",
+			"command.run": "Futtatás",
+			"command.runInstall": "Telepítés futtatása",
+			"config.npm.autoDetect": "Meghatározza, hogy az npm-parancsfájlok automatikusan fel legyenek-e derítve",
+			"config.npm.exclude": "Azokat a mappákat leíró globális minta, amelyek ne legyenek vizsgálva az automatikus parancsfájlkeresés közben.",
+			"config.npm.packageManager": "A parancsfájlok futtatásához használt csomagkezelő.",
+			"config.npm.runSilent": "Az npm-parancsok a '--silent' kapcsolóval fussanak.",
+			"config.npm.scriptExplorerAction": "The default click action used in the npm scripts explorer: `open` or `run`, the default is `open`.",
+			"description": "Npm parancsfájlokból származó feladatok támogatása.",
+			"displayName": "Npm-támogatás a VS Code-hoz",
+			"npm.parseError": "Npm-feladatok felderítése: nem sikerült beolvasni a következő fájlt: {0}",
+			"taskdef.path": "A parancsfájlt szolgáltató package.json-fájlt tartalmazó mappa elérési útja. Elhagyható.",
+			"taskdef.script": "A testreszabott npm parancsfájl.",
+			"view.name": "Npm-parancsok"
+		}
+	},
+	"vscode.objective-c": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket az Objective-C-fájlokban.",
+			"displayName": "Objective-C nyelvi alapok"
+		}
+	},
+	"vscode.perl": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a Perl-fájlokban.",
+			"displayName": "Perl nyelvi alapok"
+		}
+	},
+	"vscode.php": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a PHP-fájlokban.",
+			"displayName": "PHP nyelvi alapok"
+		}
+	},
+	"vscode.php-language-features": {
+		"bundle": {},
+		"package": {
+			"command.untrustValidationExecutable": "PHP-validációs végrehajtható fájl letiltása (munkaterületi beállításként megadva)",
+			"configuration.suggest.basic": "Meghatározza, hogy a beépített PHP nyelvi támogatás ajánl-e PHP globálisokat és változókat.",
+			"configuration.validate.enable": "Beépített PHP-validáció engedélyezése vagy letiltása",
+			"configuration.validate.executablePath": "A PHP végrehajtható fájljának elérési útja.",
+			"configuration.validate.run": "A linter mentéskor vagy gépeléskor fut-e.",
+			"description": "Széleskörű nyelvi támogatás PHP-fájlokhoz.",
+			"displayName": "PHP nyelvi funkciók"
+		}
+	},
+	"vscode.powershell": {
+		"bundle": {},
+		"package": {
+			"description": "Kódtöredékeket és szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket és a kódrészek bezárását a Powershell-fájlokban.",
+			"displayName": "Powershell nyelvi alapok"
+		}
+	},
+	"vscode.pug": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a Pug-fájlokban.",
+			"displayName": "Pug nyelvi alapok"
+		}
+	},
+	"vscode.python": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket és a kódrészek bezárását a Python-fájlokban.",
+			"displayName": "Python nyelvi alapok"
+		}
+	},
+	"vscode.r": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket az R-fájlokban.",
+			"displayName": "R nyelvi alapok"
+		}
+	},
+	"vscode.razor": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket és a kódrészek bezárását a Razor-fájlokban.",
+			"displayName": "Razor nyelvi alapok"
+		}
+	},
+	"vscode.ruby": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a Ruby-fájlokban.",
+			"displayName": "Ruby nyelvi alapok"
+		}
+	},
+	"vscode.rust": {
+		"bundle": {},
+		"package": {}
+	},
+	"vscode.scss": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket és a kódrészek bezárását az SCSS-fájlokban.",
+			"displayName": "SCSS nyelvi alapok"
+		}
+	},
+	"vscode.search-result": {
+		"bundle": {},
+		"package": {}
+	},
+	"vscode.shaderlab": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a Shaderlab-fájlokban.",
+			"displayName": "Shaderlab nyelvi alapok"
+		}
+	},
+	"vscode.shellscript": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a shell script-fájlokban.",
+			"displayName": "Shell Script nyelvi alapok"
+		}
+	},
+	"vscode.sql": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket az SQL-fájlokban.",
+			"displayName": "SQL nyelvi alapok"
+		}
+	},
+	"vscode.swift": {
+		"bundle": {},
+		"package": {
+			"description": "Kódtöredékeket és szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a Swift-fájlokban.",
+			"displayName": "Swift nyelvi alapok"
+		}
+	},
+	"vscode.theme-abyss": {
+		"bundle": {},
+		"package": {
+			"description": "Abyss téma a Visual Studio Code-hoz",
+			"displayName": "Abyss téma"
+		}
+	},
+	"vscode.theme-defaults": {
+		"bundle": {},
+		"package": {
+			"description": "Az alapértelmezett Visual Studio világos és sötét témák",
+			"displayName": "Alapértelmezett témák"
+		}
+	},
+	"vscode.theme-kimbie-dark": {
+		"bundle": {},
+		"package": {
+			"description": "Kimble Dark téma a Visual Studio Code-hoz",
+			"displayName": "Kimble Dark téma"
+		}
+	},
+	"vscode.theme-monokai": {
+		"bundle": {},
+		"package": {
+			"description": "Monokai téma a Visual Studio Code-hoz",
+			"displayName": "Monokai téma"
+		}
+	},
+	"vscode.theme-monokai-dimmed": {
+		"bundle": {},
+		"package": {
+			"description": "Monokai Dimmed téma a Visual Studio Code-hoz",
+			"displayName": "Monokai Dimmed téma"
+		}
+	},
+	"vscode.theme-quietlight": {
+		"bundle": {},
+		"package": {
+			"description": "Quiet Light téma a Visual Studio Code-hoz",
+			"displayName": "Quiet Light téma"
+		}
+	},
+	"vscode.theme-red": {
+		"bundle": {},
+		"package": {
+			"description": "Red téma a Visual Studio Code-hoz",
+			"displayName": "Red téma"
+		}
+	},
+	"vscode.theme-solarized-dark": {
+		"bundle": {},
+		"package": {
+			"description": "Solarized Dark téma a Visual Studio Code-hoz",
+			"displayName": "Solarized Dark téma"
+		}
+	},
+	"vscode.theme-solarized-light": {
+		"bundle": {},
+		"package": {
+			"description": "Solarized Light téma a Visual Studio Code-hoz",
+			"displayName": "Solarized Light téma"
+		}
+	},
+	"vscode.theme-tomorrow-night-blue": {
+		"bundle": {},
+		"package": {
+			"description": "Tomorrow Night Blue téma a Visual Studio Code-hoz",
+			"displayName": "Tomorrow Night Blue téma"
+		}
+	},
+	"vscode.typescript-language-features": {
+		"bundle": {},
+		"package": {
+			"configuration.suggest.autoImports": "Automatikus importálási ajánlatok engedélyezése vagy letiltása. Legalább TypeScript 2.6-ot igényel a munkaterületen.",
+			"configuration.suggest.completeFunctionCalls": "Függvények kiegészítése paraméterdefiníciójukkal.",
+			"configuration.suggest.includeAutomaticOptionalChainCompletions": "Enable/disable showing completions on potentially undefined values that insert an optional chain call. Requires TS 3.7+ and strict null checks to be enabled.",
+			"configuration.suggest.paths": "Javaslatok engedélyezése importált elérési utakhoz és require-hívásokhoz.",
+			"configuration.tsserver.experimental.enableProjectDiagnostics": "(Experimental) Enables project wide error reporting.",
+			"configuration.tsserver.maxTsServerMemory": "Set the maximum amount of memory (in MB) to allocate to the TypeScript server process",
+			"configuration.tsserver.useSeparateSyntaxServer": "Enable/disable spawning a separate TypeScript server that can more quickly respond to syntax related operations, such as calculating folding or computing document symbols. Requires using TypeScript 3.4.0 or newer in the workspace.",
+			"configuration.tsserver.watchOptions": "Configure which watching strategies should be used to keep track of files and directories. Requires using TypeScript 3.8+ in the workspace.",
+			"configuration.tsserver.watchOptions.fallbackPolling": "When using file system events, this option specifies the polling strategy that gets used when the system runs out of native file watchers and/or doesn’t support native file watchers.",
+			"configuration.tsserver.watchOptions.watchDirectory.useFsEvents": "Attempt to use the operating system/file system’s native events for directory changes.",
+			"configuration.tsserver.watchOptions.watchFile.useFsEvents": "Attempt to use the operating system/file system’s native events for file changes.",
+			"configuration.tsserver.watchOptions.watchFile.useFsEventsOnParentDirectory": "Attempt to use the operating system/file system’s native events to listen for changes on a file’s containing directories. This can use fewer file watchers, but might be less accurate.",
+			"description": "Széleskörű nyelvi támogatás JavaScripthez és TypeScripthez.",
+			"displayName": "TypeScript és JavaScript nyelvi funkciók",
+			"format.insertSpaceAfterCommaDelimiter": "Meghatározza a szóközök kezelését vessző elválasztókarakter után.",
+			"format.insertSpaceAfterConstructor": "Meghatározza a szóközök kezelését a constructor kulcsszó után. Legalább TypeScript 2.3.0 szükséges hozzá a munkaterületen.",
+			"format.insertSpaceAfterFunctionKeywordForAnonymousFunctions": "Meghatározza a szóközök kezelését a névtelen függvényekben található function kulcsszó után.",
+			"format.insertSpaceAfterKeywordsInControlFlowStatements": "Meghatározza a szóközök kezelését vezérlési szerkezetek kulcsszavai után.",
+			"format.insertSpaceAfterOpeningAndBeforeClosingJsxExpressionBraces": "Meghatározza a szóközök kezelését JSX-kifejezések kapcsos zárójeleinek nyitása után és zárása előtt.",
+			"format.insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces": "Meghatározza a szóközök kezelését nem üres kapcsos zárójelek nyitása után és zárása előtt. Legalább TypeScript 2.3.0 szükséges hozzá a munkaterületen.",
+			"format.insertSpaceAfterOpeningAndBeforeClosingNonemptyBrackets": "Meghatározza a szóközök kezelését nem üres szögletes zárójelek nyitása után és zárása előtt.",
+			"format.insertSpaceAfterOpeningAndBeforeClosingNonemptyParenthesis": "Meghatározza a szóközök kezelését nem üres zárójelek nyitása után és zárása előtt.",
+			"format.insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces": "Meghatározza a szóközök kezelését a sablonkarakterláncok (template stringek) kapcsos zárójeleinek nyitása után és zárása előtt.",
+			"format.insertSpaceAfterSemicolonInForStatements": "Meghatározza a szóközök kezelését pontosvessző után a for-ciklusban.",
+			"format.insertSpaceAfterTypeAssertion": "Meghatározza a szóközök kezelését a típuskényszerítések után. Legalább TypeScript 2.4 szükséges hozzá a munkaterületen.",
+			"format.insertSpaceBeforeAndAfterBinaryOperators": "Meghatározza a szóközök kezelését bináris operátorok után.",
+			"format.insertSpaceBeforeFunctionParenthesis": "Meghatározza a szóközök kezelését a függvényargumentumokat tartalmazó zárójel előtt.",
+			"format.placeOpenBraceOnNewLineForControlBlocks": "Meghatározza, hogy a vezérlőblokkok nyitó kapcsos zárójelei új sorba kerüljenek-e vagy sem.",
+			"format.placeOpenBraceOnNewLineForFunctions": "Meghatározza, hogy a függvények nyitó kapcsos zárójelei új sorba kerüljenek-e vagy sem.",
+			"format.semicolons": "Defines handling of optional semicolons. Requires using TypeScript 3.7 or newer in the workspace.",
+			"javascript.format.enable": "Alapértelmezett JavaScript-formázó engedélyezése vagy letiltása.",
+			"javascript.suggestionActions.enabled": "Ajánlásokat tartalmazó diagnosztikák engedélyezése vagy letiltása a JavaScript-fájlokban. Legalább TypeScript 2.8-at igényel a munkaterületen.",
+			"javascript.validate.enable": "JavaScript-validálás engedélyezése vagy letiltása.",
+			"reloadProjects.title": "Projekt újratöltése",
+			"taskDefinition.tsconfig.description": "A tsconfig-fájl, ami meghatározza a TS-buildet.",
+			"typescript.autoClosingTags": "JSX-elemek automatikus bezárásának engedélyezése vagy letiltása. Legalább TypeScript 3.0-t igényel a munkaterületen.",
+			"typescript.check.npmIsInstalled": "Ellenőrizze, hogy az NPM telepítve van-e az automatikus típusdefiníció-letöltéshez.",
+			"typescript.disableAutomaticTypeAcquisition": "Automatikus típusdefiníció-letöltés letiltása. Az automatikus típusdefiníció letöltési funkció automatikusan letölti a `@types`-csomagokat az npm-ből, hogy az IntelliSense jobban működjön külső könyvtárak használata esetén.",
+			"typescript.format.enable": "Alapértelmezett TypeScript-formázó engedélyezése vagy letiltása.",
+			"typescript.locale": "Meghatározza a JavaScript- és TypeScript-hibák lokalizációját. Legalább TypeScript 2.6.0-t igényel a munkaterületen. Az alapértelmezett `null` érték esetén a VS Code-ban beállított nyelven jelennek meg a JavaScript- és TypeScript-hibák.",
+			"typescript.npm": "Az automatikus típusdefiníció-letöltéshez használt NPM végrehajtható fájl elérési útja. Legalább TypeScript 2.3.4 szükséges hozzá a munkaterületen.",
+			"typescript.openTsServerLog.title": "TS-szervernapló megnyitása",
+			"typescript.preferences.importModuleSpecifier": "Az automatikus importálásoknál használ elérési utak előnyben részesített stílusa.",
+			"typescript.preferences.importModuleSpecifier.nonRelative": "A `jsconfig.json`-ban vagy a `tsconfig.json`-ban meghatározott `baseUrl` alapján legyen meghatározva.",
+			"typescript.preferences.importModuleSpecifier.relative": "Relatív elérési út a fájl helyéhez képest.",
+			"typescript.preferences.importModuleSpecifierEnding.index": "Shorten `./component/index.js` to `./component/index`",
+			"typescript.preferences.importModuleSpecifierEnding.js": "Do not shorten path endings; include the `.js` extension.",
+			"typescript.preferences.quoteStyle": "A gyorsjavítások során előnyben részesített idézőjelstílus: `single` esetén aposztróf, `double` esetén idézőjel, `auto` esetén pedig a meglévő importálások alapján van meghatározva a stílus. Legalább TypeScript 2.9-et igényel a munkaterületen.",
+			"typescript.problemMatchers.tsc.label": "TypeScript-problémák",
+			"typescript.problemMatchers.tscWatch.label": "TypeScript-problémák (figyelő módban)",
+			"typescript.reportStyleChecksAsWarnings": "Stílusellenőrzés során talált esetek figyelmeztetésként legyenek jelentve.",
+			"typescript.restartTsServer": "TS-szerver újraindítása",
+			"typescript.suggest.enabled": "Enabled/disable autocomplete suggestions.",
+			"typescript.suggestionActions.enabled": "Ajánlásokat tartalmazó diagnosztikák engedélyezése vagy letiltása a TypeScript-fájlokban. Legalább TypeScript 2.8-at igényel a munkaterületen.",
+			"typescript.tsc.autoDetect": "Meghatározza, hogy a tsc-feladatok automatikusan fel vannak-e derítve.",
+			"typescript.tsc.autoDetect.build": "Csak egyszer futó fordítási feladat készüljön.",
+			"typescript.tsc.autoDetect.off": "Funkció letiltása.",
+			"typescript.tsc.autoDetect.on": "Buildelési és figyelési feladat is készüljön.",
+			"typescript.tsc.autoDetect.watch": "Fordítási és figyelési feladat is készüljön.",
+			"typescript.tsdk.desc": "Specifies the folder path to the tsserver and lib*.d.ts files under a TypeScript install to use for IntelliSense, for example: `./node_modules/typescript/lib`.\n\n- When specified as a user setting, the TypeScript version from `typescript.tsdk` automatically replaces the built-in TypeScript version.\n- When specified as a workspace setting, `typescript.tsdk` allows you to switch to use that workspace version of TypeScript for IntelliSense with the `TypeScript: Select TypeScript version` command.\n\nSee the [TypeScript documentation](https://code.visualstudio.com/docs/typescript/typescript-compiling#_using-newer-typescript-versions) for more detail about managing TypeScript versions.",
+			"typescript.tsserver.log": "Engedélyezi a TS-szerver naplózását egy fájlba. Ez a napló a TS-szerverrel kapcsolatos problémák diagnosztizálására használható. A napló tartalmazhat elérési utakat, forráskódot és más potenciálisan érzékeny, projekttel kapcsolatos adatot.",
+			"typescript.tsserver.pluginPaths": "További elérési utak, amelyek át lesznek kutatva beépülő modulok után a TypeScript nyelvi szerverhez. Legalább TypeScript 2.3.0 szükséges hozzá a munkaterületen.",
+			"typescript.tsserver.pluginPaths.item": "Abszolút vagy relatív elérési út. A relatív elérési utak a munkaterületi mappákhoz relatívan lesznek feloldva.",
+			"typescript.tsserver.trace": "Engedélyezi a TS-szervernek küldött üzenetek naplózását. Ez a napló a TS-szerverrel kapcsolatos problémák diagnosztizálására használható. A napló tartalmazhat elérési utakat, forráskódot és más potenciálisan érzékeny, projekttel kapcsolatos adatot. ",
+			"typescript.updateImportsOnFileMove.enabled": "Importálási utak automatikus frissítése fájlok VS Code-ban való átnevezésekor vagy átmozgatásakor. Legalább TypeScript 2.9-et igényel a munkaterületen.",
+			"typescript.updateImportsOnFileMove.enabled.always": "Mindig frissítse automatikusan az elérési utakat.",
+			"typescript.updateImportsOnFileMove.enabled.never": "Soha ne módosítsa az elérési utakat, és ne is kérdezzen rá.",
+			"typescript.updateImportsOnFileMove.enabled.prompt": "Kérjen megerősítést minden átnevezésnél.",
+			"typescript.validate.enable": "TypeScript-validálás engedélyezése vagy letiltása."
+		}
+	},
+	"vscode.vb": {
+		"bundle": {},
+		"package": {
+			"description": "Kódtöredékeket és szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket és a kódrészek bezárását a Visual Basic-fájlokban.",
+			"displayName": "Visual Basic nyelvi alapok"
+		}
+	},
+	"vscode.xml": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket az XML-fájlokban.",
+			"displayName": "XML nyelvi alapok"
+		}
+	},
+	"vscode.yaml": {
+		"bundle": {},
+		"package": {
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a YAML-fájlokban.",
+			"displayName": "YAML nyelvi alapok"
+		}
+	}
+}

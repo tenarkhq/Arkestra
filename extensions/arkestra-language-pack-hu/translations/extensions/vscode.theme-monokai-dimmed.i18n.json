@@ -1,0 +1,10 @@
+{
+	"version": "1.0.0",
+	"contents": {
+		"package": {
+			"displayName": "Monokai Dimmed téma",
+			"description": "Monokai Dimmed téma a Visual Studio Code-hoz"
+		},
+		"bundle": {}
+	}
+}

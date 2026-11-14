@@ -1,0 +1,10 @@
+{
+	"version": "1.0.0",
+	"contents": {
+		"package": {
+			"displayName": "YAML nyelvi alapok",
+			"description": "Szintaktikai kiemelést szolgáltat, valamint kezeli az összetartozó zárójeleket a YAML-fájlokban."
+		},
+		"bundle": {}
+	}
+}

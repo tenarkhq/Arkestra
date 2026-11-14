@@ -12,6 +12,15 @@ const INSTALL_GUIDE = 'https://docs.claude.com/en/docs/claude-code/setup';
 
 type Action = { readonly title: string; run(): Thenable<unknown> };
 
+/** The readiness reasons of the Claude agent in the interface language; other text (CLI errors) as it came. */
+function localizeReason(reason: string | undefined): string | undefined {
+	switch (reason) {
+		case 'Claude Code CLI not found': return vscode.l10n.t('Claude Code CLI not found');
+		case 'Claude Code is not signed in': return vscode.l10n.t('Claude Code is not signed in');
+		default: return reason;
+	}
+}
+
 /** The agent with what fixes an unmet condition attached to its readiness. */
 function withActions<T extends Agent>(agent: T, actionsFor: (readiness: Readiness) => Action[]): Agent {
 	return {
@@ -20,7 +29,7 @@ function withActions<T extends Agent>(agent: T, actionsFor: (readiness: Readines
 		get detail() { return agent.detail; },
 		readiness: async () => {
 			const readiness = await agent.readiness();
-			return readiness.ready ? readiness : { ...readiness, actions: actionsFor(readiness) };
+			return readiness.ready ? readiness : { ...readiness, reason: localizeReason(readiness.reason), actions: actionsFor(readiness) };
 		},
 		turn: (input, onEvent, signal) => agent.turn(input, onEvent, signal),
 	};
