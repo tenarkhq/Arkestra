@@ -60,6 +60,15 @@ for EXT in ../arkestra-extensions/*/; do
   fi
 done
 
+# The built-in Copilot extension stays (VS Code's Agent Host, see skip-patches.txt).
+# Microsoft's own build downloads it as a ready VSIX; the desktop build here compiles
+# it from source, as VS Code's server build already does (gulpfile.reh.ts).
+# Both the desktop prepack (what build.sh runs) and core-ci get it.
+if ! perl -ne '$f=1 if /^\t\t\tcompileCopilotExtensionBuildTask,$/; END { exit !$f }' build/gulpfile.vscode.ts; then
+  perl -0pi -e 's/(\n(\t+)compileNonNativeExtensionsBuildTask,\n)(\t+compileExtensionMediaBuildTask,)/$1$2compileCopilotExtensionBuildTask,\n$3/g' build/gulpfile.vscode.ts
+fi
+perl -ne '$f=1 if /^\t\t\tcompileCopilotExtensionBuildTask,$/; END { exit !$f }' build/gulpfile.vscode.ts
+
 # AR03 · Removed: built-in extensions Arkestra does not ship.
 #   microsoft-authentication, tunnel-forwarding: Microsoft sign-in and relay.
 #   grunt, gulp, jake: outdated task runners; available from Open VSX.
