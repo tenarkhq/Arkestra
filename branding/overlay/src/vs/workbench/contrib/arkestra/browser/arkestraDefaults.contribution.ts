@@ -10,6 +10,8 @@ import { Disposable } from '../../../../base/common/lifecycle.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
+import { IPaneCompositePartService } from '../../../services/panecomposite/browser/panecomposite.js';
+import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { Extensions as ConfigurationExtensions, IConfigurationRegistry } from '../../../../platform/configuration/common/configurationRegistry.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewDescriptor, IViewDescriptorService, IViewsRegistry, ViewContainerLocation } from '../../../common/views.js';
 
@@ -21,6 +23,7 @@ export const ARKESTRA_DEFAULTS: { readonly [key: string]: unknown } = {
 	'workbench.editor.showTabs': 'none',                 // the left bar switches what the middle shows
 	'workbench.secondarySideBar.defaultVisibility': 'hidden', // the right side opens when a tool view is asked for
 	'window.commandCenter': false,
+	'chat.commandCenter.enabled': false,                 // no Copilot chat button in the title bar; threads live in the left bar
 	'workbench.layoutControl.enabled': false,            // reachable from the command palette
 	'debug.showInStatusBar': 'never',                    // Run and Debug
 	'debug.toolBarLocation': 'hidden',
@@ -76,7 +79,9 @@ viewsRegistry.onViewsRegistered(added => added.forEach(({ views }) => hide(views
 // ---- The simple layout, set once per profile ----------------------------------------------------
 
 /** Raised when the layout below changes, so existing installs get it once more. */
-const LAYOUT_VERSION = 1;
+const LAYOUT_VERSION = 2;
+/** The left bar: Arkestra's own view container (Pinned, Projects, Boards, Chats, Agents, Machines). */
+const LEFT_CONTAINER = 'workbench.view.extension.arkestra';
 const LAYOUT_KEY = 'arkestra.layout.version';
 /** Bottom panel: only the terminals. */
 export const ARKESTRA_HIDDEN_PANEL_TABS: readonly string[] = [
@@ -115,6 +120,8 @@ class ArkestraLayout extends Disposable implements IWorkbenchContribution {
 	constructor(
 		@IStorageService private readonly storage: IStorageService,
 		@IViewDescriptorService private readonly views: IViewDescriptorService,
+		@IPaneCompositePartService private readonly panes: IPaneCompositePartService,
+		@IWorkbenchLayoutService private readonly layout: IWorkbenchLayoutService,
 	) {
 		super();
 		if (storage.getNumber(LAYOUT_KEY, StorageScope.PROFILE, 0) >= LAYOUT_VERSION) {
@@ -155,6 +162,9 @@ class ArkestraLayout extends Disposable implements IWorkbenchContribution {
 		if (target && away.length) {
 			this.views.moveViewsToContainer(away, target, undefined, 'arkestra');
 		}
+		// The left bar shows Arkestra's sections; a side bar left on Files (now on the right) would stay empty.
+		this.layout.setPartHidden(false, Parts.SIDEBAR_PART);
+		void this.panes.openPaneComposite(LEFT_CONTAINER, ViewContainerLocation.Sidebar);
 		this.storage.store(LAYOUT_KEY, LAYOUT_VERSION, StorageScope.PROFILE, StorageTarget.USER);
 		return true;
 	}
