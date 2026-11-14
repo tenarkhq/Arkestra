@@ -1,0 +1,13 @@
+{
+  "displayName": "Arkestra · Claude",
+  "description": "Claude in Arkestra rooms through your own Claude Code CLI, by subscription or API key.",
+  "auth": "How Claude signs in.",
+  "auth.auto": "The stored API key if there is one, otherwise the Claude Code login (subscription).",
+  "auth.subscription": "Always the Claude Code login (subscription).",
+  "auth.apiKey": "Always the stored API key.",
+  "command": "The Claude Code CLI command.",
+  "model": "Model for Claude's turns, for example opus or sonnet. Empty: the CLI's default.",
+  "permissionMode": "Claude Code permission mode for turns in a room.",
+  "setApiKey": "Set the Claude API key",
+  "clearApiKey": "Remove the Claude API key"
+}
