@@ -39,13 +39,17 @@ interface RoomThread {
 	threadId?: string;
 	/** The server that holds this thread loaded; another one has to resume it first. */
 	server?: RpcClient;
-	/** How many transcript messages this thread has already seen. */
-	seen: number;
+	/**
+	 * Ids of the transcript messages this thread has already seen. By id, not by count: in a
+	 * template room other agents write while this one works.
+	 */
+	seen: Set<string>;
 }
 
 /** Turns transcript messages into the text Codex reads, author by author. */
 export function formatMessages(messages: readonly Message[], selfId: string, includeOwn = false): string {
 	return messages
+		.filter(m => !m.to || m.to.includes(selfId))
 		.filter(m => includeOwn || !(m.author.kind === 'agent' && m.author.id === selfId))
 		.map(m => m.author.kind === 'user' ? `[${m.author.name}]\n${m.text}`
 			: m.author.kind === 'system' ? `[room] ${m.text}`
@@ -120,28 +124,27 @@ export class CodexAgent implements Agent {
 
 	async turn(input: TurnInput, onEvent: (event: AgentEvent) => void, signal: AbortSignal): Promise<void> {
 		const client = await this.ensureServer(await this.options.auth());
-		const room = this.threads.get(input.roomId) ?? { seen: 0 };
+		const room = this.threads.get(input.roomId) ?? { seen: new Set<string>() };
 		const threadParams = { cwd: this.options.cwd() ?? null, sandbox: this.options.sandbox, approvalPolicy: 'never', model: this.options.model ?? null };
 
 		if (room.threadId && room.server !== client) {
 			// The app-server restarted (crash, auth change): load the room's thread again.
 			await client.request('thread/resume', { threadId: room.threadId, ...threadParams, excludeTurns: true })
 				.then(() => { room.server = client; })
-				.catch(() => { room.threadId = undefined; room.seen = 0; });
+				.catch(() => { room.threadId = undefined; room.seen = new Set(); });
 		}
 		const freshThread = !room.threadId;
 		if (freshThread) {
 			const started = await client.request<{ thread: { id: string } }>('thread/start', { ...threadParams, developerInstructions: ROOM_PREAMBLE });
 			room.threadId = started.thread.id;
 			room.server = client;
-			room.seen = 0;
+			room.seen = new Set();
 		}
 		const threadId = room.threadId!;
 		// A new thread also gets Codex's own earlier answers.
-		const text = formatMessages(input.transcript.slice(room.seen), this.id, freshThread);
+		const text = formatMessages(input.transcript.filter(m => !room.seen.has(m.id)), this.id, freshThread);
 
 		let turnId: string | undefined;
-		let sawText = false;
 		let lastError: string | undefined;
 		let interruptSent = false;
 		const interrupt = () => {
@@ -162,7 +165,6 @@ export class CodexAgent implements Agent {
 						onEvent({ kind: 'tool', text: tool });
 					}
 				} else if (n.method === 'item/completed' && n.params.item?.type === 'agentMessage' && n.params.item.text) {
-					sawText = true;
 					onEvent({ kind: 'text', text: n.params.item.text });
 				} else if (n.method === 'error' && !n.params.willRetry) {
 					lastError = n.params.error?.message;
@@ -183,15 +185,15 @@ export class CodexAgent implements Agent {
 			}
 			const turn = await completed;
 			if (signal.aborted || turn.status === 'interrupted') {
-				room.seen = input.transcript.length;
+				input.transcript.forEach(m => room.seen.add(m.id));
 				this.threads.set(input.roomId, room);
 				return;
 			}
 			if (turn.status === 'failed') {
 				throw new Error(turn.error?.message || lastError || 'Codex turn failed');
 			}
-			// The thread now holds the whole transcript, and Codex's answer if the room records one.
-			room.seen = input.transcript.length + (sawText ? 1 : 0);
+			// The thread now holds the transcript it was given; its own answer is never sent back.
+			input.transcript.forEach(m => room.seen.add(m.id));
 			this.threads.set(input.roomId, room);
 		} finally {
 			signal.removeEventListener('abort', interrupt);

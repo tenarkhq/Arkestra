@@ -31,13 +31,17 @@ export interface AgentIdentity {
 
 interface RoomSession {
 	sessionId?: string;
-	/** How many transcript messages this CLI session has already seen. */
-	seen: number;
+	/**
+	 * Ids of the transcript messages this CLI session has already seen. By id, not by count:
+	 * in a template room other agents write while this one works.
+	 */
+	seen: Set<string>;
 }
 
 /** Turns transcript messages into the text Claude reads, author by author. */
 export function formatMessages(messages: readonly Message[], selfId: string, includeOwn = false): string {
 	return messages
+		.filter(m => !m.to || m.to.includes(selfId))
 		.filter(m => includeOwn || !(m.author.kind === 'agent' && m.author.id === selfId))
 		.map(m => m.author.kind === 'user' ? `[${m.author.name}]\n${m.text}`
 			: m.author.kind === 'system' ? `[room] ${m.text}`
@@ -118,8 +122,8 @@ export class ClaudeCodeAgent implements Agent {
 	}
 
 	async turn(input: TurnInput, onEvent: (event: AgentEvent) => void, signal: AbortSignal): Promise<void> {
-		const session = this.sessions.get(input.roomId) ?? { seen: 0 };
-		const fresh = input.transcript.slice(session.seen);
+		const session = this.sessions.get(input.roomId) ?? { seen: new Set<string>() };
+		const fresh = input.transcript.filter(m => !session.seen.has(m.id));
 		// A new CLI session (first turn, or after a restart) also gets Claude's own earlier answers.
 		const body = formatMessages(fresh, this.id, !session.sessionId);
 		const prompt = session.sessionId ? body : `${ROOM_PREAMBLE}\n\n${body}`;
@@ -187,8 +191,8 @@ export class ClaudeCodeAgent implements Agent {
 		if (!sawText && result?.text) {
 			onEvent({ kind: 'text', text: result.text });
 		}
-		// The CLI session now holds the whole transcript, and Claude's answer if the room records one.
-		session.seen = input.transcript.length + (sawText || result?.text ? 1 : 0);
+		// The CLI session now holds the transcript it was given; its own answer is never sent back.
+		input.transcript.forEach(m => session.seen.add(m.id));
 		this.sessions.set(input.roomId, session);
 	}
 

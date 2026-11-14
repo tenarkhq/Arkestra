@@ -48,8 +48,11 @@ interface RoomSession {
 	sessionId?: string;
 	/** The process that holds this session; another one has to load it first. */
 	peer?: JsonRpcPeer;
-	/** How many transcript messages the session has already seen. */
-	seen: number;
+	/**
+	 * Ids of the transcript messages the session has already seen. By id, not by count: in a
+	 * template room other agents write while this one works.
+	 */
+	seen: Set<string>;
 }
 
 interface Connection {
@@ -60,6 +63,7 @@ interface Connection {
 /** Turns transcript messages into the text the agent reads, author by author. */
 export function formatMessages(messages: readonly Message[], selfId: string, includeOwn = false): string {
 	return messages
+		.filter(m => !m.to || m.to.includes(selfId))
 		.filter(m => includeOwn || !(m.author.kind === 'agent' && m.author.id === selfId))
 		.map(m => m.author.kind === 'user' ? `[${m.author.name}]\n${m.text}`
 			: m.author.kind === 'system' ? `[room] ${m.text}`
@@ -125,7 +129,7 @@ export class AcpAgent implements Agent {
 
 	async turn(input: TurnInput, onEvent: (event: AgentEvent) => void, signal: AbortSignal): Promise<void> {
 		const { peer, info } = await this.connect();
-		const room = this.sessions.get(input.roomId) ?? { seen: 0 };
+		const room = this.sessions.get(input.roomId) ?? { seen: new Set<string>() };
 		const cwd = await this.options.cwd();
 
 		if (room.sessionId && room.peer !== peer) {
@@ -134,10 +138,10 @@ export class AcpAgent implements Agent {
 				// The history it replays is already in the room; no turn listens to it.
 				await peer.request('session/load', { sessionId: room.sessionId, cwd, mcpServers: [] })
 					.then(() => { room.peer = peer; })
-					.catch(() => { room.sessionId = undefined; room.seen = 0; });
+					.catch(() => { room.sessionId = undefined; room.seen = new Set(); });
 			} else {
 				room.sessionId = undefined;
-				room.seen = 0;
+				room.seen = new Set();
 			}
 		}
 		const fresh = !room.sessionId;
@@ -146,7 +150,7 @@ export class AcpAgent implements Agent {
 				const created = await peer.request<{ sessionId: string }>('session/new', { cwd, mcpServers: [] });
 				room.sessionId = created.sessionId;
 				room.peer = peer;
-				room.seen = 0;
+				room.seen = new Set();
 			} catch (e) {
 				if (e instanceof RpcError && e.code === AUTH_REQUIRED) {
 					this.needsSignIn = true;
@@ -157,18 +161,16 @@ export class AcpAgent implements Agent {
 			}
 		}
 		const sessionId = room.sessionId!;
-		const transcript = formatMessages(input.transcript.slice(room.seen), this.id, fresh);
+		const transcript = formatMessages(input.transcript.filter(m => !room.seen.has(m.id)), this.id, fresh);
 		const text = fresh ? `${roomPreamble(this.name)}\n\n${transcript}` : transcript;
 
 		// Message chunks are collected and handed to the room as whole messages: when a tool
 		// call starts, when the message id changes, and at the end of the turn.
 		let message = '';
 		let messageId: string | undefined;
-		let sawText = false;
 		const flush = () => {
 			if (message.trim()) {
 				onEvent({ kind: 'text', text: message.trim() });
-				sawText = true;
 			}
 			message = '';
 		};
@@ -209,13 +211,13 @@ export class AcpAgent implements Agent {
 			} else if (result.stopReason === 'max_tokens' || result.stopReason === 'max_turn_requests') {
 				onEvent({ kind: 'error', text: `${this.name} stopped: ${result.stopReason.replace(/_/g, ' ')}` });
 			}
-			// The session now holds the whole transcript, and the agent's answer if the room records one.
-			room.seen = input.transcript.length + (sawText && !signal.aborted ? 1 : 0);
+			// The session now holds the transcript it was given; its own answer is never sent back.
+			input.transcript.forEach(m => room.seen.add(m.id));
 			this.sessions.set(input.roomId, room);
 		} catch (e) {
 			flush();
 			if (signal.aborted) {
-				room.seen = input.transcript.length;
+				input.transcript.forEach(m => room.seen.add(m.id));
 				this.sessions.set(input.roomId, room);
 				return;
 			}
