@@ -8,7 +8,7 @@ import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { ActivityBoard, type AgentActivity } from './activity';
 import { AgentRegistry, type Agent, type ExistingSession, type InviteEntry } from './agent';
-import { AgentNotReadyError, Room, importedRoomState, newRoomState } from './room';
+import { AgentNotReadyError, Room, RoomOpener, importedRoomState, newRoomState } from './room';
 import { agentKind, cleanSessionMessages, continueOn, elsewhere, healAdopted, homeOf, isForeign, placeLocalSessions, type ListedSession } from './sessionHome';
 import { RoomStore } from './store';
 import { SessionFollow } from './sessionFollow';
@@ -184,17 +184,9 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		return room;
 	};
 
-	const open = async (id: string | undefined): Promise<Room | undefined> => {
-		if (!id) {
-			return undefined;
-		}
-		const cached = loaded.get(id);
-		if (cached) {
-			return cached;
-		}
-		const state = await store.load(id);
-		return state ? track(new Room(state, registry)) : undefined;
-	};
+	// One Room per thread: opens that overlap (the thread panel, the left bar, the details) share one load.
+	const opener = new RoomOpener(loaded, id => store.load(id), state => track(new Room(state, registry)));
+	const open = (id: string | undefined): Promise<Room | undefined> => opener.open(id);
 
 	const use = async (room: Room): Promise<Room> => {
 		if (current !== room) {

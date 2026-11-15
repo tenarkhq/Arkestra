@@ -8,7 +8,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { AgentRegistry, type Agent, type Readiness, type TurnInput } from '../agent';
-import { AgentNotReadyError, Room, newRoomState, type Message } from '../room';
+import { AgentNotReadyError, Room, RoomOpener, newRoomState, type Message, type RoomState } from '../room';
 import { RoomStore } from '../store';
 
 function fakeAgent(id: string, opts: { readiness?: Readiness; gate?: Promise<void>; seen?: Message[][] } = {}): Agent & { aborted: boolean } {
@@ -101,4 +101,32 @@ test('Plan mode reaches every agent\'s turn while it is on, and stops when it is
 	room.state.mode = undefined;
 	await room.say('go', () => { }, new AbortController().signal);
 	assert.deepEqual(modes, ['plan', undefined]);
+});
+
+test('one Room per thread: overlapping opens share the load; a Room made meanwhile is the one; a missing thread is none', async () => {
+	const loaded = new Map<string, { id: string; n: number }>();
+	let loads = 0;
+	let made = 0;
+	let release!: () => void;
+	const gate = new Promise<void>(r => { release = r; });
+	const opener = new RoomOpener(loaded, async id => { loads++; await gate; return id === 'gone' ? undefined : { id } as unknown as RoomState; }, state => { const r = { id: state.id, n: ++made }; loaded.set(r.id, r); return r; });
+	const a = opener.open('t1');
+	const b = opener.open('t1');
+	release();
+	const [ra, rb] = await Promise.all([a, b]);
+	assert.equal(ra, rb);
+	assert.equal(loads, 1);
+	assert.equal(made, 1);
+	assert.equal(await opener.open('t1'), ra, 'the loaded one, no load');
+	assert.equal(loads, 1);
+	assert.equal(await opener.open('gone'), undefined);
+	assert.equal(await opener.open(undefined), undefined);
+	// A Room made elsewhere while the store loaded (an import) wins over a second one.
+	let free!: () => void;
+	const later = new Promise<void>(r => { free = r; });
+	const racing = new RoomOpener(loaded, async id => { await later; return { id } as unknown as RoomState; }, () => { throw new Error('made twice'); });
+	const c = racing.open('t2');
+	loaded.set('t2', { id: 't2', n: 99 });
+	free();
+	assert.equal((await c)?.n, 99);
 });

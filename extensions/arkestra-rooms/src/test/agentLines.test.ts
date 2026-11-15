@@ -142,3 +142,9 @@ test('the composer label is cached with the session\'s model: a session read aga
 	// Another choice is its own label.
 	assert.equal(cache.get('r', 'claude', { model: 'haiku' }, { model }, async () => 'Haiku', () => { }), undefined);
 });
+
+test('a session folder missing on the machine says so in plain words', () => {
+	assert.equal(readableAgentError("sh: 1: cd: can't cd to /Users/roland/arktest", 'claude@tenark-claude').text,
+		"The session's folder /Users/roland/arktest does not exist on tenark-claude, so it cannot go on there. Open the session from the machine that has the folder.");
+	assert.match(readableAgentError('bash: line 1: cd: /x/y: No such file or directory', 'claude').text, /folder \/x\/y does not exist on this computer/);
+});

@@ -380,3 +380,36 @@ export function importedRoomState(agent: { id: string; name: string; historyVers
 	}
 	return state;
 }
+
+/**
+ * Opens threads so that each has one Room: opens that overlap while the store loads share that
+ * load, and a Room made meanwhile elsewhere (an import) is the one returned. Two Rooms of one
+ * thread would each save over the other (a live follow into one, the panel showing the other).
+ */
+export class RoomOpener<R extends { readonly id: string }> {
+	private readonly opening = new Map<string, Promise<R | undefined>>();
+
+	constructor(
+		private readonly loaded: ReadonlyMap<string, R>,
+		private readonly load: (id: string) => Promise<RoomState | undefined>,
+		private readonly make: (state: RoomState) => R,
+	) { }
+
+	open(id: string | undefined): Promise<R | undefined> {
+		if (!id) {
+			return Promise.resolve(undefined);
+		}
+		const known = this.loaded.get(id);
+		if (known) {
+			return Promise.resolve(known);
+		}
+		const pending = this.opening.get(id);
+		if (pending) {
+			return pending;
+		}
+		const load = this.load(id).then(state => this.loaded.get(id) ?? (state ? this.make(state) : undefined));
+		this.opening.set(id, load);
+		void load.finally(() => this.opening.delete(id)).catch(() => undefined);
+		return load;
+	}
+}

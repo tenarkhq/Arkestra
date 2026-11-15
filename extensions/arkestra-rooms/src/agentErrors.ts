@@ -53,6 +53,12 @@ export function readableAgentError(raw: string, agentId: string, machine?: strin
 			return { text: `${product} is not installed on ${where}. Install it there or choose another machine.`, missing: true };
 		}
 	}
+	// The session's folder is not on the machine (`sh: 1: cd: can't cd to /x`, `cd: /x: No such file or directory`).
+	const folder = /\bcd: (?:can't cd to (\S.*?)|(\S.*?): No such file or directory)\s*$/.exec(text);
+	if (folder) {
+		const where = local ? 'this computer' : machine ?? agentId.slice(agentId.indexOf('@') + 1);
+		return { text: `The session's folder ${folder[1] ?? folder[2]} does not exist on ${where}, so it cannot go on there. Open the session from the machine that has the folder.` };
+	}
 	return { text };
 }
 
