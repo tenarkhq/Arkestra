@@ -18,7 +18,7 @@ import { statSync } from 'node:fs';
 import { progressItems, taskRooms, type TaskRoom } from './tasks';
 import { TURN_TEXT, turnState, workHtml } from './work';
 import { ActivityView } from './activityView';
-import { chipLabel, choiceLabel, currentModelLabel, effortsFor, fitChoice, type Choice } from './choice';
+import { choiceLabel, currentModelLabel, effortsFor, fitChoice, type Choice } from './choice';
 import { threadListItem, threadSnapshot, type ThreadListItem, type ThreadSnapshot } from './threadSnapshot';
 import type { AgentChoices } from './agent';
 import { templateForm } from './templateForm';

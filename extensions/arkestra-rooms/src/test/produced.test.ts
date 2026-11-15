@@ -105,7 +105,7 @@ test('a room keeps what its turns, its followed session and its imported history
 	const followed = new Room(imported, registry);
 	let touched = 0;
 	followed.onDidChange(() => touched++);
-	followed.followed('claude', [], 'c', [claudeTool('w10', 'Write', { file_path: '/p/b.md', content: '# B' })]);
+	followed.followed('claude', [], 'c', undefined, [claudeTool('w10', 'Write', { file_path: '/p/b.md', content: '# B' })]);
 	assert.deepEqual(followed.state.produced?.map(p => p.title), ['out.svg', 'b.md']);
 	assert.equal(touched, 1);
 });

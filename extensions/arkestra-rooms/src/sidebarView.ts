@@ -6,7 +6,6 @@
 
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
-import type { ExistingSession } from './agent';
 import type { ListedSession } from './sessionHome';
 import { addSection, deleteSection, keepThreads, layoutThreads, matches, moveSection, moveThread, parseSections, renameSection, sectionOf, sectionsFromCategories, shiftSection, type Section } from './sections';
 import { MachinesPage } from './machinesPage';

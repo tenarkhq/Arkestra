@@ -236,6 +236,8 @@ test('the popover: rows escaped, the chosen one checked, each choice carries its
 	assert.ok(page.includes('.pop {'));
 	assert.ok(page.includes("vscode.postMessage({ type: 'menu', anchor: c.key, ...c.menu })"));
 	assert.ok(page.includes("m.type === 'menu'"));
+});
+
 test('a table cell keeps the <br> line breaks agents write, and nothing else becomes HTML', () => {
 	const html = renderMarkdown('| Task / PR | Státusz |\n|---|---|\n| Task: T086<br>PR: –<br/>branch: t086 | fut<BR>~00:20 <b>x</b> |');
 	assert.match(html, /<td>Task: T086<br>PR: –<br>branch: t086<\/td>/);

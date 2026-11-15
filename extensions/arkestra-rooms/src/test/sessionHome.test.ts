@@ -156,9 +156,9 @@ test('the composer\'s model: the one chosen here, else the session\'s, said the 
 	assert.equal(sessionModelLabel('gpt-5-codex'), 'gpt-5-codex');
 	const choices = { models: [{ id: 'opus', label: 'Opus' }, { id: 'sonnet', label: 'Sonnet' }] };
 	assert.equal(currentModelLabel(undefined, choices, 'claude-opus-5-5'), 'Opus 5.5');
-	assert.equal(currentModelLabel({ effort: 'high' }, choices, 'claude-opus-5-5'), 'Opus 5.5 · high');
+	assert.equal(currentModelLabel({ effort: 'high' }, choices, 'claude-opus-5-5'), 'Opus 5.5 · High');
 	assert.equal(currentModelLabel({ model: 'sonnet' }, choices, 'claude-opus-5-5'), 'Sonnet');
-	assert.equal(currentModelLabel(undefined, choices, undefined), '');
+	assert.equal(currentModelLabel(undefined, choices, undefined), 'Default');
 });
 
 test('a thread opened on this machine\'s copy moves to the server once, reads the session there and catches up; an older import reads again once', async () => {
