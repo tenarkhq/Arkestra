@@ -34,6 +34,7 @@ function withActions<T extends Agent>(agent: T, actionsFor: (readiness: Readines
 		turn: (input, onEvent, signal) => agent.turn(input, onEvent, signal),
 		...(agent.choices ? { choices: () => agent.choices!() } : {}),
 		...(agent.existingSessions ? { existingSessions: () => agent.existingSessions!() } : {}),
+		...(agent.cloud ? { cloud: agent.cloud } : {}),
 		...(agent.sessionHistory ? { sessionHistory: (id: string) => agent.sessionHistory!(id) } : {}),
 		...(agent.historyVersion !== undefined ? { historyVersion: agent.historyVersion } : {}),
 		...(agent.adoptSession ? { adoptSession: (roomId: string, session: { readonly id: string; readonly cwd?: string }, seen: readonly string[]) => agent.adoptSession!(roomId, session, seen) } : {}),

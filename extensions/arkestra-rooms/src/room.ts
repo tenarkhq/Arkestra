@@ -83,6 +83,8 @@ export function followSessionName(state: RoomState, sessions: readonly { readonl
 /** An existing CLI session a thread continues (AR39). */
 export interface AdoptedSession {
 	readonly session: string;
+	/** The session's id in the claude.ai account (`cse_…`): its name and archive follow the Claude app's. */
+	readonly bridge?: string;
 	readonly cwd?: string;
 	readonly upTo: string;
 	readonly cursor?: string;
@@ -396,7 +398,7 @@ export function importedRoomState(agent: { id: string; name: string; historyVers
 	for (const e of entries) {
 		state.messages.push(sessionMessage(agent, e, now));
 	}
-	const link: AdoptedSession = { session: session.id, ...(session.cwd ? { cwd: session.cwd } : {}), upTo: state.messages.at(-1)!.id, ...(cursor !== undefined ? { cursor } : {}), ...(agent.historyVersion !== undefined ? { version: agent.historyVersion } : {}) };
+	const link: AdoptedSession = { session: session.id, ...(session.bridge ? { bridge: session.bridge } : {}), ...(session.cwd ? { cwd: session.cwd } : {}), upTo: state.messages.at(-1)!.id, ...(cursor !== undefined ? { cursor } : {}), ...(agent.historyVersion !== undefined ? { version: agent.historyVersion } : {}) };
 	state.adopted = { [agent.id]: withMeta(link, meta) };
 	const produced = lines?.length ? artifactsFromSessionLines(lines, agent.id) : [];
 	if (produced.length) {

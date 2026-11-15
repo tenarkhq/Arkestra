@@ -189,3 +189,35 @@ test('a session another app runs now is not started a second time; a follow of i
 	assert.equal(runningElsewhere(`77 /usr/bin/node /home/r/.local/bin/claude --resume ${id}`, id), 'another Claude Code');
 	assert.match(openElsewhere('the Claude desktop app', 'tenark-claude').message, /open in the Claude desktop app on tenark-claude/);
 });
+
+test('claude.ai sessions: the sign-in is read, never refreshed; names and archive state come from the account list', async () => {
+	const { CloudClient, parseCredentials, cloudSession } = await import('../cloud');
+	assert.equal(parseCredentials('not json'), undefined);
+	assert.deepEqual(parseCredentials(JSON.stringify({ claudeAiOauth: { accessToken: 'tok', expiresAt: 5000 } })), { token: 'tok', expiresAt: 5000 });
+	assert.equal(cloudSession({ id: 'session_x' }), undefined);
+	assert.deepEqual(cloudSession({ id: 'cse_1', title: ' Arkestra ', status: 'archived', last_event_at: '2026-11-15T13:42:59Z' }), { id: 'cse_1', title: 'Arkestra', archived: true, at: '2026-11-15T13:42:59Z' });
+	const calls: { url: string; method: string; auth: string; body?: string }[] = [];
+	const answers = [
+		{ status: 200, body: { data: [{ id: 'cse_1', title: 'A', status: 'active' }], next_cursor: 'c2' } },
+		{ status: 200, body: { data: [{ id: 'cse_2', title: 'B', status: 'archived' }] } },
+		{ status: 409, body: {} },
+		{ status: 200, body: {} },
+	];
+	const fetchFn = async (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => {
+		calls.push({ url, method: init.method, auth: init.headers.Authorization, ...(init.body ? { body: init.body } : {}) });
+		const a = answers.shift()!;
+		return { status: a.status, json: async () => a.body, text: async () => JSON.stringify(a.body) };
+	};
+	let reads = 0;
+	const client = new CloudClient(async () => { reads++; return JSON.stringify({ claudeAiOauth: { accessToken: 'tok', expiresAt: 10_000_000 } }); }, 'prd', fetchFn, () => 1000);
+	assert.deepEqual((await client.list()).map(s => [s.id, s.archived]), [['cse_1', false], ['cse_2', true]]);
+	await client.archive('cse_2'); // already archived (409): fine
+	await client.rename('cse_1', 'Új név');
+	assert.equal(reads, 1, 'the sign-in is read once while it is valid');
+	assert.deepEqual(calls.map(c => `${c.method} ${c.url.replace('https://api.anthropic.com', '')}`), ['GET /v1/code/sessions?limit=100', 'GET /v1/code/sessions?limit=100&cursor=c2', 'POST /v1/code/sessions/cse_2/archive', 'PUT /v1/code/sessions/cse_1']);
+	assert.equal(calls[3].body, JSON.stringify({ title: 'Új név' }));
+	assert.equal(calls[0].auth, 'Bearer tok');
+	await assert.rejects(client.archive('cse_1; rm'), /not a claude.ai session id/);
+	const stale = new CloudClient(async () => JSON.stringify({ claudeAiOauth: { accessToken: 'old', expiresAt: 1000 } }), 'prd', fetchFn, () => 1000);
+	await assert.rejects(stale.list(), /out of date/);
+});

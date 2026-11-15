@@ -87,6 +87,8 @@ export interface Agent {
 	choices?(): Promise<AgentChoices>;
 	/** The sessions its CLI already has on its machine (AR39); an agent without it has none to offer. */
 	existingSessions?(): Promise<readonly ExistingSession[]>;
+	/** The sessions of the agent's claude.ai account (the desktop app's and the phone's list); none: it has none. */
+	readonly cloud?: CloudSessions;
 	/** The messages of one of those sessions. */
 	sessionHistory?(sessionId: string): Promise<readonly SessionEntry[] | SessionHistory>;
 	/** Goes up when the agent reads more out of its session files than before: older imports read again once. */
@@ -113,6 +115,8 @@ export interface ExistingSession {
 	readonly cwd?: string;
 	/** ISO time of its last activity. */
 	readonly updatedAt: string;
+	/** Its id in the claude.ai account (`cse_…`) when the desktop app or the phone has it too. */
+	readonly bridge?: string;
 }
 
 /** A session's messages as read, and where the live follow goes on from. */
@@ -171,3 +175,20 @@ export interface PermissionsApi {
 	readonly onDidChange: (listener: () => void) => { dispose(): void };
 }
 
+
+/** A session of the claude.ai account, as the desktop app and the phone list it. */
+export interface CloudSession {
+	readonly id: string;
+	readonly title: string;
+	readonly archived: boolean;
+	/** ISO time of its last activity, when known. */
+	readonly at?: string;
+}
+
+/** The claude.ai account's sessions: archiving, restoring or renaming one there shows in every app. */
+export interface CloudSessions {
+	list(): Promise<readonly CloudSession[]>;
+	archive(id: string): Promise<void>;
+	unarchive(id: string): Promise<void>;
+	rename(id: string, title: string): Promise<void>;
+}

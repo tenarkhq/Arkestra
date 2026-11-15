@@ -41,9 +41,11 @@ test('listing: the latest name wins (Claude Code writes it again near the end); 
 		`\u001eFILE 1700000300 -srv/${ID(1)}.jsonl`, user('first words'), JSON.stringify({ type: 'custom-title', customTitle: 'Old name' }),
 		JSON.stringify({ type: 'custom-title', customTitle: 'Old name' }), JSON.stringify({ type: 'agent-name', agentName: 'Arkestra' }), JSON.stringify({ type: 'custom-title', customTitle: 'Arkestra' }),
 		`\u001eFILE 1700000200 -srv/${ID(2)}.jsonl`, user('hello there'), JSON.stringify({ type: 'agent-name', agentName: 'Átadó beolvasása' }),
+		'"bridgeSessionId":"cse_019UZiid5kkFdWcwMSXfYYca"',
 		`\u001eFILE 1700000100 -srv/${ID(3)}.jsonl`, user('just a chat'),
 	].join('\n');
 	assert.deepEqual(parseListing(out).map(s => s.title), ['Arkestra', 'Átadó beolvasása', 'just a chat']);
+	assert.deepEqual(parseListing(out).map(s => s.bridge ?? ''), ['', 'cse_019UZiid5kkFdWcwMSXfYYca', '']);
 });
 
 test('history: what the user wrote and Claude\'s answers, one answer per request; tool steps and side chains left out', () => {

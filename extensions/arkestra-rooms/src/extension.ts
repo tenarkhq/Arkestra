@@ -7,8 +7,8 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { ActivityBoard, type AgentActivity } from './activity';
-import { AgentRegistry, type Agent, type ExistingSession, type InviteEntry } from './agent';
-import { AgentNotReadyError, Room, RoomOpener, followSessionName, importedRoomState, newRoomState, type Message } from './room';
+import { AgentRegistry, type Agent, type CloudSession, type CloudSessions, type ExistingSession, type InviteEntry } from './agent';
+import { AgentNotReadyError, Room, RoomOpener, followSessionName, importedRoomState, newRoomState, type Message, type RoomState } from './room';
 import { agentKind, cleanSessionMessages, continueOn, elsewhere, healAdopted, homeOf, isForeign, placeLocalSessions, type ListedSession } from './sessionHome';
 import { RoomStore } from './store';
 import { SessionFollow } from './sessionFollow';
@@ -127,8 +127,110 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	const sessionHome = async (agentId: string, session: { readonly id: string; readonly cwd?: string }) =>
 		isForeign(agentId, session.cwd, localFolder) ? homeOf(agentId, session, localFolder, await twins(agentId)) : undefined;
 	/** This machine's sessions without the copies an SSH machine has; a copy nobody has is marked. */
+	// The claude.ai account's view of the sessions (the desktop app's and the phone's list): their
+	// names and whether they are archived, the same in Arkestra. Asked through an SSH machine's
+	// agent first (no keychain question on this computer), at most every 30 s.
+	const cloudRows = new Map<string, CloudSession>();
+	const bridgeOf = new Map<string, string>();
+	let cloud: CloudSessions | undefined;
+	let cloudAt = 0;
+	let cloudRead: Promise<void> = Promise.resolve();
+	const roomBridges = (state: RoomState): string[] => Object.values(state.adopted ?? {}).map(link => link.bridge ?? bridgeOf.get(link.session)).filter((b): b is string => !!b);
+	const syncWithCloud = async (): Promise<void> => {
+		let changed = false;
+		for (const stored of await store.list()) {
+			const room = loaded.get(stored.id);
+			const state = room?.state ?? stored;
+			const row = roomBridges(state).map(b => cloudRows.get(b)).find(Boolean);
+			if (!row) {
+				continue;
+			}
+			let edit = false;
+			if (!!state.archived !== row.archived) {
+				if (row.archived) {
+					state.archived = true;
+					delete state.pinned;
+				} else {
+					delete state.archived;
+				}
+				edit = true;
+			}
+			if (row.title && row.title !== state.title) {
+				state.title = row.title;
+				edit = true;
+			}
+			if (edit) {
+				await store.save(state);
+				room?.touch();
+				changed = true;
+			}
+		}
+		if (changed) {
+			refreshThreadsLater();
+		}
+	};
+	const readCloud = (): Promise<void> => {
+		if (Date.now() - cloudAt < 30_000) {
+			return cloudRead;
+		}
+		cloudAt = Date.now();
+		cloudRead = (async () => {
+			const agents = registry.all().filter(a => a.cloud);
+			for (const agent of [...agents.filter(a => a.id.includes('@')), ...agents.filter(a => !a.id.includes('@'))]) {
+				try {
+					const rows = await agent.cloud!.list();
+					cloudRows.clear();
+					for (const row of rows) {
+						cloudRows.set(row.id, row);
+					}
+					cloud = agent.cloud;
+					await syncWithCloud();
+					return;
+				} catch {
+					// the next machine's sign-in
+				}
+			}
+		})();
+		return cloudRead;
+	};
+	/** Archive, restore or rename a thread's sessions in the claude.ai account too; the error, if one failed. */
+	const tellCloud = async (state: RoomState, act: (c: CloudSessions, id: string) => Promise<void>, local: (row: CloudSession) => CloudSession): Promise<string | undefined> => {
+		const bridges = roomBridges(state);
+		if (!bridges.length) {
+			return undefined;
+		}
+		await readCloud();
+		if (!cloud) {
+			return vscode.l10n.t('no machine here has a claude.ai sign-in');
+		}
+		try {
+			for (const b of bridges) {
+				await act(cloud, b);
+				const row = cloudRows.get(b);
+				if (row) {
+					cloudRows.set(b, local(row));
+				}
+			}
+			return undefined;
+		} catch (error) {
+			return error instanceof Error ? error.message : String(error);
+		}
+	};
 	const listedSessions = async (agent: Agent, fresh = false): Promise<readonly ListedSession[]> => {
-		const sessions = await sessionsOf(agent, fresh);
+		const read = await sessionsOf(agent, fresh);
+		for (const session of read) {
+			if (session.bridge) {
+				bridgeOf.set(session.id, session.bridge);
+			}
+		}
+		if (read.some(session => session.bridge)) {
+			await readCloud();
+		}
+		// What the desktop app and the phone show: archived there is archived here, their name is the name.
+		const sessions = read.flatMap(session => {
+			const row = session.bridge ? cloudRows.get(session.bridge) : undefined;
+			return row?.archived ? [] : row?.title && row.title !== session.title ? [{ ...session, title: row.title }] : [session];
+		});
 		void followNames(sessions);
 		if (agent.id.includes('@') || !sessions.some(s => isForeign(agent.id, s.cwd, localFolder))) {
 			return sessions;
@@ -1048,8 +1150,49 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.pin', arg => editRoom(arg, room => { room.state.pinned = true; })),
 		vscode.commands.registerCommand('arkestra.rooms.unpin', arg => editRoom(arg, room => { delete room.state.pinned; })),
-		vscode.commands.registerCommand('arkestra.rooms.archive', arg => editRoom(arg, room => { room.state.archived = true; delete room.state.pinned; })),
-		vscode.commands.registerCommand('arkestra.rooms.unarchive', arg => editRoom(arg, room => { delete room.state.archived; })),
+		vscode.commands.registerCommand('arkestra.rooms.archive', async arg => {
+			const room = await open(threadId(arg));
+			if (!room) {
+				return;
+			}
+			const failed = await tellCloud(room.state, (c, id) => c.archive(id), row => ({ ...row, archived: true }));
+			if (failed) {
+				void vscode.window.showWarningMessage(vscode.l10n.t('Archived here, but not in the Claude app: {0}', failed));
+			}
+			await editRoom(room.id, r => { r.state.archived = true; delete r.state.pinned; });
+		}),
+		vscode.commands.registerCommand('arkestra.rooms.unarchive', async arg => {
+			const room = await open(threadId(arg));
+			if (!room) {
+				return;
+			}
+			// Archived in the Claude app too: restored there first, else it would come back archived.
+			const failed = await tellCloud(room.state, (c, id) => c.unarchive(id), row => ({ ...row, archived: false }));
+			if (failed) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('The thread could not be restored in the Claude app ({0}). Restore it there; Arkestra follows.', failed));
+				return;
+			}
+			await editRoom(room.id, r => { delete r.state.archived; });
+		}),
+		// A session row no thread continues: archived in the Claude app, so it leaves every list.
+		vscode.commands.registerCommand('arkestra.rooms.archiveSession', async (bridge: unknown) => {
+			if (typeof bridge !== 'string') {
+				return;
+			}
+			await readCloud();
+			try {
+				if (!cloud) {
+					throw new Error(vscode.l10n.t('no machine here has a claude.ai sign-in'));
+				}
+				await cloud.archive(bridge);
+				const row = cloudRows.get(bridge);
+				cloudRows.set(bridge, { ...(row ?? { id: bridge, title: '' }), archived: true });
+				sessionLists.clear();
+				refreshThreads();
+			} catch (error) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('The session could not be archived in the Claude app: {0}', error instanceof Error ? error.message : String(error)));
+			}
+		}),
 		vscode.commands.registerCommand('arkestra.rooms.delete', async (arg: unknown) => {
 			const room = await open(threadId(arg));
 			if (!room) {
@@ -1082,6 +1225,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			const room = await open(threadId(arg));
 			const title = typeof name === 'string' ? name.trim() : '';
 			if (room && title) {
+				const failed = await tellCloud(room.state, (c, id) => c.rename(id, title), row => ({ ...row, title }));
+				if (failed) {
+					void vscode.window.showWarningMessage(vscode.l10n.t('Renamed here, but not in the Claude app: {0}', failed));
+				}
 				await editRoom(room.id, r => { r.state.title = title; r.state.renamed = true; });
 			}
 		}),

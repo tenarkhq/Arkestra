@@ -350,6 +350,12 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 				if (m.action === 'delete' && text(m.id) && this.sessionRows.has(m.id)) {
 					return; // a session no thread continues stays on its machine
 				}
+				// A session row the Claude app lists too is archived there, without a thread here first.
+				const bridge = m.action === 'archive' && text(m.id) ? this.sessionRows.get(m.id)?.session.bridge : undefined;
+				if (bridge) {
+					await vscode.commands.executeCommand('arkestra.rooms.archiveSession', bridge);
+					return;
+				}
 				// A session row is continued in a thread first; the thread then gets the action.
 				const room = command && text(m.id) ? await this.roomOf(m.id) : undefined;
 				if (command && room) {

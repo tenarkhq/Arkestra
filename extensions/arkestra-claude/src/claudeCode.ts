@@ -8,6 +8,9 @@ import { homedir } from 'node:os';
 import type { Agent, AgentChoices, AgentEvent, ExistingSession, Usage, Message, Readiness, SessionEntry, SessionHistory, SessionMeta, TurnInput, WorkUpdate } from './rooms';
 import { ClaudeHistory, LIST_SCRIPT, claudeMeta, claudePiece, claudeToolLine, localHistory, localListing, localSessionPath, locateScript, parseListing, readScript } from './sessions';
 import { followLocal, followRemote } from './follow';
+import { CloudClient, CREDENTIALS_SCRIPT } from './cloud';
+import { readFile as readFileAsync } from 'node:fs/promises';
+import * as nodePath from 'node:path';
 
 export type AuthMode = 'subscription' | 'apiKey';
 
@@ -244,8 +247,12 @@ export class ClaudeCodeAgent implements Agent {
 	 */
 	readonly historyVersion = 3;
 
+	/** The claude.ai account's sessions, with the sign-in Claude Code keeps on this agent's machine. */
+	readonly cloud: CloudClient;
+
 	constructor(private readonly options: ClaudeCodeOptions) {
 		({ id: this.id, name: this.name, where: this.where } = options.identity ?? { id: 'claude', name: 'Claude', where: 'local' });
+		this.cloud = new CloudClient(() => this.credentials(), this.options.spawn ? this.where : 'this computer');
 	}
 
 	get detail(): string {
@@ -328,6 +335,25 @@ export class ClaudeCodeAgent implements Agent {
 		return this.options.spawn
 			? followRemote(this.options.spawn, locateScript(sessionId), options)
 			: followLocal(() => localSessionPath(homedir(), sessionId), options);
+	}
+
+	/** Claude Code's credentials on the agent's machine: its file, else (macOS) its keychain item. */
+	private async credentials(): Promise<string> {
+		if (this.options.spawn) {
+			return this.shell(CREDENTIALS_SCRIPT, 15_000);
+		}
+		const file = await readFileAsync(nodePath.join(homedir(), '.claude', '.credentials.json'), 'utf8').catch(() => undefined);
+		if (file !== undefined || process.platform !== 'darwin') {
+			return file ?? '';
+		}
+		return new Promise<string>(resolve => {
+			const child = nodeSpawn('security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { stdio: ['ignore', 'pipe', 'ignore'] });
+			let text = '';
+			child.stdout?.setEncoding('utf8');
+			child.stdout?.on('data', (c: string) => { text += c; });
+			child.on('error', () => resolve(''));
+			child.on('close', () => resolve(text));
+		});
 	}
 
 	/** A POSIX script on the agent's machine (an SSH machine); resolves to its output. */

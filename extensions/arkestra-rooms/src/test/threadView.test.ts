@@ -289,3 +289,9 @@ test('new chat: only a chosen card shows its tick, and with nothing kept the fir
 	assert.ok(page.includes('.chk svg { width: 11px; height: 11px; visibility: hidden; }') && page.includes('.card.on .chk svg { visibility: visible; }'));
 	assert.ok(page.includes('if (!selected.length) { const first = cards.find(c => c.ready); if (first) { selected = [first.id]; } }'));
 });
+
+test('a bold bare link stays a working link: the ** around it is bold, not part of the address', () => {
+	const html = renderMarkdown('Kész, a vásznon: **https://claude.ai/artifact/5UxaAw2bVtbp54yDBeeXjQ**');
+	assert.ok(html.includes('<strong><a href="https://claude.ai/artifact/5UxaAw2bVtbp54yDBeeXjQ">https://claude.ai/artifact/5UxaAw2bVtbp54yDBeeXjQ</a></strong>'), html);
+	assert.ok(renderMarkdown('see https://x.io/a_b.').includes('href="https://x.io/a_b"'));
+});

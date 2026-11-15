@@ -64,7 +64,8 @@ function inline(text: string): string {
 		links.push(`<a href="${escapeHtml(href)}">${inlineRest(escapeHtml(label))}</a>`);
 		return `\u0001${links.length - 1}\u0001`;
 	});
-	s = s.replace(/https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"]/g, url => {
+	// A bare URL ends before closing punctuation and markup around it (`**https://…**` is a bold link).
+	s = s.replace(/https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"*_~]/g, url => {
 		links.push(`<a href="${escapeHtml(url)}">${escapeHtml(url)}</a>`);
 		return `\u0001${links.length - 1}\u0001`;
 	});

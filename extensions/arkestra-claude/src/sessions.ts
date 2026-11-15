@@ -32,6 +32,8 @@ const CANDIDATES = /"type":"(summary|user|custom-title)"/;
 const TAIL_BYTES = 131_072;
 /** The lines that hold the name the person gave (custom-title) or the apps show (agent-name). */
 const NAMES = /"type":"(custom-title|agent-name)"/;
+/** The session's id in the claude.ai account, on its `bridge-session` lines. */
+const BRIDGE = /"bridgeSessionId":"cse_[A-Za-z0-9]+"/g;
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -53,6 +55,7 @@ export const LIST_SCRIPT = [
 	`  printf '\\036FILE %s %s\\n' "$(date -r "$f" +%s 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)" "$f"`,
 	`  head -c ${HEAD_BYTES} "$f" | grep -E '"type":"(summary|user|custom-title)"' | head -n 8`,
 	`  tail -c ${TAIL_BYTES} "$f" | grep -E '"type":"(custom-title|agent-name)"' | tail -n 4`,
+	`  tail -c ${TAIL_BYTES} "$f" | grep -o -E '"bridgeSessionId":"cse_[A-Za-z0-9]+"' | tail -n 1`,
 	'done',
 ].join('\n');
 
@@ -118,7 +121,12 @@ export async function localListing(home: string): Promise<string> {
 			const from = Math.max(0, size - TAIL_BYTES);
 			const end = Buffer.alloc(size - from);
 			const read = await handle.read(end, 0, end.length, from);
-			lines.push(...end.subarray(0, read.bytesRead).toString('utf8').split('\n').filter(l => NAMES.test(l)).slice(-4));
+			const tail = end.subarray(0, read.bytesRead).toString('utf8');
+			lines.push(...tail.split('\n').filter(l => NAMES.test(l)).slice(-4));
+			const bridge = [...tail.matchAll(BRIDGE)].at(-1)?.[0];
+			if (bridge) {
+				lines.push(bridge);
+			}
 			parts.push(`${MARK}${f.mtime} ${f.rel}\n${lines.join('\n')}`);
 		} finally {
 			await handle.close();
@@ -217,10 +225,16 @@ export function parseListing(out: string): ExistingSession[] {
 		}
 		let title: string | undefined;
 		let named: string | undefined;
+		let bridge: string | undefined;
 		let summary: string | undefined;
 		let first: string | undefined;
 		let cwd: string | undefined;
 		for (const line of lines) {
+			const id = /^"bridgeSessionId":"(cse_[A-Za-z0-9]+)"$/.exec(line.trim())?.[1];
+			if (id) {
+				bridge = id;
+				continue;
+			}
 			const data = line.trim() ? readLine(line) : undefined;
 			// The latest name wins: Claude Code appends a new line on every rename.
 			if (data?.type === 'custom-title' && typeof data.customTitle === 'string' && data.customTitle.trim()) {
@@ -238,7 +252,7 @@ export function parseListing(out: string): ExistingSession[] {
 			continue;
 		}
 		const line = (s: string) => { const l = s.split('\n')[0].trim(); return l.length > 80 ? l.slice(0, 79).trimEnd() + '…' : l; };
-		sessions.push({ id, title: line(title || named || summary || first || id.slice(0, 8)), ...(cwd ? { cwd } : {}), updatedAt: new Date(Number(m[1]) * 1000).toISOString() });
+		sessions.push({ id, title: line(title || named || summary || first || id.slice(0, 8)), ...(cwd ? { cwd } : {}), ...(bridge ? { bridge } : {}), updatedAt: new Date(Number(m[1]) * 1000).toISOString() });
 	}
 	return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
