@@ -74,8 +74,8 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 		if (action === 'close') {
 			void vscode.commands.executeCommand('workbench.action.closeAuxiliaryBar');
 		} else if (action === 'open') {
-			// Opening the bar must not take the composer's focus.
-			void Promise.resolve(vscode.commands.executeCommand('workbench.action.toggleAuxiliaryBar'))
+			// Only opens (a toggle would close a bar that is already open but not reported yet); the composer keeps the focus.
+			void Promise.resolve(vscode.commands.executeCommand(`${DETAILS_VIEW_ID}.focus`))
 				.then(() => vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup'), () => undefined);
 		}
 		this.schedule(0);

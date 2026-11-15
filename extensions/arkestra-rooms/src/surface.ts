@@ -26,8 +26,6 @@ export type BarAction = 'close' | 'open' | undefined;
 export class DetailsFollow {
 	private surface: Surface = 'editor';
 	private visible = false;
-	/** The bar was closed here for a page; it opens again on the next thread. */
-	private closedForPage = false;
 	/** The user closed the bar while a thread showed: it stays closed until he opens it. */
 	private userClosed = false;
 	/** A hide that comes from the close asked for here, not from the user. */
@@ -41,7 +39,6 @@ export class DetailsFollow {
 		this.visible = visible;
 		if (visible) {
 			this.userClosed = false;
-			this.closedForPage = false;
 			this.expectHide = false;
 		} else if (this.expectHide) {
 			this.expectHide = false;
@@ -58,12 +55,12 @@ export class DetailsFollow {
 			return undefined;
 		}
 		if (surface === 'page' && this.visible) {
-			this.closedForPage = true;
 			this.expectHide = true;
 			return 'close';
 		}
-		if (surface === 'thread' && this.closedForPage) {
-			this.closedForPage = false;
+		// A thread shows its details unless the user closed them on a thread; also after a restart on a page,
+		// when nothing here remembers that the bar was closed for that page.
+		if (surface === 'thread') {
 			return !this.visible && !this.userClosed ? 'open' : undefined;
 		}
 		return undefined;

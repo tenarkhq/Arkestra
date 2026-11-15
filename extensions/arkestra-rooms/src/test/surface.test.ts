@@ -29,6 +29,14 @@ test('a board closes the right bar and the thread opens it again; the thread\'s 
 	assert.equal(f.showsThread(), true);
 });
 
+test('after a restart on a page the bar is closed: the first thread opens it', () => {
+	const f = new DetailsFollow();
+	assert.equal(f.changed('page'), undefined); // restored on Remote Control, bar closed
+	assert.equal(f.changed('thread'), 'open');
+	f.visibility(true);
+	assert.equal(f.changed('thread'), undefined);
+});
+
 test('closed by the user on a thread: a page and back keep it closed until he opens it', () => {
 	const f = new DetailsFollow();
 	f.changed('thread');
