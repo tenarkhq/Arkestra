@@ -132,6 +132,9 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	// names and whether they are archived, the same in Arkestra. Asked through an SSH machine's
 	// agent first (no keychain question on this computer), at most every 30 s.
 	const cloudRows = new Map<string, CloudSession>();
+	/** The account's list was read again (its context fills too). */
+	const cloudReadDone = new vscode.EventEmitter<void>();
+	context.subscriptions.push(cloudReadDone);
 	const bridgeOf = new Map<string, string>();
 	let cloud: CloudSessions | undefined;
 	let cloudAt = 0;
@@ -186,6 +189,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 					}
 					cloud = agent.cloud;
 					await syncWithCloud();
+					cloudReadDone.fire();
 					return;
 				} catch {
 					// the next machine's sign-in
@@ -904,6 +908,13 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}
 		return known?.limits;
 	};
+	// The right panel shows the context fill the account reports as soon as the list is read.
+	context.subscriptions.push(cloudReadDone.event(() => {
+		const roomId = threads.activeRoomId();
+		if (roomId) {
+			threadChanged.fire(roomId);
+		}
+	}));
 	context.subscriptions.push(threads, new DetailsView({
 		registry, activity, onDidChangeThread: threadChanged.event, threads, open,
 		changes: async roomId => await changesUi?.checkpoints()?.changes(roomId) ?? [],
