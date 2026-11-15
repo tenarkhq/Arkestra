@@ -144,6 +144,18 @@ class ArkestraLayout extends Disposable implements IWorkbenchContribution {
 				}));
 			}
 		}
+		// Every start: VS Code restores the bars before the extensions register Arkestra's containers and
+		// then leaves a bar empty ("Drag a view here"). Once both exist, an empty bar gets its container.
+		void this.layout.whenRestored.then(() => {
+			const registry = Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry);
+			if (!this.fillEmptyBars(registry)) {
+				const listener = this._register(registry.onViewsRegistered(() => {
+					if (this.fillEmptyBars(registry)) {
+						listener.dispose();
+					}
+				}));
+			}
+		});
 		if (storage.getNumber(LAYOUT_KEY, StorageScope.PROFILE, 0) >= LAYOUT_VERSION) {
 			return;
 		}
@@ -177,6 +189,20 @@ class ArkestraLayout extends Disposable implements IWorkbenchContribution {
 		this.layout.setPartHidden(false, Parts.AUXILIARYBAR_PART);
 		void this.panes.openPaneComposite(DETAILS_CONTAINER, ViewContainerLocation.AuxiliaryBar);
 		this.storage.store(WINDOW_KEY, true, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		return true;
+	}
+
+	/** Opens Arkestra's container in a shown bar that has none open; false while their views are not registered yet. */
+	private fillEmptyBars(registry: IViewsRegistry): boolean {
+		if (!registry.getView(LEFT_VIEW) || !registry.getView(DETAILS_VIEW)) {
+			return false;
+		}
+		if (this.layout.isVisible(Parts.SIDEBAR_PART) && !this.panes.getActivePaneComposite(ViewContainerLocation.Sidebar)) {
+			void this.panes.openPaneComposite(LEFT_CONTAINER, ViewContainerLocation.Sidebar);
+		}
+		if (this.layout.isVisible(Parts.AUXILIARYBAR_PART) && !this.panes.getActivePaneComposite(ViewContainerLocation.AuxiliaryBar)) {
+			void this.panes.openPaneComposite(DETAILS_CONTAINER, ViewContainerLocation.AuxiliaryBar);
+		}
 		return true;
 	}
 
