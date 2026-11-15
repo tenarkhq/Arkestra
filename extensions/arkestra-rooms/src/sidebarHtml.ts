@@ -52,6 +52,7 @@ export interface SidebarStrings {
 	readonly moveTo: string;
 	readonly noSection: string;
 	readonly newSectionMenu: string;
+	readonly sectionName: string;
 	readonly pin: string;
 	readonly unpin: string;
 	readonly rename: string;
@@ -69,10 +70,10 @@ export type SidebarMessage =
 	| { type: 'ready' }
 	| { type: 'nav'; item: 'newChat' | 'boards' | 'artifacts' | 'machines' }
 	| { type: 'open'; key: string }
-	| { type: 'thread'; action: 'pin' | 'unpin' | 'rename' | 'archive' | 'unarchive' | 'delete'; id: string }
+	| { type: 'thread'; action: 'pin' | 'unpin' | 'rename' | 'archive' | 'unarchive' | 'delete'; id: string; name?: string }
 	| { type: 'move'; id: string; section: string | null }
-	| { type: 'moveToNew'; id: string }
-	| { type: 'section'; action: 'new' | 'rename' | 'delete' | 'up' | 'down'; id?: string }
+	| { type: 'moveToNew'; id: string; name: string }
+	| { type: 'section'; action: 'new' | 'rename' | 'delete' | 'up' | 'down'; id?: string; name?: string }
 	| { type: 'reorder'; id: string; before: string | null }
 	| { type: 'search'; query: string };
 
@@ -122,6 +123,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 	.it.muted, .it.muted .n { color: var(--mute); }
 	.it.add { color: var(--dim); }
 	.it.add svg { color: var(--dim); }
+	.ed { flex: 1; min-width: 0; height: 24px; padding: 0 7px; font: inherit; color: var(--fg); background: var(--vscode-input-background); border: 1px solid var(--vscode-focusBorder); border-radius: 6px; outline: none; }
 	.q { display: none; flex: 1; min-width: 0; border: 0; padding: 0; background: transparent; color: var(--fg); font: inherit; outline: none; }
 	.q::placeholder { color: var(--dim); }
 	.it.on { background: var(--vscode-input-background); box-shadow: inset 0 0 0 1px var(--vscode-focusBorder); cursor: text; }
@@ -228,9 +230,45 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		return h;
 	}
 
+	// ---- a name typed in place (new section, rename): no input box at the top of the window
+	let editing = false;
+	function editName(host, initial, done) {
+		const input = document.createElement('input');
+		input.className = 'ed';
+		input.type = 'text';
+		input.spellcheck = false;
+		input.value = initial || '';
+		input.placeholder = S.sectionName;
+		const n = host.querySelector('.n');
+		if (n) { n.replaceWith(input); } else { host.append(input); }
+		const more = host.querySelector('.more');
+		if (more) { more.style.display = 'none'; }
+		editing = true;
+		let finished = false;
+		const finish = ok => {
+			if (finished) { return; }
+			finished = true;
+			editing = false;
+			pending = false;
+			const value = input.value.trim();
+			if (ok && value && value !== (initial || '')) { done(value); }
+			render();
+		};
+		input.addEventListener('keydown', e => {
+			e.stopPropagation();
+			if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+			else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+		});
+		input.addEventListener('blur', () => finish(true));
+		input.addEventListener('click', e => e.stopPropagation());
+		input.focus();
+		input.select();
+	}
+	const addRow = () => document.querySelector('.it.add');
+
 	function render() {
 		if (!model) { return; }
-		if (dragging) { pending = true; return; }
+		if (dragging || editing) { pending = true; return; }
 		const focused = keyOf(document.activeElement && document.activeElement.closest && document.activeElement.closest('[data-key], [data-section], [data-action]'));
 		const q = model.query;
 		rows = new Map();
@@ -370,7 +408,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		const main = () => [
 			{ label: S.moveTo, sub: moveTo },
 			...(r.archived ? [] : [{ label: r.pinned ? S.unpin : S.pin, run: act(r.pinned ? 'unpin' : 'pin') }]),
-			{ label: S.rename, run: act('rename') },
+			{ label: S.rename, run: () => editName(it, r.title, name => post({ type: 'thread', action: 'rename', id: r.id, name })) },
 			{ label: r.archived ? S.restore : S.archive, run: act(r.archived ? 'unarchive' : 'archive') },
 			{ label: S.delete, danger: true, run: act('delete') },
 		];
@@ -379,7 +417,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 			...model.sections.map(s => ({ label: s.name, check: r.section === s.id, run: () => post({ type: 'move', id: r.id, section: s.id }) })),
 			...(r.section ? [{ label: S.noSection, run: () => post({ type: 'move', id: r.id, section: null }) }] : []),
 			{ sep: true },
-			{ label: '+ ' + S.newSectionMenu, run: () => post({ type: 'moveToNew', id: r.id }) },
+			{ label: '+ ' + S.newSectionMenu, run: () => { const add = addRow(); if (add) { editName(add, '', name => post({ type: 'moveToNew', id: r.id, name })); } } },
 		];
 		openMenu(main(), at, it);
 	}
@@ -389,7 +427,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		const i = model.sections.findIndex(s => s.id === id);
 		const act = action => () => post({ type: 'section', action, id });
 		openMenu([
-			{ label: S.renameSection, run: act('rename') },
+			{ label: S.renameSection, run: () => editName(h, (model.sections[i] || {}).name, name => post({ type: 'section', action: 'rename', id, name })) },
 			...(i > 0 ? [{ label: S.moveUp, run: act('up') }] : []),
 			...(i >= 0 && i < model.sections.length - 1 ? [{ label: S.moveDown, run: act('down') }] : []),
 			{ sep: true },
@@ -422,7 +460,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 			return;
 		}
 		const action = t.closest('[data-action]');
-		if (action && action.dataset.action === 'newSection') { post({ type: 'section', action: 'new' }); return; }
+		if (action && action.dataset.action === 'newSection') { editName(action, '', name => post({ type: 'section', action: 'new', name })); return; }
 		if (action && action.dataset.action === 'archived') { ui.archivedOpen = !ui.archivedOpen; vscode.setState(ui); render(); return; }
 		if (it) {
 			model.selected = it.dataset.key;

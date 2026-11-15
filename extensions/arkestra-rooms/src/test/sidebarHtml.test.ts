@@ -7,7 +7,7 @@ import * as assert from 'node:assert/strict';
 import { Script } from 'node:vm';
 import { sidebarHtml, type SidebarStrings } from '../sidebarHtml';
 
-const keys = ['newChat', 'search', 'searchPlaceholder', 'boards', 'artifacts', 'machines', 'pinned', 'newSection', 'unsectioned', 'archived', 'noChats', 'noMatch', 'more', 'running', 'moveTo', 'noSection', 'newSectionMenu', 'pin', 'unpin', 'rename', 'archive', 'restore', 'delete', 'renameSection', 'moveUp', 'moveDown', 'deleteSection'];
+const keys = ['newChat', 'search', 'searchPlaceholder', 'boards', 'artifacts', 'machines', 'pinned', 'newSection', 'unsectioned', 'archived', 'noChats', 'noMatch', 'more', 'running', 'moveTo', 'noSection', 'newSectionMenu', 'sectionName', 'pin', 'unpin', 'rename', 'archive', 'restore', 'delete', 'renameSection', 'moveUp', 'moveDown', 'deleteSection'];
 const strings = Object.fromEntries(keys.map(k => [k, k === 'newChat' ? 'New <b>chat</b> "x"' : k])) as unknown as SidebarStrings;
 
 test('the page runs only its own nonce, shows its strings escaped and its script compiles', () => {
@@ -24,4 +24,14 @@ test('the page runs only its own nonce, shows its strings escaped and its script
 	for (const id of ['newChat', 'search', 'boards', 'artifacts', 'machines']) {
 		assert.ok(html.includes(`data-nav="${id}"`), id);
 	}
+});
+
+test('section and thread names are typed in place in the left bar, never in an input box at the top', () => {
+	const html = sidebarHtml('NONCE123', strings);
+	assert.match(html, /function editName\(host, initial, done\)/);
+	assert.match(html, /editName\(action, '', name => post\(\{ type: 'section', action: 'new', name \}\)\)/);
+	assert.match(html, /post\(\{ type: 'moveToNew', id: r\.id, name \}\)/);
+	assert.match(html, /post\(\{ type: 'section', action: 'rename', id, name \}\)/);
+	assert.match(html, /post\(\{ type: 'thread', action: 'rename', id: r\.id, name \}\)/);
+	assert.doesNotMatch(html, /post\(\{ type: 'section', action: 'new' \}\)/);
 });
