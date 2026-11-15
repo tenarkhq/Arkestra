@@ -27,6 +27,9 @@ export type SyncStatus =
 	| { readonly kind: 'synced'; readonly at: number; readonly live: boolean }
 	| { readonly kind: 'error'; readonly message: string; readonly at: number };
 
+/** How often the board reads GitHub while the relay is not connected. */
+export const POLL_MS = 60_000;
+
 export interface SyncOptions {
 	readonly graphql: GraphQL;
 	readonly owner: string;
@@ -347,7 +350,7 @@ export class ProjectSync {
 		}
 		this.down = true;
 		if (!this.pollTimer && !this.disposed) {
-			this.pollTimer = setInterval(() => void this.refresh().catch(() => { }), this.o.pollMs ?? 60_000);
+			this.pollTimer = setInterval(() => void this.refresh().catch(() => { }), this.o.pollMs ?? POLL_MS);
 		}
 	}
 

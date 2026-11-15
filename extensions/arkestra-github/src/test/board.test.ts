@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { boardModel, roomFor, toCard, type RoomInfo } from '../board';
+import { boardModel, roomFor, syncLine, toCard, type RoomInfo } from '../board';
 import { boardHtml, fontFaces } from '../boardHtml';
 import type { ProjectItem, ProjectSnapshot } from '../project';
 
@@ -76,8 +76,10 @@ test('board: columns in Status order, no-status column, card fields, filters, re
 
 	const chosen = boardModel({ snapshot: snap, rooms: [], cardFields: ['executor'], status: { kind: 'synced', at: 0, live: false }, live: false, journal: [], clock: () => '1' });
 	assert.deepEqual(chosen.cardFields, ['E']);
-	assert.equal(chosen.sync.tone, 'warn');
-	assert.equal(chosen.sync.kind, 'offline');
+	// Without the relay the board reads GitHub at intervals: the normal state, neutral, with the interval.
+	assert.deepEqual(chosen.sync, { text: 'updated 1 · every 1 min', tone: 'muted', kind: 'polling', at: '1', everyMin: 1 });
+	assert.equal(syncLine({ kind: 'synced', at: 0, live: false }, false, () => '09:16', 300_000).everyMin, 5);
+	assert.equal(syncLine({ kind: 'synced', at: 0, live: true }, false, () => '09:16').kind, 'polling', 'live only while the relay is connected');
 });
 
 test('the page: script and style only with the nonce', () => {
@@ -86,6 +88,19 @@ test('the page: script and style only with the nonce', () => {
 	assert.doesNotMatch(html, /unsafe-inline|unsafe-eval/);
 	assert.equal((html.match(/<script nonce="NONCE">/g) ?? []).length, 1);
 	assert.doesNotMatch(html, /innerHTML/);
+});
+
+test('the page: completion never in the accent colour; red only for the critical path', () => {
+	const html = boardHtml('NONCE', 'vscode-resource:');
+	// progressBar.background is the accent (coral in Arkestra Dark): next to the critical red, done work read as red.
+	assert.doesNotMatch(html, /progressBar-background/);
+	assert.match(html, /--done: var\(--vscode-testing-iconPassed/);
+	assert.match(html, /--prog: var\(--vscode-charts-blue/);
+	assert.match(html, /\.bar > i \{[^}]*var\(--done\)/, 'the lane bar fills in the done colour');
+	assert.match(html, /\.cell\.done > \.fill \{[^}]*var\(--done\)/);
+	assert.match(html, /\.cell > \.fill \{[^}]*var\(--prog\)/);
+	const reds = html.match(/var\(--crit\)/g) ?? [];
+	assert.ok(reds.length >= 3, 'cells, nodes and edges of the critical path');
 });
 
 test('the page: the bundled Inter with a font source only when the font folder is given', () => {

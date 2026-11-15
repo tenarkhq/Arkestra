@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { valueText, type ProjectField, type ProjectItem, type ProjectSnapshot } from './project';
-import type { JournalEntry, SyncStatus } from './sync';
+import { POLL_MS, type JournalEntry, type SyncStatus } from './sync';
 
 /** A room working on a task, as the rooms extension reports it (its `TaskRoom`). */
 export interface RoomInfo {
@@ -89,12 +89,18 @@ export interface FieldRoles {
 	readonly prereq?: string;
 }
 
-/** The sync state: the text (English) and its parts, so the page can say it in the UI language. */
+/**
+ * The sync state: the text (English) and its parts, so the page can say it in the UI language.
+ * synced: the relay pushes changes (live); polling: read from GitHub at intervals, the normal state
+ * without the relay (an optional push channel), so it is not a warning.
+ */
 export interface SyncLine {
 	readonly text: string;
 	readonly tone: Tone;
-	readonly kind: 'loading' | 'synced' | 'offline' | 'error' | 'none';
+	readonly kind: 'loading' | 'synced' | 'polling' | 'error' | 'none';
 	readonly at?: string;
+	/** How often the board reads GitHub while polling, in minutes. */
+	readonly everyMin?: number;
 }
 
 const DONE = /^(done|kész|closed|merged|shipped)$/i;
@@ -153,12 +159,16 @@ function reviewChip(decision: string | undefined): Card['review'] {
 	}
 }
 
-export function syncLine(status: SyncStatus, live: boolean, clock: (ms: number) => string): SyncLine {
+export function syncLine(status: SyncStatus, live: boolean, clock: (ms: number) => string, pollMs: number = POLL_MS): SyncLine {
 	switch (status.kind) {
 		case 'loading': return { text: 'reading…', tone: 'run', kind: 'loading' };
-		case 'synced': return live && status.live
-			? { text: `in sync · ${clock(status.at)}`, tone: 'ok', kind: 'synced', at: clock(status.at) }
-			: { text: `read ${clock(status.at)} · polling (relay offline)`, tone: 'warn', kind: 'offline', at: clock(status.at) };
+		case 'synced': {
+			if (live && status.live) {
+				return { text: `in sync · ${clock(status.at)}`, tone: 'ok', kind: 'synced', at: clock(status.at) };
+			}
+			const everyMin = Math.max(1, Math.round(pollMs / 60_000));
+			return { text: `updated ${clock(status.at)} · every ${everyMin} min`, tone: 'muted', kind: 'polling', at: clock(status.at), everyMin };
+		}
 		case 'error': return { text: status.message, tone: 'bad', kind: 'error' };
 		default: return { text: 'not loaded', tone: 'muted', kind: 'none' };
 	}
