@@ -56,7 +56,7 @@ export function homeOf<A extends { readonly id: string }>(agentId: string, sessi
  * the roster, the adopted session (its follow starts again), the model choice, and its messages'
  * author and source; a project that was only the copy's folder is dropped. True when it moved.
  */
-export function rehome(state: RoomState, from: string, to: { readonly id: string; readonly name: string }): boolean {
+export function rehome(state: RoomState, from: string, to: { readonly id: string; readonly name: string; readonly cwd?: string }): boolean {
 	const link = state.adopted?.[from];
 	if (!link || from === to.id) {
 		return false;
@@ -64,7 +64,8 @@ export function rehome(state: RoomState, from: string, to: { readonly id: string
 	const { cursor: _cursor, ...rest } = link;
 	const adopted = { ...state.adopted };
 	delete adopted[from];
-	adopted[to.id] = rest;
+	// The session's folder as its machine names it (a copy may name another path).
+	adopted[to.id] = to.cwd ? { ...rest, cwd: to.cwd } : rest;
 	state.adopted = adopted;
 	state.roster = [...new Set(state.roster.map(id => id === from ? to.id : id))];
 	if (state.choices?.[from]) {
@@ -140,13 +141,13 @@ export function sessionContext(state: RoomState, roster: readonly string[]): num
  * one an older reader imported (`Agent.historyVersion`) reads it again. What the thread lacks
  * goes in at its place, and the follow goes on from the read's cursor. True when it changed.
  */
-export async function healAdopted(state: RoomState, registry: { get(id: string): Agent | undefined }, home: (agentId: string, session: { readonly id: string; readonly cwd?: string }) => Promise<{ readonly agent: Agent } | undefined>): Promise<boolean> {
+export async function healAdopted(state: RoomState, registry: { get(id: string): Agent | undefined }, home: (agentId: string, session: { readonly id: string; readonly cwd?: string }) => Promise<{ readonly agent: Agent; readonly session?: { readonly cwd?: string } } | undefined>): Promise<boolean> {
 	let changed = false;
 	for (const [agentId, link] of Object.entries(state.adopted ?? {})) {
 		let id = agentId;
 		let agent = registry.get(agentId);
 		const found = await home(agentId, { id: link.session, ...(link.cwd ? { cwd: link.cwd } : {}) }).catch(() => undefined);
-		if (found && rehome(state, agentId, { id: found.agent.id, name: found.agent.name })) {
+		if (found && rehome(state, agentId, { id: found.agent.id, name: found.agent.name, ...(found.session?.cwd ? { cwd: found.session.cwd } : {}) })) {
 			id = found.agent.id;
 			agent = found.agent;
 			changed = true;

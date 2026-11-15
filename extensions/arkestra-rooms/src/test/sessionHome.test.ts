@@ -59,6 +59,15 @@ test('a thread that followed the copy moves to the SSH agent: roster, session (i
 	assert.ok(!rehome(state, 'claude', { id: 'claude@tenark', name: 'x' }), 'once');
 });
 
+test('a moved thread runs in the folder its machine names, not the copy\'s path', () => {
+	const state = importedRoomState({ id: 'claude', name: 'Claude' }, S('s1', '/Users/roland/p'), { entries: [{ role: 'user', text: 'go', id: 'u1' }], cursor: '9' });
+	assert.ok(rehome(state, 'claude', { id: 'claude@tenark', name: 'Claude · tenark', cwd: '/home/tenark-claude/p' }));
+	assert.equal(state.adopted!['claude@tenark'].cwd, '/home/tenark-claude/p');
+	const kept = importedRoomState({ id: 'claude', name: 'Claude' }, S('s2', '/home/t'), { entries: [{ role: 'user', text: 'go', id: 'u1' }] });
+	assert.ok(rehome(kept, 'claude', { id: 'claude@tenark', name: 'Claude · tenark' }));
+	assert.equal(kept.adopted!['claude@tenark'].cwd, '/home/t', 'no folder from the machine: the one it had');
+});
+
 test('read again with a newer reader: what the old import missed goes in at its place, a split answer and a task line are fixed, the room\'s own messages stay', () => {
 	const now = () => new Date('2026-11-15T09:00:00Z');
 	const agent = { id: 'claude@tenark', name: 'Claude · tenark' };
