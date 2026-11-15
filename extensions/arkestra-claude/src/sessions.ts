@@ -14,14 +14,38 @@ import { folderStore, withImages, type ImageStore, type SessionImage } from './s
 const MARK = '\u001eFILE ';
 /** How many sessions a machine lists, newest first. */
 export const LIST_LIMIT = 60;
+/**
+ * How many of the newest session files the listing looks at to find them: scripts and agent
+ * pipelines (`claude -p`, the Agent SDK) write many sessions nobody chats in, and those are
+ * skipped, so the people's own threads are not pushed out of the list.
+ */
+export const SCAN_LIMIT = 2000;
+/** How much of a file's start tells who wrote the session (its first lines name the entrypoint). */
+export const KIND_BYTES = 16_384;
+/** A session a script or an agent pipeline ran (`claude -p`, the Agent SDK), not a chat. */
+export const AUTOMATED = /"entrypoint":"sdk-/;
+/** The folder of sessions run in a temporary folder (/tmp, macOS's /var/folders): throwaway runs, not chats. */
+export const TEMP_FOLDER = /^-(private-)?(tmp|var-folders)(-|$)/;
 const HEAD_BYTES = 262_144;
 const CANDIDATES = /"type":"(summary|user|custom-title)"/;
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** The listing on a POSIX machine: per session its time, file, and the lines that name it. */
+/**
+ * The listing on a POSIX machine: per session its time, file, and the lines that name it. One
+ * `head` reads the start of the newest files (/dev/null first, so it always prints the file
+ * headers) and awk keeps the first LIST_LIMIT that are no script's or pipeline's. Sessions
+ * of a temporary folder are left out too (TEMP_FOLDER).
+ */
 export const LIST_SCRIPT = [
 	'cd "$HOME/.claude/projects" 2>/dev/null || exit 0',
-	`for f in $(ls -t */*.jsonl 2>/dev/null | grep -v '/agent-' | head -n ${LIST_LIMIT}); do`,
+	// ./ first: the folders are named after paths (-home-...), which ls and head would read as options.
+	`files=$(ls -t ./*/*.jsonl 2>/dev/null | grep -v -E '/agent-|^\\./-(private-)?(tmp|var-folders)[-/]' | head -n ${SCAN_LIMIT})`,
+	'[ -n "$files" ] || exit 0',
+	`for f in $(head -c ${KIND_BYTES} /dev/null $files 2>/dev/null | awk -v max=${LIST_LIMIT} '`,
+	`  /^==> .* <==$/ { if (f != "" && f != "/dev/null" && !auto) { print f; if (++n >= max) exit } f = substr($0, 5, length($0) - 8); auto = 0; next }`,
+	`  /"entrypoint":"sdk-/ { auto = 1 }`,
+	`  END { if (f != "" && f != "/dev/null" && !auto && n < max) print f }'); do`,
+	`  [ "$f" = /dev/null ] && continue`,
 	`  printf '\\036FILE %s %s\\n' "$(date -r "$f" +%s 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)" "$f"`,
 	`  head -c ${HEAD_BYTES} "$f" | grep -E '"type":"(summary|user|custom-title)"' | head -n 8`,
 	'done',
@@ -55,7 +79,7 @@ export async function localListing(home: string): Promise<string> {
 		return '';
 	}
 	const files: { file: string; rel: string; mtime: number }[] = [];
-	await Promise.all(dirs.map(async dir => {
+	await Promise.all(dirs.filter(dir => !TEMP_FOLDER.test(dir)).map(async dir => {
 		const names = await fs.readdir(path.join(root, dir)).catch(() => [] as string[]);
 		await Promise.all(names.filter(n => n.endsWith('.jsonl') && !n.startsWith('agent-')).map(async name => {
 			const file = path.join(root, dir, name);
@@ -66,17 +90,30 @@ export async function localListing(home: string): Promise<string> {
 		}));
 	}));
 	files.sort((a, b) => b.mtime - a.mtime);
-	const parts = await Promise.all(files.slice(0, LIST_LIMIT).map(async f => {
-		const handle = await fs.open(f.file, 'r');
+	// The newest sessions that are chats, as the shell listing finds them.
+	const parts: string[] = [];
+	for (const f of files.slice(0, SCAN_LIMIT)) {
+		if (parts.length >= LIST_LIMIT) {
+			break;
+		}
+		const handle = await fs.open(f.file, 'r').catch(() => undefined);
+		if (!handle) {
+			continue;
+		}
 		try {
+			const kind = Buffer.alloc(KIND_BYTES);
+			const start = await handle.read(kind, 0, KIND_BYTES, 0);
+			if (AUTOMATED.test(kind.subarray(0, start.bytesRead).toString('utf8'))) {
+				continue;
+			}
 			const buf = Buffer.alloc(HEAD_BYTES);
 			const { bytesRead } = await handle.read(buf, 0, HEAD_BYTES, 0);
 			const lines = buf.subarray(0, bytesRead).toString('utf8').split('\n').filter(l => CANDIDATES.test(l)).slice(0, 8);
-			return `${MARK}${f.mtime} ${f.rel}\n${lines.join('\n')}`;
+			parts.push(`${MARK}${f.mtime} ${f.rel}\n${lines.join('\n')}`);
 		} finally {
 			await handle.close();
 		}
-	}));
+	}
 	return parts.join('\n');
 }
 
@@ -150,7 +187,7 @@ function userText(content: unknown): string | undefined {
 		text = content.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') || undefined;
 	}
 	text = text?.trim();
-	if (!text || /^(<command-|<local-command|Caveat: |\[Request interrupted)/.test(text)) {
+	if (!text || /^(<command-|<local-command|<system-reminder>|Caveat: |\[Request interrupted)/.test(text)) {
 		return undefined;
 	}
 	return text;
