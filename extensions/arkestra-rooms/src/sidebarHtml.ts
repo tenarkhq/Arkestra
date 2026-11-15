@@ -155,7 +155,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 	.proj .more:hover { color: var(--fg); }
 	.drop { background: var(--vscode-list-dropBackground, var(--hover)); }
 	.empty { color: var(--dim); padding: 10px; line-height: 1.5; }
-	.menu { position: fixed; z-index: 5; min-width: 180px; max-width: calc(100vw - 8px); box-sizing: border-box; background: var(--vscode-menu-background); color: var(--vscode-menu-foreground); border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, transparent)); border-radius: 10px; padding: 5px; box-shadow: 0 10px 30px var(--vscode-widget-shadow, rgba(0, 0, 0, .45)); display: flex; flex-direction: column; }
+	.menu { position: fixed; z-index: 5; min-width: 180px; max-width: calc(100% - 8px); box-sizing: border-box; background: var(--vscode-menu-background); color: var(--vscode-menu-foreground); border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, transparent)); border-radius: 10px; padding: 5px; box-shadow: 0 10px 30px var(--vscode-widget-shadow, rgba(0, 0, 0, .45)); display: flex; flex-direction: column; }
 	.mi { display: flex; justify-content: space-between; align-items: center; gap: 12px; height: 30px; padding: 0 10px; border-radius: 6px; cursor: pointer; outline: none; white-space: nowrap; }
 	.mi .l { overflow: hidden; text-overflow: ellipsis; }
 	.mi:hover, .mi:focus { background: var(--vscode-menu-selectionBackground, var(--sel)); color: var(--vscode-menu-selectionForeground, inherit); }
@@ -424,9 +424,11 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 				menu.append(m);
 			}
 			const w = menu.offsetWidth, h = menu.offsetHeight;
-			const left = Math.max(4, Math.min(at.left, innerWidth - w - 4));
+			// The page's usable width and height: innerWidth counts the scrollbar, which would cover the menu's edge.
+			const vw = document.documentElement.clientWidth || innerWidth, vh = document.documentElement.clientHeight || innerHeight;
+			const left = Math.max(4, Math.min(at.left, vw - w - 4));
 			let top = at.bottom + 2;
-			if (top + h > innerHeight - 4) { top = Math.max(4, at.top - h - 2); }
+			if (top + h > vh - 4) { top = Math.max(4, at.top - h - 2); }
 			menu.style.left = left + 'px';
 			menu.style.top = top + 'px';
 			menu.querySelector('.mi')?.focus();

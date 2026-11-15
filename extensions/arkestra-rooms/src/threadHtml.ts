@@ -619,7 +619,9 @@ function placeMenu() {
 	if (!anchor) { return; }
 	const r = anchor.getBoundingClientRect();
 	const w = pop.offsetWidth, h = pop.offsetHeight;
-	pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + 'px';
+	// The usable width: innerWidth counts the scrollbar, which would cover the popover's edge.
+	const vw = document.documentElement.clientWidth || window.innerWidth;
+	pop.style.left = Math.max(8, Math.min(r.left, vw - w - 8)) + 'px';
 	if (r.top - h - 6 >= 8 || r.top > window.innerHeight - r.bottom) { pop.style.top = ''; pop.style.bottom = (window.innerHeight - r.top + 6) + 'px'; }
 	else { pop.style.bottom = ''; pop.style.top = (r.bottom + 6) + 'px'; }
 }
