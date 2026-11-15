@@ -207,6 +207,7 @@ export function machinesHtml(nonce: string, s: MachinesStrings, fonts?: PageFont
 	.m.adding h2 { font-size: 13.5px; font-weight: 600; margin: 0 0 10px; }
 	.fl { display: grid; gap: 2px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--line); max-width: 560px; }
 	.fl .here { display: flex; align-items: center; gap: 8px; padding: 2px 2px 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; min-width: 0; }
+	.fl .here svg { width: 14px; height: 14px; color: var(--mute); flex: none; }
 	.fl .here code { flex: 1; min-width: 0; font-family: var(--vscode-editor-font-family, ui-monospace, monospace); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 	.fl .fo { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 5px 6px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; font-size: 12.5px; color: var(--fg); }
 	.fl .fo:hover, .fl .fo:focus-visible { background: var(--hover); outline: none; }

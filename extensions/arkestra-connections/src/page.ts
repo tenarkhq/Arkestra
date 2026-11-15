@@ -91,6 +91,7 @@ export function connectionsPage(nonce: string, t: PageStrings): string {
 	#addOpen { margin: 16px 0 0; }
 	form { margin-top: 16px; padding: 14px 16px; border: 1px solid var(--vscode-panel-border); border-radius: 8px; display: grid; gap: 10px; max-width: 520px; }
 	form[hidden] { display: none; }
+	.ft { font-weight: 600; }
 	label { display: grid; gap: 4px; }
 	label span { font-size: .85em; font-weight: 600; color: var(--vscode-descriptionForeground); }
 	label small { color: var(--vscode-descriptionForeground); }
@@ -110,6 +111,7 @@ export function connectionsPage(nonce: string, t: PageStrings): string {
 	</table>
 	<button id="addOpen">+ ${esc(t.add)}</button>
 	<form id="add" hidden novalidate>
+		<div class="ft">${esc(t.add)}</div>
 		<label data-f="host"><span>${esc(t.host)}</span><input name="host" list="hosts" autocomplete="off" spellcheck="false" placeholder="dev@server.example.com"><small>${esc(t.hostHint)}</small><small class="err"></small></label>
 		<datalist id="hosts"></datalist>
 		<label data-f="name"><span>${esc(t.name)}</span><input name="name" autocomplete="off" spellcheck="false"><small>${esc(t.nameHint)}</small><small class="err"></small></label>

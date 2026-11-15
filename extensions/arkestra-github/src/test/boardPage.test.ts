@@ -198,6 +198,24 @@ find(body, (e: any) => e.tag === 'button' && text(e) === 'Auto layout')[0].fire(
 assert.ok(posted.some((m: any) => m.type === 'autoLayout'), 'auto layout posted');
 listeners.message({ data: { type: 'screen', screen: { title: 'No GitHub Project for this workspace', text: 'x', actions: [{ label: 'Follow a project…', command: 'setProject' }] } } });
 assert.ok(text(body).includes('No GitHub Project'), 'empty screen');
+// Follow a project…: the board's own list and a typed field, no quick pick at the top.
+const picker = { loading: false, current: 'o/3', projects: [{ ref: 'o/3', title: 'Arkestra', detail: 'o/3 · current', current: true }, { ref: 'me/1', title: 'Mine', detail: 'me/1', current: false }] };
+listeners.message({ data: { type: 'screen', screen: { title: 'Follow a GitHub Project', picker, actions: [{ label: 'Cancel', command: 'pickCancel' }] } } });
+assert.ok(text(body).includes('Arkestra') && text(body).includes('me/1') && text(body).includes('Or type one:'), 'the projects and the typed field');
+assert.equal(find(body, (e: any) => e.tag === 'button' && e.className === 'pick on').length, 1, 'the current one marked');
+find(body, (e: any) => e.tag === 'button' && text(e).startsWith('Mine'))[0].fire('click');
+assert.deepEqual(posted.at(-1), { type: 'followProject', ref: 'me/1' });
+const pickField = find(body, (e: any) => e.tag === 'input' && e.attrs.id === 'pickRef')[0];
+assert.equal(pickField.value, 'o/3', 'the field starts with the followed project');
+pickField.value = 'https://github.com/orgs/acme/projects/7';
+pickField.fire('input');
+pickField.fire('keydown', { key: 'Enter' });
+assert.deepEqual(posted.at(-1), { type: 'followProject', ref: 'https://github.com/orgs/acme/projects/7' });
+listeners.message({ data: { type: 'screen', screen: { title: 'Follow a GitHub Project', picker: { ...picker, error: 'No project acme/7.' }, actions: [{ label: 'Cancel', command: 'pickCancel' }] } } });
+assert.ok(text(body).includes('No project acme/7.'), 'what is wrong, on the page');
+assert.equal(find(body, (e: any) => e.tag === 'input' && e.attrs.id === 'pickRef')[0].value, 'https://github.com/orgs/acme/projects/7', 'the typed text survives the redraw');
+find(body, (e: any) => e.tag === 'button' && text(e) === 'Cancel')[0].fire('click');
+assert.deepEqual(posted.at(-1), { type: 'pickCancel' });
 
 
 g.setTimeout = realTimeout;

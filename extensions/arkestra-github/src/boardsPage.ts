@@ -70,6 +70,7 @@ function labels(): BoardsLabels {
 		empty: vscode.l10n.t('No boards yet'),
 		emptyText: vscode.l10n.t('Add a GitHub Project to follow its work here: what is open, what is done and how far each line is.'),
 		noMatch: vscode.l10n.t('Nothing matches the search.'),
+		remote: vscode.l10n.t('Remote Control and relay'),
 	};
 }
 
@@ -163,6 +164,7 @@ export class BoardsPage implements vscode.Disposable {
 		const entry = this.host.list().find(b => b.key === key);
 		try {
 			switch (m?.type) {
+				case 'remote': await vscode.commands.executeCommand('arkestra.remote.menu'); return;
 				case 'ready': this.ready = true; this.post(); this.readStale(); return;
 				case 'open':
 					if (entry) {

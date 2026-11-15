@@ -145,6 +145,14 @@ header .form { margin: 10px 18px 0; }
 .empty { flex: 1; }
 .form input.wide { flex: 1; min-width: 200px; }
 .empty { padding: 40px 20px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.picker { width: min(560px, 100%); display: flex; flex-direction: column; gap: 10px; text-align: left; }
+.plist { display: flex; flex-direction: column; gap: 2px; max-height: 46vh; overflow-y: auto; border: 1px solid var(--vscode-panel-border); border-radius: var(--radius); padding: 4px; }
+.plist .pick { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; text-align: left; background: transparent; color: var(--vscode-foreground); padding: 7px 10px; border-radius: 6px; }
+.plist .pick:hover, .plist .pick:focus-visible { background: var(--vscode-list-hoverBackground); outline: none; filter: none; }
+.plist .pick.on { background: var(--vscode-list-inactiveSelectionBackground); }
+.plist .pt { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plist .pd { color: var(--mute); font-size: 12px; white-space: nowrap; }
+.perr { color: var(--vscode-errorForeground); font-size: 12px; }
 footer { border-top: 1px solid var(--vscode-panel-border); margin-top: 12px; padding: 8px 14px 14px; }
 footer summary { cursor: pointer; font-weight: 600; font-size: 12px; }
 .log { display: grid; grid-template-columns: auto auto 1fr; gap: 2px 10px; font-size: 12px; margin-top: 6px; }
@@ -817,7 +825,7 @@ function drawMain(pos) {
 	if (again) again.scrollLeft = laneLeft || 0;
 }
 function draw() {
-	if (screen) { mainEl = null; document.body.replaceChildren(emptyEl(screen)); return; }
+	if (screen) { mainEl = null; const focusPick = ui.pickFocus; pickInput = null; document.body.replaceChildren(emptyEl(screen)); if (pickInput && focusPick) { pickInput.focus(); } if (!screen.picker) { ui.pickText = undefined; } return; }
 	if (!model) return;
 	const typing = !!searchInput && document.activeElement === searchInput;
 	const caret = typing ? searchInput.selectionStart : 0;
@@ -841,8 +849,23 @@ let held = false;
 const editing = () => { const a = document.activeElement; return !!a && a !== searchInput && /INPUT|SELECT|TEXTAREA/.test(a.tagName || ''); };
 window.addEventListener('focusout', () => { if (held) { held = false; setTimeout(() => { if (!editing()) draw(); else held = true; }, 0); } });
 function emptyEl(s) {
+	const p = s.picker;
 	return h('div', { class: 'empty' }, h('div', { class: 'title' }, s.title), s.text ? h('div', { class: 'muted' }, s.text) : null,
-		h('div', { class: 'row' }, (s.actions || []).map((a, i) => h('button', { class: i === 0 ? 'primary' : '', onclick: () => post({ type: a.command }) }, a.label))));
+		p ? pickerEl(p) : null,
+		h('div', { class: 'row' }, (s.actions || []).map((a, i) => h('button', { class: i === 0 && !p ? 'primary' : '', onclick: () => post({ type: a.command }) }, a.label))));
+}
+/** The board's own project list (Follow a project…): the user's projects to click, or one typed in. */
+var pickInput = null;
+function pickerEl(p) {
+	const follow = (ref) => post({ type: 'followProject', ref });
+	const input = pickInput = h('input', { class: 'wide', id: 'pickRef', placeholder: t('owner/number or the project URL'), 'aria-label': t('owner/number or the project URL'), value: ui.pickText ?? (p.current || ''), spellcheck: 'false', autocomplete: 'off', oninput: () => { ui.pickText = input.value; }, onfocus: () => { ui.pickFocus = true; }, onblur: () => { ui.pickFocus = false; },
+		onkeydown: (e) => { if (e.key === 'Enter' && input.value.trim()) { e.preventDefault(); follow(input.value.trim()); } } });
+	return h('div', { class: 'picker' },
+		p.loading ? h('div', { class: 'muted' }, t('Reading your projects…')) : null,
+		p.listError ? h('div', { class: 'muted' }, p.listError) : null,
+		p.projects.length ? h('div', { class: 'plist', role: 'list' }, p.projects.map(x => h('button', { class: 'pick' + (x.current ? ' on' : ''), role: 'listitem', onclick: () => follow(x.ref) }, h('span', { class: 'pt' }, x.title), h('span', { class: 'pd' }, x.detail)))) : null,
+		h('div', { class: 'form' }, h('span', { class: 'muted' }, t('Or type one:')), input, h('button', { class: 'primary', onclick: () => { if (input.value.trim()) follow(input.value.trim()); } }, t('Follow'))),
+		p.error ? h('div', { class: 'perr', role: 'alert' }, p.error) : null);
 }
 window.addEventListener('message', (e) => {
 	const m = e.data;
