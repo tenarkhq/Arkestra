@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { Script } from 'node:vm';
-import { FORM_CLIENT, FormRequests, formHtml, formPage, readForm, visibleFields, type FormSpec } from '../pageForm';
+import { FORM_CLIENT, FormRequests, fillLabel, formHtml, formPage, readForm, visibleFields, type FormSpec } from '../pageForm';
 import { inlineEditHtml } from '../inlineEditHtml';
 
 const spec: FormSpec = {
@@ -109,4 +109,22 @@ test('the ⌘K ⌘K field: in the editor, every agent listed and the ones not re
 	const script = /<script nonce="N">([\s\S]*?)<\/script>/.exec(html)![1];
 	assert.doesNotThrow(() => new Script(script));
 	assert.ok(script.includes("type: 'submit', text: text.value.trim(), agentId: agent.value") && script.includes("type: 'cancel'"));
+});
+
+test('a choice names the agents chosen above it ({@first}), on the page and kept current there', () => {
+	const spec: FormSpec = {
+		id: 'tpl', title: 'New room', submit: 'Start',
+		fields: [
+			{ kind: 'choice', id: 'first', label: 'First agent', style: 'select', value: 'c', options: [{ value: 'c', label: 'Claude · tenark-claude' }, { value: 'x', label: 'Codex · tenark-codex' }] },
+			{ kind: 'choice', id: 'second', label: 'Second agent', style: 'select', value: 'x', options: [{ value: 'c', label: 'Claude · tenark-claude' }, { value: 'x', label: 'Codex · tenark-codex' }] },
+			{ kind: 'choice', id: 'auditors', label: 'Who audits?', options: [{ value: 'A', label: 'Only {@first}' }, { value: 'B', label: 'Only {@second}' }] },
+		],
+	};
+	assert.equal(fillLabel(spec, 'Only {@first}'), 'Only Claude · tenark-claude');
+	assert.equal(fillLabel(spec, '{@second} reviews, {@first} fixes'), 'Codex · tenark-codex reviews, Claude · tenark-claude fixes');
+	assert.equal(fillLabel(spec, 'Only {@nobody}'), 'Only {@nobody}');
+	const html = formHtml(spec);
+	assert.ok(html.includes('Only Codex · tenark-codex'));
+	assert.ok(html.includes('data-tpl="Only {@second}"'));
+	assert.ok(FORM_CLIENT.includes("m.dataset.tpl.replace("));
 });
