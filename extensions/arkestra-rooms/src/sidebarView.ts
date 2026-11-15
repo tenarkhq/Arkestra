@@ -14,7 +14,9 @@ import { FONT_ROOT, pageFonts } from './webviewFonts';
 import { projectName, type ThreadSummary } from './threads';
 
 /** The sections in globalState: [{ id, name, threadIds }]. */
-export const SECTIONS_KEY = 'arkestra.rooms.sections';
+export /** A non-empty string from the page. */
+const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
+const SECTIONS_KEY = 'arkestra.rooms.sections';
 const NEW_CHAT = 'arkestra.rooms.newChat';
 
 export interface SidebarBoard { readonly key: string; readonly title: string; readonly workspace: boolean; readonly pinned: boolean }
@@ -94,17 +96,13 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 		this.schedule();
 	}
 
-	private async askName(title: string, value = ''): Promise<string | undefined> {
-		return (await vscode.window.showInputBox({ title, value, prompt: vscode.l10n.t('The name of the section') }))?.trim() || undefined;
-	}
-
-	private async newSection(): Promise<string | undefined> {
-		const name = await this.askName(vscode.l10n.t('New section'));
-		if (!name) {
+	/** A new section with the name typed in place in the left bar. */
+	private async newSection(name: unknown): Promise<string | undefined> {
+		if (!text(name) || !name.trim()) {
 			return undefined;
 		}
 		const id = randomBytes(6).toString('hex');
-		await this.save(addSection(this.sections(), id, name));
+		await this.save(addSection(this.sections(), id, name.trim()));
 		return id;
 	}
 
@@ -189,7 +187,6 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 	}
 
 	private async receive(m: SidebarMessage): Promise<void> {
-		const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 		switch (m?.type) {
 			case 'ready':
 				this.query = '';
@@ -206,8 +203,11 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			case 'thread': {
 				const commands: Record<string, string> = { pin: 'arkestra.rooms.pin', unpin: 'arkestra.rooms.unpin', rename: 'arkestra.rooms.rename', archive: 'arkestra.rooms.archive', unarchive: 'arkestra.rooms.unarchive', delete: 'arkestra.rooms.delete' };
 				const command = commands[m.action];
+				if (m.action === 'rename' && !(text(m.name) && m.name.trim())) {
+					return; // renamed in place: an empty name keeps the old one
+				}
 				if (command && text(m.id)) {
-					await vscode.commands.executeCommand(command, m.id);
+					await vscode.commands.executeCommand(command, m.id, ...(m.action === 'rename' ? [m.name] : []));
 				}
 				return;
 			}
@@ -218,7 +218,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 				return;
 			case 'moveToNew':
 				if (text(m.id)) {
-					const id = await this.newSection();
+					const id = await this.newSection(m.name);
 					if (id) {
 						await this.save(moveThread(this.sections(), m.id, id));
 					}
@@ -230,13 +230,13 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 				}
 				return;
 			case 'section':
-				return this.section(m.action, m.id);
+				return this.section(m.action, m.id, m.name);
 		}
 	}
 
-	private async section(action: string, id: unknown): Promise<void> {
+	private async section(action: string, id: unknown, name: unknown): Promise<void> {
 		if (action === 'new') {
-			await this.newSection();
+			await this.newSection(name);
 			return;
 		}
 		const list = this.sections();
@@ -245,9 +245,8 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			return;
 		}
 		if (action === 'rename') {
-			const name = await this.askName(vscode.l10n.t('Rename section'), section.name);
-			if (name) {
-				await this.save(renameSection(this.sections(), section.id, name));
+			if (text(name) && name.trim()) {
+				await this.save(renameSection(this.sections(), section.id, name.trim()));
 			}
 		} else if (action === 'delete') {
 			await this.save(deleteSection(list, section.id));
@@ -369,6 +368,7 @@ function strings(): SidebarStrings {
 		moveTo: vscode.l10n.t('Move to section'),
 		noSection: vscode.l10n.t('No section'),
 		newSectionMenu: vscode.l10n.t('New section…'),
+		sectionName: vscode.l10n.t('Name of the section'),
 		pin: vscode.l10n.t('Pin'),
 		unpin: vscode.l10n.t('Unpin'),
 		rename: vscode.l10n.t('Rename'),

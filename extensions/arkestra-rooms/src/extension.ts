@@ -1025,9 +1025,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			await store.remove(room.id);
 			refreshThreads();
 		}),
-		vscode.commands.registerCommand('arkestra.rooms.rename', async (arg: unknown) => {
+		vscode.commands.registerCommand('arkestra.rooms.rename', async (arg: unknown, name?: unknown) => {
 			const room = await open(threadId(arg));
-			const title = room && (await vscode.window.showInputBox({ title: vscode.l10n.t('Rename thread'), value: room.state.title }))?.trim();
+			// The left bar renames in place and passes the name; the command palette still asks.
+			const title = room && (typeof name === 'string' ? name.trim() : (await vscode.window.showInputBox({ title: vscode.l10n.t('Rename thread'), value: room.state.title }))?.trim());
 			if (room && title) {
 				await editRoom(room.id, r => { r.state.title = title; });
 			}
