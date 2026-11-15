@@ -89,6 +89,11 @@ export interface MarkdownOptions {
 	readonly image?: ImageResolver;
 }
 
+/** A table cell: inline markdown, and the `<br>` agents write for a line break inside a cell. */
+function cell(text: string): string {
+	return inline(text).replace(/&lt;br\s*\/?&gt;/gi, '<br>');
+}
+
 /** Markdown as safe HTML: every character escaped, then headings, code blocks with a copy button, lists, tables, quotes, links, images. */
 export function renderMarkdown(text: string, opts: MarkdownOptions = {}): string {
 	const before = resolveImage;
@@ -167,7 +172,7 @@ function render(text: string): string {
 				body.push(cells(lines[i]));
 				i++;
 			}
-			out.push(`<div class="tbl"><table><thead><tr>${head.map((c, n) => `<th${attr(n)}>${inline(c)}</th>`).join('')}</tr></thead><tbody>${body.map(r => `<tr>${head.map((_, n) => `<td${attr(n)}>${inline(r[n] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+			out.push(`<div class="tbl"><table><thead><tr>${head.map((c, n) => `<th${attr(n)}>${cell(c)}</th>`).join('')}</tr></thead><tbody>${body.map(r => `<tr>${head.map((_, n) => `<td${attr(n)}>${cell(r[n] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
 			continue;
 		}
 		if (LIST.test(line)) {
@@ -399,9 +404,11 @@ body { background: var(--vscode-editor-background); height: 100vh; display: flex
 .md a { color: var(--vscode-textLink-foreground); text-decoration: none; }
 .md a:hover { text-decoration: underline; }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
-.md .tbl { overflow-x: auto; margin: 0 0 10px; }
+.md .tbl { overflow-x: auto; margin: 0 0 10px; position: relative; left: 50%; transform: translateX(-50%); width: fit-content; min-width: 100%; max-width: min(1180px, calc(100vw - 48px)); }
 .md table { border-collapse: collapse; font-size: 13px; }
-.md th, .md td { border: 1px solid var(--line); padding: 4px 9px; text-align: left; vertical-align: top; }
+.md th, .md td { border: 1px solid var(--line); padding: 4px 9px; text-align: left; vertical-align: top; overflow-wrap: normal; word-break: normal; min-width: 5em; }
+.md th { white-space: nowrap; }
+.md td code { white-space: nowrap; }
 .md th { font-weight: 600; }
 .md .al-center { text-align: center; }
 .md .al-right { text-align: right; }
