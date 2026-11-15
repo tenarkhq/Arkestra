@@ -358,6 +358,7 @@ export class ThreadViews implements vscode.Disposable {
 			fonts: pageFonts(panel.webview),
 			close: vscode.l10n.t('Close'),
 			attach: vscode.l10n.t('Attach a file, the changes or a terminal command'),
+			down: vscode.l10n.t('Jump to the end'),
 		});
 		panel.onDidDispose(() => {
 			// A running round goes on; the thread shows it again when reopened.

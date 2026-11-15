@@ -123,7 +123,32 @@ export function codexMeta(line: string): SessionMeta | undefined {
 		return undefined; // the thread's running total is not the context
 	}
 	const context = typeof last.total_tokens === 'number' ? last.total_tokens : (last.input_tokens ?? 0) + (last.output_tokens ?? 0);
-	return context > 0 ? { context } : undefined;
+	const window = p.info?.model_context_window;
+	return context > 0 ? { context, ...(typeof window === 'number' && window > 0 ? { window } : {}) } : undefined;
+}
+
+/** The account's quota windows in a rollout's `token_count` line (`rate_limits`), as Codex's own app shows them. */
+export function rolloutLimits(line: string, label: (minutes: number | null | undefined) => string): { label: string; usedPercent: number; resetsAt?: string }[] {
+	let data: any;
+	try {
+		data = JSON.parse(line);
+	} catch {
+		return [];
+	}
+	const limits = data?.type === 'event_msg' && data.payload?.type === 'token_count' ? data.payload.rate_limits : undefined;
+	const out: { label: string; usedPercent: number; resetsAt?: string }[] = [];
+	for (const w of [limits?.primary, limits?.secondary]) {
+		if (w && typeof w.used_percent === 'number') {
+			out.push({ label: label(w.window_minutes), usedPercent: Math.round(w.used_percent), ...(typeof w.resets_at === 'number' ? { resetsAt: new Date(w.resets_at * 1000).toISOString() } : {}) });
+		}
+	}
+	return out;
+}
+
+/** The script that prints the latest `token_count` line of the newest rollout on a POSIX machine (nothing: none yet). */
+export function latestTokenCountScript(homes: readonly string[]): string {
+	const globs = homes.map(h => `${remoteHome(h)}/sessions/*/*/*/rollout-*.jsonl`).join(' ');
+	return [`f=$(ls -t ${globs} 2>/dev/null | head -n 1)`, '[ -n "$f" ] || exit 0', `grep '"token_count"' "$f" | tail -n 1`, 'exit 0'].join('\n');
 }
 
 /**

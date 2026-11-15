@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { ActivityBoard } from '../activity';
-import { addUsage, contextPercent, formatTokens, ringSvg, statusText, tightestLimit, tone, usageLine, windowLabel } from '../usage';
+import { addUsage, agentMeter, contextPercent, formatTokens, quotaTone, ringSvg, statusText, tightestLimit, tone, usageLine, windowLabel } from '../usage';
 
 test('reports add up per room; context and quota are the latest', () => {
 	let u = addUsage(undefined, { input: 1000, output: 200, cached: 50, costUsd: 0.01, context: { used: 30_000, window: 200_000 } });
@@ -50,4 +50,18 @@ test('the board keeps an agent\'s figures across turns and state changes', () =>
 	assert.equal(contextPercent(board.get('r', 'claude').usage), 10);
 	board.usage('r', 'codex', { limits: [{ label: '5h', usedPercent: 12 }] });
 	assert.equal(board.get('r', 'codex').state, 'idle', 'a report alone does not change the state');
+});
+
+test('an agent\'s meter: the account\'s report first, then a turn here, then the session file; the live quota before a turn\'s', () => {
+	const turn = { input: 1, output: 1, cached: 0, context: { used: 90_000, window: 200_000 }, limits: [{ label: '5h', usedPercent: 10 }] };
+	// A session the Claude app runs: the claude.ai account tells the fill and the window.
+	assert.deepEqual(agentMeter({ usage: turn, cloud: { used: 115_900, max: 500_000 }, quota: [{ label: 'week', usedPercent: 54 }] }), { context: { used: 115_900, window: 500_000 }, limits: [{ label: 'week', usedPercent: 54 }] });
+	// A turn run here knows its window; its quota stands while the vendor's is not read yet.
+	assert.deepEqual(agentMeter({ usage: turn, session: { context: 120_000 } }), { context: { used: 90_000, window: 200_000 }, limits: [{ label: '5h', usedPercent: 10 }] });
+	// Codex's session file tells its window too.
+	assert.deepEqual(agentMeter({ session: { context: 41_200, window: 475_000 }, quota: [] }), { context: { used: 41_200, window: 475_000 }, limits: [] });
+	// Only the tokens: no percentage.
+	assert.deepEqual(agentMeter({ session: { context: 115_900 } }), { context: { used: 115_900 }, limits: [] });
+	assert.deepEqual(agentMeter({}), { limits: [] });
+	assert.deepEqual([79, 80, 94, 95].map(quotaTone), ['ok', 'warn', 'warn', 'crit']);
 });

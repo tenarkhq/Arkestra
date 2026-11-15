@@ -12,7 +12,7 @@ import * as path from 'node:path';
 import type { Agent, AgentChoices, AgentEvent, ExistingSession, Message, PermissionRequest, Readiness, SessionEntry, SessionHistory, SessionMeta, TurnInput, Usage, WorkUpdate } from './rooms';
 import { RpcClient, type Notification } from './rpc';
 import { LineSplitter, followLocal, followRemote } from './follow';
-import { RolloutHistory, checkThreadId, codexImages, codexMeta, codexPiece, codexToolLine, codexUserText, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript, type RolloutRead } from './codexFollow';
+import { RolloutHistory, checkThreadId, codexImages, codexMeta, codexPiece, codexToolLine, codexUserText, latestTokenCountScript, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript, rolloutLimits, type RolloutRead } from './codexFollow';
 
 export type CodexAuth = { readonly mode: 'subscription' } | { readonly mode: 'apiKey'; readonly key: string | undefined };
 
@@ -299,6 +299,13 @@ export class CodexAgent implements Agent {
 		} catch (e) {
 			return { ready: false, reason: e instanceof Error ? e.message : String(e), fix: 'retry' };
 		}
+	}
+
+	/** The account's quota windows, from the newest rollout on the machine (Codex writes them with every token report). */
+	async quota(): Promise<readonly { readonly label: string; readonly usedPercent: number; readonly resetsAt?: string }[]> {
+		const script = latestTokenCountScript(['~/.codex', this.options.apiKeyHome]);
+		const out = this.options.spawn ? await this.shell(script, 20_000) : await localShell(script, 20_000);
+		return rolloutLimits(out.trim(), windowLabel);
 	}
 
 	/** The threads Codex has on this agent's machine (AR39). */
@@ -733,6 +740,19 @@ export function codexLimits(snapshot: any): { label: string; usedPercent: number
 		}
 	}
 	return out;
+}
+
+/** A POSIX script on this machine; resolves to its output. */
+function localShell(script: string, timeoutMs: number): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const child = nodeSpawn('sh', ['-c', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+		let out = '';
+		const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('timeout')); }, timeoutMs);
+		child.stdout?.setEncoding('utf8');
+		child.stdout?.on('data', (c: string) => { out += c; });
+		child.on('error', e => { clearTimeout(timer); reject(e); });
+		child.on('close', code => { clearTimeout(timer); if (code === 0) { resolve(out); } else { reject(new Error(`exited with ${code}`)); } });
+	});
 }
 
 function windowLabel(minutes: number | null | undefined): string {

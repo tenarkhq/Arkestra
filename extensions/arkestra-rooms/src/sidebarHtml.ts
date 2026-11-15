@@ -81,6 +81,7 @@ export interface SidebarStrings {
 	readonly sectionName: string;
 	readonly pin: string;
 	readonly unpin: string;
+	readonly openBeside: string;
 	readonly rename: string;
 	readonly archive: string;
 	readonly restore: string;
@@ -96,7 +97,7 @@ export type SidebarMessage =
 	| { type: 'ready' }
 	| { type: 'nav'; item: 'newChat' | 'boards' | 'artifacts' | 'machines' }
 	| { type: 'open'; key: string }
-	| { type: 'thread'; action: 'pin' | 'unpin' | 'rename' | 'archive' | 'unarchive' | 'delete'; id: string; name?: string }
+	| { type: 'thread'; action: 'pin' | 'unpin' | 'rename' | 'archive' | 'unarchive' | 'delete' | 'beside'; id: string; name?: string }
 	| { type: 'move'; id: string; section: string | null }
 	| { type: 'moveToNew'; id: string; name: string }
 	| { type: 'section'; action: 'new' | 'rename' | 'delete' | 'up' | 'down'; id?: string; name?: string }
@@ -516,6 +517,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		if (!r || (r.kind !== 'thread' && r.kind !== 'session')) { return; }
 		const act = action => () => post({ type: 'thread', action, id: r.id });
 		const main = () => [
+			{ label: S.openBeside, run: act('beside') },
 			{ label: S.moveTo, sub: moveTo },
 			...(r.archived ? [] : [{ label: r.pinned ? S.unpin : S.pin, run: act(r.pinned ? 'unpin' : 'pin') }]),
 			{ label: S.rename, run: () => editName(it, r.title, name => post({ type: 'thread', action: 'rename', id: r.id, name })) },

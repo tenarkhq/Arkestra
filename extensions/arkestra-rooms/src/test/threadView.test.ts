@@ -192,7 +192,10 @@ test('markdown: code blocks, inline code, headings, lists, tables, quotes', () =
 const S: ThreadStrings = { local: 'this machine', attached: n => `+${n} attached`, tasksDone: n => `${n} finished`, tasks: n => `${n} tasks`, other: n => `${n} other`, working: 'working…', copy: 'Copy' };
 
 test('rows as HTML: the user bubble escaped, the answer with its agent and machine, the fold closed', () => {
-	assert.equal(rowHtml({ type: 'user', id: '1', at: '', text: '<b>hi</b>\nthere', attached: 0 }, S), '<div class="ub">&lt;b&gt;hi&lt;/b&gt;<br>there</div>');
+	const user = rowHtml({ type: 'user', id: '1', at: '', text: '<b>hi</b>\nthere', attached: 0 }, S);
+	assert.ok(user.startsWith('<div class="um"><div class="ub">&lt;b&gt;hi&lt;/b&gt;<br>there</div><div class="acts"><button class="act" data-copy="1" title="Copy" aria-label="Copy"><svg'), user);
+	// The message being sent has no copy button yet (it is not in the thread).
+	assert.equal(rowHtml({ type: 'user', id: 'pending', at: '', text: 'hi', attached: 0 }, S), '<div class="um"><div class="ub">hi</div></div>');
 	const agent = rowHtml({ type: 'agent', id: '2', at: '', agentId: 'claude@tenark-claude', name: 'Claude · tenark-claude', text: 'Itt vagyok.' }, S, renderMarkdown, '23:21');
 	assert.ok(agent.includes('<i class="av claude">C</i>Claude · tenark-claude'));
 	assert.ok(agent.includes('<p>Itt vagyok.</p>'));

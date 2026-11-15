@@ -359,6 +359,14 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 				if (m.action === 'delete' && text(m.id) && this.sessionRows.has(m.id)) {
 					return; // a session no thread continues stays on its machine
 				}
+				if (m.action === 'beside') {
+					// Next to what the middle shows now: a session row is continued in a thread first.
+					const room = text(m.id) ? await this.roomOf(m.id) : undefined;
+					if (room) {
+						await vscode.commands.executeCommand('arkestra.rooms.openThread', room, vscode.ViewColumn.Beside);
+					}
+					return;
+				}
 				// A session row the Claude app lists too is archived there, without a thread here first.
 				const bridge = m.action === 'archive' && text(m.id) ? this.sessionRows.get(m.id)?.session.bridge : undefined;
 				if (bridge) {
@@ -516,6 +524,7 @@ function strings(): SidebarStrings {
 		sectionName: vscode.l10n.t('Name of the section'),
 		pin: vscode.l10n.t('Pin'),
 		unpin: vscode.l10n.t('Unpin'),
+		openBeside: vscode.l10n.t('Open on the other side'),
 		rename: vscode.l10n.t('Rename'),
 		archive: vscode.l10n.t('Archive'),
 		restore: vscode.l10n.t('Restore'),

@@ -36,15 +36,33 @@ export function parseCredentials(text: string): Credentials | undefined {
 
 /** One row of the account's list, as Arkestra uses it. */
 export function cloudSession(row: unknown): CloudSession | undefined {
-	const r = row as { id?: unknown; title?: unknown; status?: unknown; last_event_at?: unknown; updated_at?: unknown; worker_status?: unknown; unread?: unknown } | undefined;
+	const r = row as { id?: unknown; title?: unknown; status?: unknown; last_event_at?: unknown; updated_at?: unknown; worker_status?: unknown; unread?: unknown; external_metadata?: { context_usage?: { used_tokens?: unknown; max_tokens?: unknown } } } | undefined;
 	if (typeof r?.id !== 'string' || !r.id.startsWith('cse_')) {
 		return undefined;
 	}
 	const at = typeof r.last_event_at === 'string' ? r.last_event_at : typeof r.updated_at === 'string' ? r.updated_at : undefined;
+	const usage = r.external_metadata?.context_usage;
+	const context = typeof usage?.used_tokens === 'number' && typeof usage.max_tokens === 'number' && usage.max_tokens > 0 ? { used: usage.used_tokens, max: usage.max_tokens } : undefined;
 	return {
 		id: r.id, title: typeof r.title === 'string' ? r.title.trim() : '', archived: r.status === 'archived', ...(at ? { at } : {}),
 		...(typeof r.worker_status === 'string' ? { worker: r.worker_status } : {}), ...(r.unread === true ? { unread: true } : {}),
+		...(context ? { context } : {}),
 	};
+}
+
+/** The quota windows the account reports (`/api/oauth/usage`), with the labels the CLI's own report uses. */
+const QUOTA_WINDOWS: readonly (readonly [string, string])[] = [['five_hour', '5h'], ['seven_day', 'week'], ['seven_day_opus', 'week · Opus'], ['seven_day_sonnet', 'week · Sonnet']];
+
+export function accountLimits(body: unknown): { label: string; usedPercent: number; resetsAt?: string }[] {
+	const b = body as Record<string, { utilization?: unknown; resets_at?: unknown } | null | undefined> | undefined;
+	const out: { label: string; usedPercent: number; resetsAt?: string }[] = [];
+	for (const [key, label] of QUOTA_WINDOWS) {
+		const w = b?.[key];
+		if (w && typeof w.utilization === 'number') {
+			out.push({ label, usedPercent: Math.round(w.utilization), ...(typeof w.resets_at === 'string' ? { resetsAt: w.resets_at } : {}) });
+		}
+	}
+	return out;
 }
 
 type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{ status: number; json(): Promise<unknown>; text(): Promise<string> }>;
@@ -102,6 +120,12 @@ export class CloudClient implements CloudSessions {
 		await this.call('POST', `/v1/code/sessions/${session(id)}/mark_read`, {});
 	}
 
+	/** The account's quota now: the share of each window used, as the Claude app shows it. */
+	async usage(): Promise<{ label: string; usedPercent: number; resetsAt?: string }[]> {
+		const r = await this.call('GET', '/api/oauth/usage', undefined, [], { 'anthropic-beta': 'oauth-2025-04-20' });
+		return accountLimits(await r.json());
+	}
+
 	async rename(id: string, title: string): Promise<void> {
 		await this.call('PUT', `/v1/code/sessions/${session(id)}`, { title });
 	}
@@ -119,12 +143,12 @@ export class CloudClient implements CloudSessions {
 		return this.credentials.token;
 	}
 
-	private async call(method: string, pathAndQuery: string, body?: unknown, alsoFine: readonly number[] = []): Promise<{ status: number; json(): Promise<unknown> }> {
+	private async call(method: string, pathAndQuery: string, body?: unknown, alsoFine: readonly number[] = [], extra: Record<string, string> = {}): Promise<{ status: number; json(): Promise<unknown> }> {
 		for (let attempt = 0; ; attempt++) {
 			const token = await this.token();
 			const r = await this.fetchFn(`${BASE}${pathAndQuery}`, {
 				method,
-				headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
+				headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', ...extra },
 				...(body !== undefined ? { body: JSON.stringify(body) } : {}),
 				signal: AbortSignal.timeout(15_000),
 			});

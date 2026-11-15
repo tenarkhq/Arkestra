@@ -105,7 +105,7 @@ test('rows show pictures: the agent\'s named files under its answer, the user\'s
 	assert.ok(agent.includes('<div class="imgs"><img class="thumb" src="https://res.test/ok/shot.png"'));
 	assert.ok(!agent.includes('/nope/x.png"'), 'a path that may not load stays text');
 	const user = rowHtml({ type: 'user', id: '2', at: '', text: 'Mi ez?\n\n@file:/ok/kep.png', attached: 1 }, S, renderMarkdown, '', allow);
-	assert.ok(user.startsWith('<div class="ub">Mi ez?<div class="imgs"><img class="thumb" src="https://res.test/ok/kep.png"'), user);
+	assert.ok(user.startsWith('<div class="um"><div class="ub">Mi ez?<div class="imgs"><img class="thumb" src="https://res.test/ok/kep.png"'), user);
 	assert.ok(!user.includes('@file'));
 	const missing = rowHtml({ type: 'user', id: '3', at: '', text: '![image](/gone/kep.png)', attached: 0 }, S, renderMarkdown, '', allow);
 	assert.ok(missing.includes('class="imgx"') && missing.includes('kep.png'));

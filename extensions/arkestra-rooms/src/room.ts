@@ -107,6 +107,8 @@ export interface AdoptedSession {
 	readonly model?: string;
 	/** Tokens in the session's context at its latest answer, as its file tells it. */
 	readonly context?: number;
+	/** Its context window, when the file tells it (Codex). */
+	readonly window?: number;
 	/** The agent's history reader the thread was last read with (`Agent.historyVersion`). */
 	readonly version?: number;
 }
@@ -358,7 +360,8 @@ function sessionMessage(agent: { id: string; name: string }, e: SessionEntry, no
 export function withMeta(adopted: AdoptedSession, meta: SessionMeta | undefined): AdoptedSession {
 	const model = meta?.model && meta.model !== adopted.model ? meta.model : undefined;
 	const context = meta?.context && meta.context !== adopted.context ? meta.context : undefined;
-	return model || context ? { ...adopted, ...(model ? { model } : {}), ...(context ? { context } : {}) } : adopted;
+	const window = meta?.window && meta.window !== adopted.window ? meta.window : undefined;
+	return model || context || window ? { ...adopted, ...(model ? { model } : {}), ...(context ? { context } : {}), ...(window ? { window } : {}) } : adopted;
 }
 
 /**

@@ -436,7 +436,7 @@ test('history and follow: the rollout\'s model and context fill, and its patch l
 	process.env.FAKE_ROLLOUT = file;
 	try {
 		const history = await agent.sessionHistory('01a1e000-0000-7000-8000-00000000c0de');
-		assert.deepEqual(history.meta, { model: 'gpt-5.5', context: 41200 });
+		assert.deepEqual(history.meta, { model: 'gpt-5.5', context: 41200, window: 258400 });
 		assert.deepEqual(history.lines?.map(l => JSON.parse(l).payload.call_id), ['c1']);
 		const got: { meta?: unknown; lines?: readonly string[] }[] = [];
 		await new Promise<void>((resolve, reject) => {

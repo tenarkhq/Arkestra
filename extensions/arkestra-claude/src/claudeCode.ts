@@ -288,6 +288,11 @@ export class ClaudeCodeAgent implements Agent {
 	}
 
 	/** The sessions Claude Code has on this agent's machine (AR39). */
+	/** The claude.ai account's quota windows now, the ones the Claude app shows. */
+	quota(): Promise<readonly { readonly label: string; readonly usedPercent: number; readonly resetsAt?: string }[]> {
+		return this.cloud.usage();
+	}
+
 	async existingSessions(): Promise<readonly ExistingSession[]> {
 		return parseListing(this.options.spawn ? await this.shell(LIST_SCRIPT) : await localListing(homedir()));
 	}

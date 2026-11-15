@@ -221,3 +221,20 @@ test('claude.ai sessions: the sign-in is read, never refreshed; names and archiv
 	const stale = new CloudClient(async () => JSON.stringify({ claudeAiOauth: { accessToken: 'old', expiresAt: 1000 } }), 'prd', fetchFn, () => 1000);
 	await assert.rejects(stale.list(), /out of date/);
 });
+
+test('the account quota: the windows the Claude app shows, read with the beta header; a session row\'s context fill', async () => {
+	const { CloudClient, cloudSession, accountLimits } = await import('../cloud');
+	assert.deepEqual(accountLimits({ five_hour: null, seven_day: { utilization: 54.0, resets_at: '2026-11-20T12:59:59Z' }, seven_day_opus: null, extra_usage: { utilization: 0 } }), [{ label: 'week', usedPercent: 54, resetsAt: '2026-11-20T12:59:59Z' }]);
+	assert.deepEqual(accountLimits({ five_hour: { utilization: 12.4 } }), [{ label: '5h', usedPercent: 12 }]);
+	assert.deepEqual(accountLimits(undefined), []);
+	assert.deepEqual(cloudSession({ id: 'cse_1', title: 'A', status: 'active', external_metadata: { context_usage: { used_tokens: 214921, max_tokens: 500000 } } })?.context, { used: 214921, max: 500000 });
+	assert.equal(cloudSession({ id: 'cse_1', title: 'A', status: 'active', external_metadata: { context_usage: { used_tokens: 5, max_tokens: 0 } } })?.context, undefined);
+	let seen: { url: string; beta?: string } | undefined;
+	const fetchFn = async (url: string, init: { method: string; headers: Record<string, string> }) => {
+		seen = { url, ...(init.headers['anthropic-beta'] ? { beta: init.headers['anthropic-beta'] } : {}) };
+		return { status: 200, json: async () => ({ seven_day: { utilization: 54, resets_at: 'x' } }), text: async () => '' };
+	};
+	const client = new CloudClient(async () => JSON.stringify({ claudeAiOauth: { accessToken: 'tok', expiresAt: 10_000_000 } }), 'prd', fetchFn, () => 1000);
+	assert.deepEqual(await client.usage(), [{ label: 'week', usedPercent: 54, resetsAt: 'x' }]);
+	assert.deepEqual(seen, { url: 'https://api.anthropic.com/api/oauth/usage', beta: 'oauth-2025-04-20' });
+});

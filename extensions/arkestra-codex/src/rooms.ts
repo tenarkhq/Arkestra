@@ -105,6 +105,8 @@ export interface Agent {
 	 * `lines`: the session file's raw lines behind them that hold tool uses, for the artifacts (AR26).
 	 */
 	watchSession?(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string, meta?: SessionMeta, lines?: readonly string[]) => void, cursor?: string): { dispose(): void };
+	/** The account's quota windows now (the share used of a week, of five hours), as its vendor's app shows them; none: not known. */
+	quota?(): Promise<readonly { readonly label: string; readonly usedPercent: number; readonly resetsAt?: string }[]>;
 }
 
 /** What an agent can run with: its models, each with the reasoning efforts it knows (none: no effort choice). */
@@ -132,8 +134,10 @@ export interface SessionHistory {
 export interface SessionMeta {
 	/** The model id of the latest answer, for example `claude-opus-5-5`. */
 	readonly model?: string;
-	/** Tokens in the context at the latest model call (its window is not in the file). */
+	/** Tokens in the context at the latest model call. */
 	readonly context?: number;
+	/** The size of that context window, when the file tells it (Codex does). */
+	readonly window?: number;
 }
 
 /** One message of an existing session, as the thread shows it. */

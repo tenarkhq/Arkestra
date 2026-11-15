@@ -252,7 +252,9 @@ export function rowHtml(row: Row, s: ThreadStrings, md: (text: string, opts?: Ma
 	switch (row.type) {
 		case 'user': {
 			const { text, images } = userImages(row.text);
-			return `<div class="ub">${escapeHtml(text).replace(/\n/g, '<br>')}${imagesHtml(images, image, true)}${row.attached ? `<div class="att">${escapeHtml(s.attached(row.attached))}</div>` : ''}</div>`;
+			const bubble = `<div class="ub">${escapeHtml(text).replace(/\n/g, '<br>')}${imagesHtml(images, image, true)}${row.attached ? `<div class="att">${escapeHtml(s.attached(row.attached))}</div>` : ''}</div>`;
+			const acts = row.id === 'pending' ? '' : `<div class="acts">${time ? `<span>${escapeHtml(time)}</span>` : ''}<button class="act" data-copy="${escapeHtml(row.id)}" title="${escapeHtml(s.copy)}" aria-label="${escapeHtml(s.copy)}">${COPY_ICON}</button></div>`;
+			return `<div class="um">${bubble}${acts}</div>`;
 		}
 		case 'agent':
 			return `<div class="msg"><div class="who">${letter(row.agentId, row.name)}${escapeHtml(agentLabel(row.name, row.agentId, s.local))}</div><div class="md">${md(row.text, { image })}${imagesHtml(imageRefs(row.text), image)}</div>`
@@ -352,7 +354,7 @@ svg { display: block; }
 `;
 
 /** The thread panel's page: rows, running turns, notices, and the composer or the new-chat cards. */
-export function threadPage(opts: { nonce: string; cspSource: string; mode: 'thread' | 'new'; roomId?: string; placeholder: string; heading: string; fonts?: PageFonts; close?: string; attach?: string }): string {
+export function threadPage(opts: { nonce: string; cspSource: string; mode: 'thread' | 'new'; roomId?: string; placeholder: string; heading: string; fonts?: PageFonts; close?: string; attach?: string; down?: string }): string {
 	const { nonce } = opts;
 	return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -432,7 +434,9 @@ body { background: var(--vscode-editor-background); height: 100vh; display: flex
 .md .al-center { text-align: center; }
 .md .al-right { text-align: right; }
 #thread, #chips, #right { display: contents; }
-.ub { align-self: flex-end; background: var(--vscode-input-background); padding: 9px 14px; border-radius: 14px; font-size: 14px; line-height: 1.5; max-width: 70%; overflow-wrap: anywhere; }
+.um { align-self: flex-end; max-width: 88%; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.um:hover .acts { opacity: 1; }
+.ub { background: var(--vscode-input-background); padding: 9px 14px; border-radius: 14px; font-size: 14px; line-height: 1.5; max-width: 100%; overflow-wrap: anywhere; }
 .ub .att { color: var(--mute); font-size: 12px; margin-top: 4px; }
 .acts { display: flex; gap: 14px; color: var(--dim); font-size: 12px; align-items: center; margin-top: 2px; opacity: 0; transition: opacity .12s; }
 .msg:hover .acts { opacity: 1; }
@@ -507,7 +511,11 @@ button.chip:hover { background: var(--hover); }
 .hint { color: var(--mute); font-size: 12.5px; width: 100%; max-width: 740px; display: flex; gap: 16px; flex-wrap: wrap; }
 .hint b { color: var(--fg); font-weight: 500; }
 .empty { color: var(--mute); }
-@media (max-width: 520px) { .col, .compose { padding-left: 16px; padding-right: 16px; } .ub { max-width: 88%; } }
+.compose { position: relative; }
+.down { position: absolute; top: -42px; left: 50%; transform: translateX(-50%); width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: var(--fg); background: var(--vscode-editor-background); border: 1px solid var(--line2); box-shadow: 0 2px 8px rgba(0,0,0,.18); z-index: 5; }
+.down:hover { background: var(--hover); }
+.down svg { width: 15px; height: 15px; }
+@media (max-width: 520px) { .col, .compose { padding-left: 16px; padding-right: 16px; } .um { max-width: 94%; } }
 </style></head><body data-mode="${opts.mode}" data-room="${escapeHtml(opts.roomId ?? '')}">
 <div id="thread">
 	<div id="conv"><div class="col"><div id="rows"></div><div id="live"></div><div id="notice"></div></div></div>
@@ -518,7 +526,7 @@ button.chip:hover { background: var(--hover); }
 	<div id="heroBox"></div>
 	<div class="hint" id="hint"></div>
 </div>
-<div class="compose" id="compose"><div class="box" id="box">
+<div class="compose" id="compose"><button class="down" id="down" hidden title="${escapeHtml(opts.down ?? 'Jump to the end')}" aria-label="${escapeHtml(opts.down ?? 'Jump to the end')}"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 3v10M3.5 8.5 8 13l4.5-4.5"/></svg></button><div class="box" id="box">
 	<div id="atts"></div>
 	<textarea id="input" rows="1" placeholder="${escapeHtml(opts.placeholder)}"></textarea>
 	<div class="brow">
@@ -542,6 +550,10 @@ const $ = id => document.getElementById(id);
 const conv = $('conv'), rowsEl = $('rows'), liveEl = $('live'), noticeEl = $('notice'), input = $('input'), send = $('send');
 let mode = document.body.dataset.mode, busy = false, selected = null, cards = [], strings = {};
 const nearBottom = () => conv.scrollHeight - conv.scrollTop - conv.clientHeight < 80;
+const down = $('down');
+const showDown = () => { down.hidden = nearBottom(); };
+conv.addEventListener('scroll', showDown, { passive: true });
+down.addEventListener('click', () => { conv.scrollTo({ top: conv.scrollHeight, behavior: 'smooth' }); });
 function keyed(el, list) {
 	const old = new Map([...el.children].map(c => [c.dataset.key, c]));
 	let prev = null;
@@ -844,6 +856,7 @@ window.addEventListener('message', e => {
 		renderChips(m.chips || [], m.right || []);
 		updateSend();
 		if (stick || m.scroll) { conv.scrollTop = conv.scrollHeight; }
+		showDown();
 	} else if (m.type === 'new') {
 		if (mode !== 'new') { setMode('new'); }
 		strings = m.strings || strings;
@@ -955,6 +968,12 @@ button.rr:hover { background: var(--hover); }
 .bar b { display: block; height: 100%; background: var(--accent); }
 .bar.warn b { background: var(--warn); }
 .bar.crit b { background: var(--err); }
+.meter { display: flex; flex-direction: column; gap: 5px; padding: 6px 4px; font-size: 13px; }
+.meter .top { display: flex; align-items: baseline; gap: 8px; }
+.meter .top .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meter .top b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.meter .bar { width: 100%; }
+.meter .sub { color: var(--dim); font-size: 11.5px; }
 .st { font-size: 12px; font-weight: 600; width: 14px; text-align: center; flex: none; }
 .st.A { color: var(--ok); } .st.M { color: var(--warn); } .st.D { color: var(--err); }
 .empty { color: var(--mute); padding: 4px; font-size: 12.5px; }

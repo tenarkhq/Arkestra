@@ -7,7 +7,7 @@ import * as assert from 'node:assert/strict';
 import { appendFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { codexMeta, codexPiece, codexToolLine, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript, rolloutHistory } from '../codexFollow';
+import { codexMeta, codexPiece, codexToolLine, latestTokenCountScript, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript, rolloutHistory, rolloutLimits } from '../codexFollow';
 import { EntryAssembler, LineSplitter, assemble, followLocal } from '../follow';
 import type { SessionEntry } from '../rooms';
 
@@ -139,4 +139,16 @@ test('what a rollout line says about the thread: a turn\'s model, the latest cal
 	assert.equal(codexToolLine(JSON.stringify({ type: 'response_item', payload: { type: 'message', content: [{ type: 'output_text', text: 'hi' }] } })), false);
 	const history = rolloutHistory(Buffer.from([JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5.5' } }), patch].join('\n') + '\n'));
 	assert.deepEqual([history.meta, history.lines], [{ model: 'gpt-5.5' }, [patch]]);
+});
+
+test('the quota in a rollout: Codex writes the account\'s windows with every token report; the newest rollout\'s last one is read', () => {
+	const line = JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { total_tokens: 41200 }, model_context_window: 475000 }, rate_limits: { limit_id: 'codex', primary: { used_percent: 59.0, window_minutes: 10080, resets_at: 1794918849 }, secondary: null } } });
+	const label = (m: number | null | undefined) => (m === 10080 ? 'week' : `${m}m`);
+	assert.deepEqual(rolloutLimits(line, label), [{ label: 'week', usedPercent: 59, resetsAt: new Date(1794918849 * 1000).toISOString() }]);
+	assert.deepEqual(codexMeta(line), { context: 41200, window: 475000 });
+	assert.deepEqual(rolloutLimits('', label), []);
+	assert.deepEqual(rolloutLimits(JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info: null } }), label), []);
+	const script = latestTokenCountScript(['~/.codex', '/srv/key home']);
+	assert.ok(script.includes(`ls -t "$HOME"/'.codex'/sessions/*/*/*/rollout-*.jsonl '/srv/key home'/sessions/*/*/*/rollout-*.jsonl`), script);
+	assert.ok(script.includes(`grep '"token_count"' "$f" | tail -n 1`));
 });

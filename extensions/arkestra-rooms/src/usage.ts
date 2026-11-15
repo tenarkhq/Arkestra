@@ -41,6 +41,38 @@ export function tightestLimit(u: AgentUsage | undefined): NonNullable<Usage['lim
 	return u?.limits?.length ? u.limits.reduce((a, b) => (b.usedPercent > a.usedPercent ? b : a)) : undefined;
 }
 
+/** What the right panel shows for one agent: how full its context is and its account's quota. */
+export interface AgentMeter {
+	/** Tokens in the context, and the window when known (then a percentage shows). */
+	readonly context?: { readonly used: number; readonly window?: number };
+	readonly limits: NonNullable<Usage['limits']>;
+}
+
+/**
+ * An agent's meter out of what is known: the claude.ai account's report of a session the Claude
+ * app runs, a turn run here, the session file (Codex's tells its window). The quota as the
+ * vendor reports it now, else the last one a turn here carried.
+ */
+export function agentMeter(input: {
+	readonly usage?: AgentUsage;
+	readonly session?: { readonly context?: number; readonly window?: number };
+	readonly cloud?: { readonly used: number; readonly max: number };
+	readonly quota?: Usage['limits'];
+}): AgentMeter {
+	const { usage, session, cloud } = input;
+	const context = cloud ? { used: cloud.used, window: cloud.max }
+		: usage?.context?.window ? usage.context
+			: session?.context && session.window ? { used: session.context, window: session.window }
+				: usage?.context ?? (session?.context ? { used: session.context } : undefined);
+	const limits = input.quota?.length ? input.quota : usage?.limits ?? [];
+	return { ...(context ? { context } : {}), limits };
+}
+
+/** The tone of a quota: calm under 80 %, warning to 95 %, then critical. */
+export function quotaTone(percent: number): 'ok' | 'warn' | 'crit' {
+	return percent >= 95 ? 'crit' : percent >= 80 ? 'warn' : 'ok';
+}
+
 /** 12345 → 12.3k, 2_400_000 → 2.4M. */
 export function formatTokens(n: number): string {
 	return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);

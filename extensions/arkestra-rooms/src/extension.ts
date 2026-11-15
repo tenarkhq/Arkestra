@@ -7,7 +7,7 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { ActivityBoard, type AgentActivity } from './activity';
-import { AgentRegistry, type Agent, type CloudSession, type CloudSessions, type ExistingSession, type InviteEntry } from './agent';
+import { AgentRegistry, type Agent, type CloudSession, type CloudSessions, type ExistingSession, type InviteEntry, type Usage } from './agent';
 import { AgentNotReadyError, Room, RoomOpener, followSessionName, importedRoomState, newRoomState, type Message, type RoomState } from './room';
 import { agentKind, cleanSessionMessages, continueOn, elsewhere, healAdopted, homeOf, isForeign, placeLocalSessions, type ListedSession } from './sessionHome';
 import { RoomStore } from './store';
@@ -884,9 +884,36 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			}
 		},
 	});
+	// Each agent's account quota, read from its vendor at most every minute while the panel shows it.
+	const quotas = new Map<string, { at: number; limits?: Usage['limits']; reading?: boolean }>();
+	const quotaOf = (agentId: string): Usage['limits'] | undefined => {
+		const known = quotas.get(agentId);
+		const agent = registry.get(agentId);
+		if (agent?.quota && !known?.reading && Date.now() - (known?.at ?? 0) > 60_000) {
+			quotas.set(agentId, { ...known, at: Date.now(), reading: true });
+			void agent.quota().then(
+				limits => {
+					quotas.set(agentId, { at: Date.now(), limits });
+					const roomId = threads.activeRoomId();
+					if (roomId) {
+						threadChanged.fire(roomId);
+					}
+				},
+				() => quotas.set(agentId, { ...quotas.get(agentId), at: Date.now(), reading: false }),
+			);
+		}
+		return known?.limits;
+	};
 	context.subscriptions.push(threads, new DetailsView({
 		registry, activity, onDidChangeThread: threadChanged.event, threads, open,
 		changes: async roomId => await changesUi?.checkpoints()?.changes(roomId) ?? [],
+		quota: quotaOf,
+		cloudContext: (room, agentId) => {
+			void readCloud();
+			const link = room.state.adopted?.[agentId];
+			const bridge = link ? link.bridge ?? bridgeOf.get(link.session) : undefined;
+			return bridge ? cloudRows.get(bridge)?.context : undefined;
+		},
 	}));
 
 	// ---- Threads as native chat sessions: history, session list, the left column ----------

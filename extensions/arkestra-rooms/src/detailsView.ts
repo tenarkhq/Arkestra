@@ -10,15 +10,14 @@ import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 import type { ActivityBoard } from './activity';
-import type { AgentRegistry } from './agent';
+import type { AgentRegistry, Usage } from './agent';
 import type { Change } from './checkpoints';
 import type { Room } from './room';
 import { ICONS, detailsPage, escapeHtml, type SharedStrings } from './threadHtml';
 import { readForm } from './pageForm';
 import { detailsModel, folderLabel, machineOf } from './threadModel';
 import { DetailsFollow, type Surface } from './surface';
-import { formatTokens, tone } from './usage';
-import { sessionContext } from './sessionHome';
+import { agentMeter, formatTokens, quotaTone, tone } from './usage';
 import { FONT_ROOT, pageFonts } from './webviewFonts';
 import { TURN_TEXT } from './work';
 
@@ -37,6 +36,10 @@ export interface DetailsHost {
 	open(roomId: string): Promise<Room | undefined>;
 	/** What the agents changed in the room since its accepted state. */
 	changes(roomId: string): Promise<readonly Change[]>;
+	/** The agent's account quota as last read (read again in the background, at most every minute). */
+	quota(agentId: string): Usage['limits'] | undefined;
+	/** How full the context of the agent's session is, as the claude.ai account reports it (a session the Claude app runs). */
+	cloudContext(room: Room, agentId: string): { readonly used: number; readonly max: number } | undefined;
 }
 
 export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -216,15 +219,58 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 			...(folder ? [`<div class="rr" title="${escapeHtml(folder)}">${ICONS.folder}<span class="n">${escapeHtml(folder)}</span></div>`] : []),
 		];
 		parts.push(env.length ? env.join('') : empty(vscode.l10n.t('No machine or folder yet.')));
-		// A followed session's file tells how many tokens its context holds, not its window: the count, not a percentage.
-		const sessionTokens = model.context === undefined ? sessionContext(room.state, room.roster) : undefined;
-		parts.push(model.context !== undefined
-			? `<div class="rr"><span class="n">${escapeHtml(vscode.l10n.t('Context'))}</span><span class="k">${model.context}%</span><span class="bar ${tone(model.context)}"><b data-w="${model.context}"></b></span></div>`
-			: sessionTokens !== undefined
-				? `<div class="rr"><span class="n">${escapeHtml(vscode.l10n.t('Context'))}</span><span class="k">${escapeHtml(vscode.l10n.t('{0} tokens', formatTokens(sessionTokens)))}</span></div>`
-				: `<div class="rr mut"><span class="n">${escapeHtml(vscode.l10n.t('Context'))}</span><span class="k">${escapeHtml(vscode.l10n.t('not reported yet'))}</span></div>`);
+		parts.push(this.meters(room, roster));
 		void view.webview.postMessage({ type: 'render', project, html: parts.join('') });
 	}
+
+	/** Each agent's context fill and its account's quota windows; with more than one agent, each named. */
+	private meters(room: Room, roster: readonly { id: string; name: string; activity: ReturnType<ActivityBoard['get']> }[]): string {
+		const out: string[] = [];
+		for (const a of roster) {
+			const link = room.state.adopted?.[a.id];
+			const quota = this.host.quota(a.id);
+			const cloud = this.host.cloudContext(room, a.id);
+			const m = agentMeter({
+				...(a.activity.usage ? { usage: a.activity.usage } : {}),
+				...(link ? { session: { ...(link.context ? { context: link.context } : {}), ...(link.window ? { window: link.window } : {}) } } : {}),
+				...(cloud ? { cloud } : {}),
+				...(quota ? { quota } : {}),
+			});
+			const who = roster.length > 1 ? ` · ${a.name.split(' · ')[0]}` : '';
+			const c = m.context;
+			if (c?.window) {
+				const p = Math.min(100, Math.round((c.used / c.window) * 100));
+				out.push(meterHtml(vscode.l10n.t('Context') + who, p, tone(p), vscode.l10n.t('{0} / {1} tokens', formatTokens(c.used), formatTokens(c.window))));
+			} else if (c) {
+				out.push(meterHtml(vscode.l10n.t('Context') + who, undefined, '', vscode.l10n.t('{0} tokens', formatTokens(c.used))));
+			} else {
+				out.push(`<div class="rr mut"><span class="n">${escapeHtml(vscode.l10n.t('Context') + who)}</span><span class="k">${escapeHtml(vscode.l10n.t('not reported yet'))}</span></div>`);
+			}
+			for (const l of m.limits) {
+				out.push(meterHtml(`${vscode.l10n.t('Quota')}${who} · ${quotaLabel(l.label)}`, l.usedPercent, quotaTone(l.usedPercent), l.resetsAt ? resetText(l.resetsAt) : ''));
+			}
+		}
+		return out.join('');
+	}
+}
+
+/** A quota window's label as the panel says it: `week` → weekly, `5h` → 5-hour. */
+function quotaLabel(label: string): string {
+	const hours = /^(\d+)h$/.exec(label);
+	return label === 'week' ? vscode.l10n.t('weekly')
+		: label.startsWith('week · ') ? `${vscode.l10n.t('weekly')} · ${label.slice(7)}`
+			: hours ? vscode.l10n.t('{0}-hour', hours[1]) : label;
+}
+
+/** When a quota window starts again, in the user's local time. */
+function resetText(iso: string): string {
+	const at = new Date(iso);
+	return Number.isNaN(at.getTime()) ? '' : vscode.l10n.t('Resets {0}', at.toLocaleString(vscode.env.language, { month: 'short', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit' }));
+}
+
+function meterHtml(name: string, percent: number | undefined, toneClass: string, sub: string): string {
+	return `<div class="meter"><div class="top"><span class="n">${escapeHtml(name)}</span>${percent !== undefined ? `<b>${percent}%</b>` : ''}</div>`
+		+ `${percent !== undefined ? `<span class="bar ${toneClass}"><b data-w="${percent}"></b></span>` : ''}${sub ? `<span class="sub">${escapeHtml(sub)}</span>` : ''}</div>`;
 }
 
 function sharedStrings(): SharedStrings {
