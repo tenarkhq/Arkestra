@@ -314,7 +314,7 @@ export class CodexAgent implements Agent {
 	}
 
 	/** The thread's rollout file read whole, here or on the SSH machine; undefined: no such file. */
-	private async readRollout(threadId: string, known: string | undefined): Promise<Required<SessionHistory> | undefined> {
+	private async readRollout(threadId: string, known: string | undefined): Promise<Required<Pick<SessionHistory, 'entries' | 'cursor'>> | undefined> {
 		if (!this.options.spawn) {
 			const file = known ?? await localRollout(this.localHomes(), threadId);
 			return file ? readLocalRollout(file) : undefined;

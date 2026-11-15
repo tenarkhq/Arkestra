@@ -129,20 +129,20 @@ export class RolloutHistory {
 	 * The entries read, the latest `limit` of them, and the follow's cursor: after the last whole
 	 * line, or at the start of an answer that may still grow (the follow reads it again, same id).
 	 */
-	result(limit = 300): Required<SessionHistory> {
+	result(limit = 300): Required<Pick<SessionHistory, 'entries' | 'cursor'>> {
 		return { entries: this.entries.slice(-limit), cursor: this.assembler.cursor(this.splitter.position) };
 	}
 }
 
 /** A whole rollout file's content as history and follow cursor. */
-export function rolloutHistory(content: Buffer, limit = 300): Required<SessionHistory> {
+export function rolloutHistory(content: Buffer, limit = 300): Required<Pick<SessionHistory, 'entries' | 'cursor'>> {
 	const history = new RolloutHistory();
 	history.push(content);
 	return history.result(limit);
 }
 
 /** Reads a rollout file on this machine up to its size now, in pieces (a long thread is many MB). */
-export async function readLocalRollout(file: string, limit = 300): Promise<Required<SessionHistory>> {
+export async function readLocalRollout(file: string, limit = 300): Promise<Required<Pick<SessionHistory, 'entries' | 'cursor'>>> {
 	const handle = await fs.open(file, 'r');
 	try {
 		const { size } = await handle.stat();

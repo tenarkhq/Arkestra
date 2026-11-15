@@ -5,8 +5,8 @@
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { homedir } from 'node:os';
-import type { Agent, AgentChoices, AgentEvent, ExistingSession, Usage, Message, Readiness, SessionEntry, TurnInput, WorkUpdate } from './rooms';
-import { LIST_SCRIPT, claudePiece, localListing, localSessionFile, localSessionPath, locateScript, parseHistory, parseListing, readScript } from './sessions';
+import type { Agent, AgentChoices, AgentEvent, ExistingSession, Usage, Message, Readiness, SessionEntry, SessionHistory, SessionMeta, TurnInput, WorkUpdate } from './rooms';
+import { ClaudeHistory, LIST_SCRIPT, claudeMeta, claudePiece, localHistory, localListing, localSessionPath, locateScript, parseListing, readScript } from './sessions';
 import { followLocal, followRemote } from './follow';
 
 export type AuthMode = 'subscription' | 'apiKey';
@@ -191,6 +191,8 @@ export class ClaudeCodeAgent implements Agent {
 	readonly name: string;
 	private readonly where: string;
 	private readonly sessions = new Map<string, RoomSession>();
+	/** 2: messages sent while Claude worked, compactions as one line, the model and context fill. */
+	readonly historyVersion = 2;
 
 	constructor(private readonly options: ClaudeCodeOptions) {
 		({ id: this.id, name: this.name, where: this.where } = options.identity ?? { id: 'claude', name: 'Claude', where: 'local' });
@@ -233,8 +235,32 @@ export class ClaudeCodeAgent implements Agent {
 		return parseListing(this.options.spawn ? await this.shell(LIST_SCRIPT) : await localListing(homedir()));
 	}
 
-	async sessionHistory(sessionId: string): Promise<readonly SessionEntry[]> {
-		return parseHistory(this.options.spawn ? await this.shell(readScript(sessionId)) : await localSessionFile(homedir(), sessionId));
+	/** A session's latest messages, its model and context fill, and where the live follow goes on. */
+	async sessionHistory(sessionId: string): Promise<SessionHistory> {
+		return this.options.spawn ? this.remoteHistory(sessionId) : localHistory(homedir(), sessionId);
+	}
+
+	/** The end of a session file on the SSH machine, read as bytes (the follow's cursor is a byte offset). */
+	private remoteHistory(sessionId: string, timeoutMs = 180_000): Promise<SessionHistory> {
+		const script = readScript(sessionId);
+		return new Promise((resolve, reject) => {
+			const child = this.options.spawn!('sh', ['-c', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+			const history = new ClaudeHistory(0, true);
+			let err = '';
+			const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('timeout')); }, timeoutMs);
+			child.stdout?.on('data', (chunk: Buffer) => history.push(chunk));
+			child.stderr?.setEncoding('utf8');
+			child.stderr?.on('data', (c: string) => { err = (err + c).slice(-2000); });
+			child.on('error', e => { clearTimeout(timer); reject(e); });
+			child.on('close', code => {
+				clearTimeout(timer);
+				if (code === 0) {
+					resolve(history.result());
+				} else {
+					reject(new Error(code === 3 ? 'the session file is gone' : err.trim().split('\n').at(-1) || `exited with ${code}`));
+				}
+			});
+		});
 	}
 
 	adoptSession(roomId: string, session: { readonly id: string; readonly cwd?: string }, seen: readonly string[]): void {
@@ -247,8 +273,8 @@ export class ClaudeCodeAgent implements Agent {
 	}
 
 	/** Follows a session file live (AR39): here through the file system, on an SSH machine through `tail -F`. */
-	watchSession(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string) => void, cursor?: string): { dispose(): void } {
-		const options = { classify: claudePiece, onEntries, ...(cursor !== undefined ? { cursor } : {}) };
+	watchSession(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string, meta?: SessionMeta) => void, cursor?: string): { dispose(): void } {
+		const options = { classify: claudePiece, meta: claudeMeta, onEntries, ...(cursor !== undefined ? { cursor } : {}) };
 		return this.options.spawn
 			? followRemote(this.options.spawn, locateScript(sessionId), options)
 			: followLocal(() => localSessionPath(homedir(), sessionId), options);
