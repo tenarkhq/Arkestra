@@ -194,6 +194,33 @@ export function startProblem(product: string, error: { code?: unknown; exitCode?
 }
 
 /**
+ * The script that prints the processes running a session (the id is checked before it gets
+ * here): Claude Code started with `--resume <id>`, `--resume=<id>`, `-r <id>` or `--session-id <id>`.
+ * A follow (`tail -F` of the session file) names the file, not the flag, so it never counts.
+ */
+export function runningScript(id: string): string {
+	if (!/^[0-9a-f-]{36}$/i.test(id)) {
+		throw new Error(`not a Claude session id: ${id}`);
+	}
+	return `ps -eo pid=,args= 2>/dev/null | grep -E -- '(--resume[= ]|--session-id[= ]|-r )${id}' | grep -v -F 'grep' | head -n 3 || true`;
+}
+
+/** Who else runs a session, from `runningScript`'s output: the Claude desktop app or another Claude Code; none: undefined. */
+export function runningElsewhere(out: string, id: string): string | undefined {
+	// Only `ps` lines (a pid, then the command) that name the session count.
+	const lines = out.split('\n').map(l => l.trim()).filter(l => /^\d+\s/.test(l) && l.includes(id));
+	if (!lines.length) {
+		return undefined;
+	}
+	return lines.some(l => /ccd-cli|Claude\.app|claude-code-vm|[\\/]Claude[\\/]claude-code[\\/]/.test(l)) ? 'the Claude desktop app' : 'another Claude Code';
+}
+
+/** The refusal when the session already runs in another app: a second Claude on it would write it apart. */
+export function openElsewhere(app: string, where?: string): Error {
+	return new Error(`This session is open in ${app}${where ? ` on ${where}` : ''}. Arkestra did not start a second Claude on it: the two would write the same session apart. Continue it there, or close it there first and send again.`);
+}
+
+/**
  * Claude Code's models (aliases for the latest of each) and its efforts, as `claude --help` lists them,
  * plus `ultracode` (`--effort ultracode`: a workflow on every task), which help does not list; not on Haiku.
  */
@@ -326,6 +353,27 @@ export class ClaudeCodeAgent implements Agent {
 		});
 	}
 
+	/** Which other app runs this session on the agent's machine now, if any (a failed check says none). */
+	private async runningApp(sessionId: string): Promise<string | undefined> {
+		if (process.platform === 'win32' && !this.options.spawn) {
+			return undefined;
+		}
+		try {
+			const script = runningScript(sessionId);
+			const out = this.options.spawn ? await this.shell(script, 15_000) : await new Promise<string>(resolve => {
+				const child = nodeSpawn('sh', ['-c', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+				let text = '';
+				child.stdout?.setEncoding('utf8');
+				child.stdout?.on('data', (c: string) => { text += c; });
+				child.on('error', () => resolve(''));
+				child.on('close', () => resolve(text));
+			});
+			return runningElsewhere(out, sessionId);
+		} catch {
+			return undefined;
+		}
+	}
+
 	async turn(input: TurnInput, onEvent: (event: AgentEvent) => void, signal: AbortSignal): Promise<void> {
 		const session = this.sessions.get(input.roomId) ?? { seen: new Set<string>() };
 		const fresh = input.transcript.filter(m => !session.seen.has(m.id));
@@ -346,6 +394,14 @@ export class ClaudeCodeAgent implements Agent {
 		}
 		if (input.model || this.options.model) {
 			args.push('--model', input.model || this.options.model!);
+		}
+
+		// A session another app runs now (the desktop app, a terminal): a second process would fork it.
+		if (session.sessionId) {
+			const app = await this.runningApp(session.sessionId);
+			if (app) {
+				throw openElsewhere(app, this.options.spawn ? this.where : undefined);
+			}
 		}
 
 		const env = { ...process.env };

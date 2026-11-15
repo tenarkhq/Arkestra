@@ -12,6 +12,7 @@ import { agentGroups, machineCount as rowMachines, sessionRowId, threadGroup, th
 import { LOCAL, readMachineEntries, relativeTime } from './machinesModel';
 import { addSection, deleteSection, keepThreads, layoutThreads, matches, moveSection, moveThread, parseSections, renameSection, sectionOf, sectionsFromCategories, shiftSection, type Section } from './sections';
 import { MachinesPage } from './machinesPage';
+import { THREAD_VIEW_TYPE } from './threadView';
 import { sidebarHtml, type SidebarGroup, type SidebarMessage, type SidebarModel, type SidebarRow, type SidebarStrings } from './sidebarHtml';
 import { FONT_ROOT, pageFonts } from './webviewFonts';
 import { projectName, type ThreadSummary } from './threads';
@@ -304,7 +305,10 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			if (input.viewType.endsWith('arkestra.machines')) {
 				return 'nav:machines';
 			}
-			return undefined;
+			// A thread's own tab: its row (below); any other page selects none.
+			if (!input.viewType.endsWith(THREAD_VIEW_TYPE)) {
+				return undefined;
+			}
 		}
 		if (input instanceof vscode.TabInputText || input instanceof vscode.TabInputTextDiff || input instanceof vscode.TabInputTerminal) {
 			return undefined;
@@ -456,7 +460,7 @@ function groupName(id: string): string {
 }
 
 /** The machines' names by id, for the small machine label of a row. */
-function machineNames(): Map<string, string> {
+export function machineNames(): Map<string, string> {
 	const entries = readMachineEntries(vscode.workspace.getConfiguration('arkestra.connections').get('machines'));
 	// Short: it sits beside the title in a narrow bar.
 	return new Map([[LOCAL, process.platform === 'darwin' ? 'Mac' : vscode.l10n.t('This machine')], ...entries.map(m => [m.id, m.name] as const)]);

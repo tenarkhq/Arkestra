@@ -57,6 +57,27 @@ export interface RoomState {
 	adopted?: Record<string, AdoptedSession>;
 	/** What the agents produced with their tools (AR26): files they wrote, artifacts they published. */
 	produced?: ProducedArtifact[];
+	/** The user named the thread here: the name of the session it continues no longer replaces it. */
+	renamed?: boolean;
+}
+
+/**
+ * A thread that continues a CLI session carries the session's name (the one Claude Code, the
+ * desktop app and the phone show) until the user names the thread here. True when it changed.
+ */
+export function followSessionName(state: RoomState, sessions: readonly { readonly id: string; readonly title: string }[]): boolean {
+	if (state.renamed) {
+		return false;
+	}
+	const own = new Set(Object.values(state.adopted ?? {}).map(link => link.session));
+	const session = sessions.find(s => own.has(s.id));
+	const title = session?.title.trim();
+	// A session with no name and no message shows its id's start: that is no name.
+	if (!session || !title || title === session.id.slice(0, 8) || title === state.title) {
+		return false;
+	}
+	state.title = title;
+	return true;
 }
 
 /** An existing CLI session a thread continues (AR39). */
@@ -93,6 +114,8 @@ export class Room {
 	afterTurn?: (agent: Agent, reply: string) => Promise<void>;
 	/** The shared rules and memory every agent gets (AR23). */
 	shared?: () => Promise<{ text: string; version: string } | undefined>;
+	/** The thread as one agent gets it (files attached here sent to its machine first); throws when that fails. */
+	forAgent?: (agent: Agent, messages: readonly Message[]) => Promise<readonly Message[]>;
 
 	constructor(readonly state: RoomState, private readonly registry: AgentRegistry, private readonly now: () => Date = () => new Date()) { }
 
@@ -249,7 +272,8 @@ export class Room {
 			const choice = this.state.choices?.[agent.id];
 			// No model chosen here: an adopted session goes on with the model it has been running.
 			const model = choice?.model ?? adopted?.model;
-			await agent.turn({ roomId: this.id, transcript: [...this.state.messages], ...(this.state.mode === 'plan' ? { mode: 'plan' as const } : {}), ...(shared ? { shared } : {}), ...(model ? { model } : {}), ...(choice?.effort ? { effort: choice.effort } : {}) }, event => {
+			const transcript = this.forAgent ? [...await this.forAgent(agent, this.state.messages)] : [...this.state.messages];
+			await agent.turn({ roomId: this.id, transcript, ...(this.state.mode === 'plan' ? { mode: 'plan' as const } : {}), ...(shared ? { shared } : {}), ...(model ? { model } : {}), ...(choice?.effort ? { effort: choice.effort } : {}) }, event => {
 				if (event.kind === 'line') {
 					lines.push(event.line);
 					return;

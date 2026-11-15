@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as path from 'node:path';
 import { Script } from 'node:vm';
-import { allowedImage, attachmentName, fileReference, imageName, imageRefs, imageSource, isInside, markdownImages, userImages, type ImageResolver } from '../images';
+import { allowedImage, attachmentName, fileReference, imageName, imageRefs, imageSource, isInside, markdownImages, userImages, type ImageResolver, absoluteReferences, movedReferences } from '../images';
 import { imageAttachment, parseReferences } from '../references';
 import { fontFaces, fontSrc } from '../fonts';
 import { renderMarkdown, rowHtml, threadPage, detailsPage, type ThreadStrings } from '../threadHtml';
@@ -128,4 +128,11 @@ test('pages load the bundled Inter only with a font source in the CSP', () => {
 	assert.ok(!detailsPage('N').includes('font-src'));
 	const side = sidebarHtml('N', new Proxy({}, { get: (_t, k) => String(k) }) as never, fonts);
 	assert.ok(side.includes('font-src https://res.test;') && side.includes('@font-face'));
+});
+
+test('files attached here are named by absolute path; an SSH agent gets their place on its machine', () => {
+	const text = 'look @file:/Users/r/Library/room/kep.png and @file:"/Users/r/My Pics/b.jpg" plus @file:src/a.ts and @file:/Users/r/x.ts#L3-L9';
+	assert.deepEqual(absoluteReferences(text), ['/Users/r/Library/room/kep.png', '/Users/r/My Pics/b.jpg', '/Users/r/x.ts']);
+	const moved = new Map([['/Users/r/Library/room/kep.png', '/home/t/.arkestra/attachments/r1/kep.png'], ['/Users/r/My Pics/b.jpg', '/home/t/.arkestra/attachments/r1/b.jpg'], ['/Users/r/x.ts', '/home/t/x.ts']]);
+	assert.equal(movedReferences(text, moved), 'look @file:/home/t/.arkestra/attachments/r1/kep.png and @file:/home/t/.arkestra/attachments/r1/b.jpg plus @file:src/a.ts and @file:/home/t/x.ts#L3-L9');
 });

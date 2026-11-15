@@ -7,7 +7,7 @@ import * as assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { ClaudeCodeAgent, permissionArgs, ROOM_PREAMBLE, parseLine, rateLimit, workOf } from '../claudeCode';
+import { ClaudeCodeAgent, permissionArgs, ROOM_PREAMBLE, parseLine, rateLimit, workOf, openElsewhere, runningElsewhere, runningScript } from '../claudeCode';
 import type { AgentEvent, Message } from '../rooms';
 
 const FAKE = `#!/usr/bin/env node
@@ -177,4 +177,15 @@ test('Ultracode is an effort of Opus, Sonnet and Fable and goes to the CLI as --
 	await agent.turn({ roomId: 'u', transcript: [msg('user', 'user', 'hi')], model: 'opus', effort: 'ultracode' }, () => { }, new AbortController().signal);
 	const [call] = await calls();
 	assert.equal(call.args[call.args.indexOf('--effort') + 1], 'ultracode');
+});
+
+test('a session another app runs now is not started a second time; a follow of its file does not count', () => {
+	const id = 'c0a0302a-cdc7-4b63-b14f-c834efb9a027';
+	assert.match(runningScript(id), /--resume\[= \]/);
+	assert.throws(() => runningScript('x; rm -rf ~'), /not a Claude session id/);
+	assert.equal(runningElsewhere('', id), undefined);
+	assert.equal(runningElsewhere('{"type":"result"}', id), undefined);
+	assert.equal(runningElsewhere(`1340170 /home/r/.claude/remote/ccd-cli/2.1.321-3fb3 --output-format stream-json --resume=${id}\n`, id), 'the Claude desktop app');
+	assert.equal(runningElsewhere(`77 /usr/bin/node /home/r/.local/bin/claude --resume ${id}`, id), 'another Claude Code');
+	assert.match(openElsewhere('the Claude desktop app', 'tenark-claude').message, /open in the Claude desktop app on tenark-claude/);
 });

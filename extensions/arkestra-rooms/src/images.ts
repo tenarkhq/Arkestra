@@ -167,6 +167,28 @@ export function attachmentName(name: string, mime: string, taken: (candidate: st
 }
 
 /** The reference a kept file goes to the agents with (references.ts expands it). */
+/** The files a text names with `@file:` by an absolute path (POSIX or Windows), each once. */
+export function absoluteReferences(text: string): string[] {
+	const out: string[] = [];
+	for (const m of text.matchAll(FILE_REF)) {
+		const file = (m[2] ?? m[3]).replace(/#L\d+(?:-L?\d+)?$/, '');
+		if ((path.posix.isAbsolute(file) || path.win32.isAbsolute(file)) && !out.includes(file)) {
+			out.push(file);
+		}
+	}
+	return out;
+}
+
+/** The text with the `@file:` references of moved files pointing at their new place (`moved`: old path → new). */
+export function movedReferences(text: string, moved: ReadonlyMap<string, string>): string {
+	return text.replace(FILE_REF, (all, lead: string, quoted: string | undefined, bare: string | undefined) => {
+		const ref = quoted ?? bare ?? '';
+		const lines = /#L\d+(?:-L?\d+)?$/.exec(ref)?.[0] ?? '';
+		const target = moved.get(ref.slice(0, ref.length - lines.length));
+		return target ? `${lead}${fileReference(target + lines)}` : all;
+	});
+}
+
 export function fileReference(file: string): string {
 	return `@file:${/[\s"]/.test(file) ? `"${file.replace(/"/g, '')}"` : file}`;
 }

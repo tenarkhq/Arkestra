@@ -28,6 +28,10 @@ export const AUTOMATED = /"entrypoint":"sdk-/;
 export const TEMP_FOLDER = /^-(private-)?(tmp|var-folders)(-|$)/;
 const HEAD_BYTES = 262_144;
 const CANDIDATES = /"type":"(summary|user|custom-title)"/;
+/** How much of a session file's end the listing reads for the name: Claude Code writes it again near the end. */
+const TAIL_BYTES = 131_072;
+/** The lines that hold the name the person gave (custom-title) or the apps show (agent-name). */
+const NAMES = /"type":"(custom-title|agent-name)"/;
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -48,6 +52,7 @@ export const LIST_SCRIPT = [
 	`  [ "$f" = /dev/null ] && continue`,
 	`  printf '\\036FILE %s %s\\n' "$(date -r "$f" +%s 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)" "$f"`,
 	`  head -c ${HEAD_BYTES} "$f" | grep -E '"type":"(summary|user|custom-title)"' | head -n 8`,
+	`  tail -c ${TAIL_BYTES} "$f" | grep -E '"type":"(custom-title|agent-name)"' | tail -n 4`,
 	'done',
 ].join('\n');
 
@@ -109,6 +114,11 @@ export async function localListing(home: string): Promise<string> {
 			const buf = Buffer.alloc(HEAD_BYTES);
 			const { bytesRead } = await handle.read(buf, 0, HEAD_BYTES, 0);
 			const lines = buf.subarray(0, bytesRead).toString('utf8').split('\n').filter(l => CANDIDATES.test(l)).slice(0, 8);
+			const size = (await handle.stat()).size;
+			const from = Math.max(0, size - TAIL_BYTES);
+			const end = Buffer.alloc(size - from);
+			const read = await handle.read(end, 0, end.length, from);
+			lines.push(...end.subarray(0, read.bytesRead).toString('utf8').split('\n').filter(l => NAMES.test(l)).slice(-4));
 			parts.push(`${MARK}${f.mtime} ${f.rel}\n${lines.join('\n')}`);
 		} finally {
 			await handle.close();
@@ -171,7 +181,7 @@ function readLine(line: string): any {
 		if (type === 'user') {
 			return { type, cwd: field('cwd'), message: { content: field('content') ?? (field('text') ? [{ type: 'text', text: field('text') }] : undefined) }, isMeta: /"isMeta":true/.test(line) };
 		}
-		return type ? { type, summary: field('summary'), customTitle: field('customTitle') } : undefined;
+		return type ? { type, summary: field('summary'), customTitle: field('customTitle'), agentName: field('agentName') } : undefined;
 	}
 }
 
@@ -206,13 +216,17 @@ export function parseListing(out: string): ExistingSession[] {
 			continue;
 		}
 		let title: string | undefined;
+		let named: string | undefined;
 		let summary: string | undefined;
 		let first: string | undefined;
 		let cwd: string | undefined;
 		for (const line of lines) {
 			const data = line.trim() ? readLine(line) : undefined;
-			if (data?.type === 'custom-title' && typeof data.customTitle === 'string') {
-				title ??= data.customTitle;
+			// The latest name wins: Claude Code appends a new line on every rename.
+			if (data?.type === 'custom-title' && typeof data.customTitle === 'string' && data.customTitle.trim()) {
+				title = data.customTitle;
+			} else if (data?.type === 'agent-name' && typeof data.agentName === 'string' && data.agentName.trim()) {
+				named = data.agentName;
 			} else if (data?.type === 'summary' && typeof data.summary === 'string') {
 				summary ??= data.summary;
 			} else if (data?.type === 'user' && !data.isMeta && !data.isSidechain) {
@@ -224,7 +238,7 @@ export function parseListing(out: string): ExistingSession[] {
 			continue;
 		}
 		const line = (s: string) => { const l = s.split('\n')[0].trim(); return l.length > 80 ? l.slice(0, 79).trimEnd() + '…' : l; };
-		sessions.push({ id, title: line(title || summary || first || id.slice(0, 8)), ...(cwd ? { cwd } : {}), updatedAt: new Date(Number(m[1]) * 1000).toISOString() });
+		sessions.push({ id, title: line(title || named || summary || first || id.slice(0, 8)), ...(cwd ? { cwd } : {}), updatedAt: new Date(Number(m[1]) * 1000).toISOString() });
 	}
 	return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }

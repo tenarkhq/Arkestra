@@ -8,7 +8,7 @@ import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { ActivityBoard, type AgentActivity } from './activity';
 import { AgentRegistry, type Agent, type ExistingSession, type InviteEntry } from './agent';
-import { AgentNotReadyError, Room, RoomOpener, importedRoomState, newRoomState } from './room';
+import { AgentNotReadyError, Room, RoomOpener, followSessionName, importedRoomState, newRoomState, type Message } from './room';
 import { agentKind, cleanSessionMessages, continueOn, elsewhere, healAdopted, homeOf, isForeign, placeLocalSessions, type ListedSession } from './sessionHome';
 import { RoomStore } from './store';
 import { SessionFollow } from './sessionFollow';
@@ -30,7 +30,7 @@ import { SharedContext } from './sharedUi';
 import { extractMemories } from './shared';
 import { BestOfN } from './bestUi';
 import { ArtifactGallery } from './artifactsUi';
-import { SidebarView } from './sidebarView';
+import { SidebarView, machineNames } from './sidebarView';
 import { contextPercent, ringSvg, statusText, tightestLimit, usageLine, formatTokens } from './usage';
 import { GitTemplateIO, createWorkTrees } from './templates/gitio';
 import { TemplateRun } from './templates/run';
@@ -39,7 +39,8 @@ import type { CodeState, ReviewState, TemplateState } from './templates/types';
 import { ROOM_ID_KEY, ROOM_SCHEME, historyTurns, projectName, roomIdFromHistory, roomIdFromSessionPath, summarize, titleFrom, type ProjectThreads, type ThreadSummary } from './threads';
 import { ThreadViews } from './threadView';
 import { DetailsView } from './detailsView';
-import { LiveTurns } from './threadModel';
+import { LiveTurns, machineOf as machineOfAgent } from './threadModel';
+import { absoluteReferences, movedReferences } from './images';
 import type { TurnSink } from './room';
 
 /** What adapter extensions (Claude Code, Codex, OpenAI, ACP) receive. */
@@ -128,10 +129,27 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	/** This machine's sessions without the copies an SSH machine has; a copy nobody has is marked. */
 	const listedSessions = async (agent: Agent, fresh = false): Promise<readonly ListedSession[]> => {
 		const sessions = await sessionsOf(agent, fresh);
+		void followNames(sessions);
 		if (agent.id.includes('@') || !sessions.some(s => isForeign(agent.id, s.cwd, localFolder))) {
 			return sessions;
 		}
 		return placeLocalSessions(agent.id, sessions, localFolder, (await twins(agent.id)).map(t => t.sessions));
+	};
+	/** Threads that continue these sessions take their current names (renamed in the CLI or the apps). */
+	const followNames = async (sessions: readonly ListedSession[]): Promise<void> => {
+		let changed = false;
+		for (const stored of await store.list()) {
+			const room = loaded.get(stored.id);
+			const state = room?.state ?? stored;
+			if (followSessionName(state, sessions)) {
+				await store.save(state);
+				room?.touch();
+				changed = true;
+			}
+		}
+		if (changed) {
+			refreshThreadsLater();
+		}
 	};
 	/**
 	 * Once per open: a thread that follows a copy of an SSH machine's session moves to that
@@ -153,9 +171,42 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}
 	}));
 
+	// Files attached in a thread live here; an agent on an SSH machine reads them there (uploaded once per file version).
+	const sentFiles = new Map<string, string>();
+	const sendFiles = async (roomId: string, agent: Agent, messages: readonly Message[]): Promise<readonly Message[]> => {
+		const machine = machineOfAgent(agent.id);
+		if (!machine) {
+			return messages;
+		}
+		const named = [...new Set(messages.filter(m => m.author.kind === 'user').flatMap(m => absoluteReferences(m.text)))];
+		const local: { file: string; key: string }[] = [];
+		for (const file of named) {
+			const info = await stat(file).catch(() => undefined);
+			if (info?.isFile() && info.size <= 25 * 1024 * 1024) {
+				local.push({ file, key: `${machine}\n${roomId}\n${file}\n${info.mtimeMs}` });
+			}
+		}
+		if (!local.length) {
+			return messages;
+		}
+		const todo = local.filter(f => !sentFiles.has(f.key));
+		if (todo.length) {
+			const r = await vscode.commands.executeCommand<{ dir?: string; error?: string } | undefined>('arkestra.connections.uploadFiles', machine, todo.map(f => f.file), `~/.arkestra/attachments/${roomId}`);
+			if (!r?.dir) {
+				throw new Error(vscode.l10n.t('The attached files could not be sent to {0}: {1}', machineNames().get(machine) ?? machine, r?.error ?? vscode.l10n.t('the machine is not connected')));
+			}
+			for (const f of todo) {
+				sentFiles.set(f.key, path.posix.join(r.dir, path.basename(f.file)));
+			}
+		}
+		const moved = new Map(local.map(f => [f.file, sentFiles.get(f.key)!]));
+		return messages.map(m => m.author.kind === 'user' && m.text.includes('@file:') ? { ...m, text: movedReferences(m.text, moved) } : m);
+	};
+
 	const track = (room: Room): Room => {
 		loaded.set(room.id, room);
 		room.shared = () => shared.block();
+		room.forAgent = (agent, messages) => sendFiles(room.id, agent, messages);
 		room.afterTurn = async (agent, reply) => {
 			await changesUi?.take(room.id, vscode.l10n.t('After {0}', agent.name));
 			const memories = extractMemories(reply);
@@ -1031,7 +1082,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			const room = await open(threadId(arg));
 			const title = typeof name === 'string' ? name.trim() : '';
 			if (room && title) {
-				await editRoom(room.id, r => { r.state.title = title; });
+				await editRoom(room.id, r => { r.state.title = title; r.state.renamed = true; });
 			}
 		}),
 	);

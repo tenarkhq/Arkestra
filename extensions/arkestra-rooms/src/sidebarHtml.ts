@@ -118,7 +118,8 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		--mute: var(--vscode-descriptionForeground);
 		--dim: color-mix(in srgb, var(--vscode-descriptionForeground) 70%, transparent);
 		--hover: var(--vscode-list-hoverBackground);
-		--sel: var(--vscode-list-inactiveSelectionBackground);
+		/* The open thread's row stands out in every theme (the list's own selection colour is faint in many). */
+		--sel: color-mix(in srgb, var(--fg) 13%, transparent);
 		--accent: var(--vscode-progressBar-background);
 	}
 	html, body { margin: 0; padding: 0; background: var(--vscode-sideBar-background); color: var(--fg); }
@@ -126,7 +127,9 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 	#nav, #list { display: flex; flex-direction: column; gap: 2px; }
 	.it { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 10px; border-radius: 7px; color: var(--fg); white-space: nowrap; overflow: hidden; cursor: pointer; outline: none; flex: none; }
 	.it:hover, .it.menu-open { background: var(--hover); }
-	.it.sel { background: var(--sel); }
+	.it.sel, .it.sel:hover { background: var(--sel); }
+	.it.sel .n { font-weight: 600; }
+	.it.sel svg { color: var(--fg); }
 	.it:focus-visible, .proj:focus-visible, .sec.fold:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 	.it svg { width: 16px; height: 16px; flex: none; color: var(--mute); }
 	.it .n { overflow: hidden; text-overflow: ellipsis; flex: 1; }

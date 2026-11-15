@@ -34,6 +34,18 @@ test('listing: title from a custom title, a summary or the first thing the user 
 	assert.throws(() => readScript('x; rm -rf ~'), /not a Claude session id/);
 });
 
+test('listing: the latest name wins (Claude Code writes it again near the end); the apps\' name before the first message', () => {
+	const ID = (n: number) => `${n}${n}${n}${n}${n}${n}${n}${n}-1111-4111-8111-111111111111`;
+	const user = (content: string) => JSON.stringify({ type: 'user', cwd: '/srv', message: { role: 'user', content } });
+	const out = [
+		`\u001eFILE 1700000300 -srv/${ID(1)}.jsonl`, user('first words'), JSON.stringify({ type: 'custom-title', customTitle: 'Old name' }),
+		JSON.stringify({ type: 'custom-title', customTitle: 'Old name' }), JSON.stringify({ type: 'agent-name', agentName: 'Arkestra' }), JSON.stringify({ type: 'custom-title', customTitle: 'Arkestra' }),
+		`\u001eFILE 1700000200 -srv/${ID(2)}.jsonl`, user('hello there'), JSON.stringify({ type: 'agent-name', agentName: 'Átadó beolvasása' }),
+		`\u001eFILE 1700000100 -srv/${ID(3)}.jsonl`, user('just a chat'),
+	].join('\n');
+	assert.deepEqual(parseListing(out).map(s => s.title), ['Arkestra', 'Átadó beolvasása', 'just a chat']);
+});
+
 test('history: what the user wrote and Claude\'s answers, one answer per request; tool steps and side chains left out', () => {
 	const lines = [
 		user('fix the stop', { timestamp: '2026-11-14T10:00:00Z' }),

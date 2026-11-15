@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import type { Machine } from './ssh';
-import { droppedPaths, joinRemote, listRemote, readRemote, remoteParent, shellArgs, upload, uploadedPaths } from './transfer';
+import { droppedPaths, joinRemote, listRemote, readRemote, remoteFolder, remoteParent, shellArgs, upload, uploadedPaths } from './transfer';
 
 /** A folder on an SSH machine. */
 interface Place {
@@ -30,6 +30,8 @@ export class MachineTools implements vscode.Disposable {
 			// With a folder: the page's "Open a terminal here"; without: the palette's, in the machine's default folder.
 			vscode.commands.registerCommand('arkestra.connections.openTerminal', (machineId?: string, dir?: unknown) => this.openTerminal(machineId, typeof dir === 'string' && dir ? dir : undefined)),
 			vscode.commands.registerCommand('arkestra.connections.upload', (machineId?: string) => this.pickAndUpload(machineId)),
+			// Files attached in a thread, for an agent on an SSH machine: its absolute folder there, or the error.
+			vscode.commands.registerCommand('arkestra.connections.uploadFiles', (machineId?: unknown, files?: unknown, dir?: unknown) => this.uploadFiles(machineId, files, dir)),
 		);
 	}
 
@@ -91,6 +93,21 @@ export class MachineTools implements vscode.Disposable {
 		}
 		try {
 			return { text: await readRemote(machine, file, this.ssh()) };
+		} catch (error) {
+			return { error: error instanceof Error ? error.message : String(error) };
+		}
+	}
+
+	private async uploadFiles(machineId: unknown, files: unknown, dir: unknown): Promise<{ dir?: string; error?: string } | undefined> {
+		const machine = typeof machineId === 'string' ? this.machines().find(m => m.id === machineId) : undefined;
+		const paths = Array.isArray(files) ? files.filter((f): f is string => typeof f === 'string' && path.isAbsolute(f)) : [];
+		if (!machine || !paths.length || typeof dir !== 'string' || !dir) {
+			return undefined;
+		}
+		try {
+			const folder = await remoteFolder(machine, dir, this.ssh());
+			await upload(machine, paths, folder, this.ssh());
+			return { dir: folder };
 		} catch (error) {
 			return { error: error instanceof Error ? error.message : String(error) };
 		}
