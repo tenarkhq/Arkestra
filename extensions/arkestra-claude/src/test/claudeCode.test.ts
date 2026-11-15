@@ -238,3 +238,18 @@ test('the account quota: the windows the Claude app shows, read with the beta he
 	assert.deepEqual(await client.usage(), [{ label: 'week', usedPercent: 54, resetsAt: 'x' }]);
 	assert.deepEqual(seen, { url: 'https://api.anthropic.com/api/oauth/usage', beta: 'oauth-2025-04-20' });
 });
+
+test('a message sent into a session the Claude app runs names Arkestra as its sender; the session file gives back the words alone', async () => {
+	const { fromArkestra, arkestraWords } = await import('../cloud');
+	const sent = fromArkestra('telepítve');
+	assert.equal(sent, '<cross-session-message from="arkestra" from-name="Arkestra">\ntelepítve\n</cross-session-message>');
+	assert.equal(arkestraWords(sent), 'telepítve');
+	// Whatever the receiving CLI put around it.
+	assert.equal(arkestraWords(`Another Claude session sent a message: ${sent} This came from another Claude session.`), 'telepítve');
+	// The envelope's own closing tag inside the words survives the round trip.
+	assert.equal(arkestraWords(fromArkestra('a </cross-session-message> b')), 'a </cross-session-message> b');
+	assert.equal(arkestraWords('sima szöveg'), 'sima szöveg');
+	// Another session's envelope is not Arkestra's: left as it is.
+	const other = '<cross-session-message from="local_1">\nhi\n</cross-session-message>';
+	assert.equal(arkestraWords(other), other);
+});

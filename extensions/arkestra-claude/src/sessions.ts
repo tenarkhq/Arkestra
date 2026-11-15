@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import type { ExistingSession, SessionEntry, SessionHistory, SessionMeta } from './rooms';
 import { EntryAssembler, LineSplitter, type Piece } from './follow';
 import { folderStore, withImages, type ImageStore, type SessionImage } from './sessionImages';
+import { arkestraWords } from './cloud';
 
 const MARK = '\u001eFILE ';
 /** How many sessions a machine lists, newest first. */
@@ -204,7 +205,7 @@ function userText(content: unknown): string | undefined {
 		}
 		text = content.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') || undefined;
 	}
-	text = text?.trim();
+	text = text === undefined ? undefined : arkestraWords(text).trim();
 	if (!text || /^(<command-|<local-command|<system-reminder>|Caveat: |\[Request interrupted)/.test(text)) {
 		return undefined;
 	}

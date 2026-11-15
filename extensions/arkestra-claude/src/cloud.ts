@@ -34,6 +34,22 @@ export function parseCredentials(text: string): Credentials | undefined {
 	}
 }
 
+/**
+ * A message Arkestra sends into a session the Claude app runs, with its sender named. claude.ai
+ * takes a message for the user's own only from its own apps; one from Arkestra reaches the
+ * session as another session's, and this envelope (the one Claude Code's sessions use between
+ * themselves) at least tells that session it came from Arkestra.
+ */
+export function fromArkestra(text: string): string {
+	return `<cross-session-message from="arkestra" from-name="Arkestra">\n${text.replace(/<\/cross-session-message/gi, '<\\/cross-session-message')}\n</cross-session-message>`;
+}
+
+/** The words of such a message as the session file keeps it (whatever the receiving CLI put around it); the text unchanged otherwise. */
+export function arkestraWords(text: string): string {
+	const inner = /<cross-session-message from="arkestra"[^>]*>\n?([\s\S]*?)\n?<\/cross-session-message>/.exec(text)?.[1];
+	return inner === undefined ? text : inner.replace(/<\\\/cross-session-message/gi, '</cross-session-message').trim();
+}
+
 /** One row of the account's list, as Arkestra uses it. */
 export function cloudSession(row: unknown): CloudSession | undefined {
 	const r = row as { id?: unknown; title?: unknown; status?: unknown; last_event_at?: unknown; updated_at?: unknown; worker_status?: unknown; unread?: unknown; external_metadata?: { context_usage?: { used_tokens?: unknown; max_tokens?: unknown } } } | undefined;
@@ -104,7 +120,7 @@ export class CloudClient implements CloudSessions {
 	 * answers it there, and the answer reaches Arkestra through the session file like any other.
 	 */
 	async send(id: string, text: string): Promise<void> {
-		const payload = { uuid: randomUUID(), session_id: session(id), type: 'user', parent_tool_use_id: null, message: { role: 'user', content: text } };
+		const payload = { uuid: randomUUID(), session_id: session(id), type: 'user', parent_tool_use_id: null, message: { role: 'user', content: fromArkestra(text) } };
 		await this.call('POST', `/v1/code/sessions/${session(id)}/events`, { events: [{ payload }] });
 	}
 
