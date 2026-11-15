@@ -103,6 +103,8 @@ export function remotePage(nonce: string, cspSource: string, t: RemoteStrings, f
 	h2 { font-size: 13.5px; font-weight: 600; margin: 0; }
 	.lead { color: var(--mute); line-height: 1.5; font-size: 12.5px; }
 	label { display: grid; gap: 4px; }
+	/* The relay form: its fields apart from each other. */
+	#relay { display: grid; gap: 12px; }
 	label > span { font-size: 12px; font-weight: 500; color: var(--mute); }
 	small { color: var(--mute); font-size: 11.5px; }
 	input[type=text], input[type=password] { font: inherit; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--vscode-input-border, var(--line)); background: var(--vscode-input-background); color: var(--vscode-input-foreground, var(--vscode-foreground)); outline: none; }
