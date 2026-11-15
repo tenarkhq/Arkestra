@@ -89,7 +89,8 @@ export function backgroundNoise(text: string): Omit<FoldItem, 'id'> | undefined 
 
 /** The user's own words: system reminders and similar blocks glued to them are cut out. */
 export function userWords(text: string): string {
-	return text.replace(BLOCK, '').trim();
+	// What the user pasted, as the Claude app wraps it: the text stays, the wrapper goes.
+	return text.replace(BLOCK, '').replace(/<pasted_content(?:\s[^>]*)?>\n?([\s\S]*?)\n?<\/pasted_content>/g, '$1').trim();
 }
 
 export type Row =

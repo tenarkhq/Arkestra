@@ -311,3 +311,7 @@ test('the Claude app\'s artifact view block beside the user\'s words is hidden: 
 	assert.equal(backgroundNoise(`${block}\n\nna ez most sokkal jobb`), undefined);
 	assert.equal(backgroundNoise(block)?.kind, 'context');
 });
+
+test('pasted text keeps its words without the Claude app\'s wrapper', () => {
+	assert.equal(userWords('nézd:\n<pasted_content id="0ec0">\ncsorbar@tenarkprd:/opt$ ls\n</pasted_content>\nmi ez?'), 'nézd:\ncsorbar@tenarkprd:/opt$ ls\nmi ez?');
+});
