@@ -246,7 +246,7 @@ export class ClaudeCodeAgent implements Agent {
 	 * 2: messages sent while Claude worked, compactions as one line, the model and context fill.
 	 * 3: the tool lines too, for what Claude produced (AR26): threads read before get their artifacts.
 	 */
-	readonly historyVersion = 3;
+	readonly historyVersion = 4;
 
 	/** The claude.ai account's sessions, with the sign-in Claude Code keeps on this agent's machine. */
 	readonly cloud: CloudClient;

@@ -324,10 +324,17 @@ function userPiece(content: unknown, base: Base): Piece {
 
 /** One parsed line as the thread sees it. */
 function pieceOf(data: any): Piece {
+	const base: Base = { ...(typeof data?.uuid === 'string' ? { id: data.uuid } : {}), ...(typeof data?.timestamp === 'string' ? { at: data.timestamp } : {}) };
+	// A message another sender put into the session (Claude Code keeps it as a meta line): from
+	// Arkestra it is the user's own, in its place; another session's shows as the Claude app shows it.
+	const peer = data?.type === 'user' && data.isMeta && !data.isSidechain && data.origin?.kind === 'peer' ? data.origin : undefined;
+	if (peer && typeof peer.body === 'string' && peer.body.trim()) {
+		return /^arkestra(-app)?$/.test(String(peer.from)) ? { kind: 'user', text: peer.body.trim(), ...base }
+			: { kind: 'notice', text: `Message from ${String(peer.name || peer.from)}: ${peer.body.trim().replace(/\s+/g, ' ').slice(0, 300)}`, ...base };
+	}
 	if (!data || data.isSidechain || data.isMeta || data.isCompactSummary || data.isVisibleInTranscriptOnly) {
 		return undefined;
 	}
-	const base: Base = { ...(typeof data.uuid === 'string' ? { id: data.uuid } : {}), ...(typeof data.timestamp === 'string' ? { at: data.timestamp } : {}) };
 	if (data.type === 'user') {
 		return userPiece(data.message?.content, base);
 	}
