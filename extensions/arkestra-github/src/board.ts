@@ -52,6 +52,8 @@ export interface Card {
 	readonly prs: readonly { readonly label: string; readonly tone: Tone; readonly url: string }[];
 	readonly review?: { readonly label: string; readonly tone: Tone };
 	readonly comments?: number;
+	/** An issue's sub-issues, closed of all (GitHub's "Sub-issues progress"). */
+	readonly subIssues?: { readonly done: number; readonly total: number };
 	readonly room?: RoomInfo;
 	readonly pending?: boolean;
 }
@@ -78,6 +80,8 @@ export interface BoardModel {
 	readonly repositories: readonly string[];
 	/** Field ids by the job they do on the Table view: lane (Line), executor, reviewer, prerequisite note. */
 	readonly roles: FieldRoles;
+	/** The columns of the project's table view on GitHub, as Table view keys in its order: the default here too. */
+	readonly viewColumns?: readonly string[];
 	readonly sync: SyncLine;
 	readonly journal: readonly { readonly time: string; readonly direction: 'in' | 'out'; readonly item?: string; readonly text: string; readonly error?: boolean }[];
 }
@@ -221,6 +225,7 @@ export function toCard(item: ProjectItem, snap: ProjectSnapshot, statusId: strin
 		prs: item.pullRequests.map(pr => prChip(pr, item.type === 'pr' ? item.isDraft : undefined)),
 		...(reviewChip(item.reviewDecision) ? { review: reviewChip(item.reviewDecision)! } : {}),
 		...(item.comments ? { comments: item.comments } : {}),
+		...(item.subIssues ? { subIssues: item.subIssues } : {}),
 		...(room ? { room } : {}),
 		...(pending.has(item.id) ? { pending: true } : {}),
 	};
@@ -287,9 +292,23 @@ export function boardModel(input: BoardInput): BoardModel {
 		filters,
 		repositories: [...repoCount.entries()].sort((a, b) => b[1] - a[1]).map(([r]) => r),
 		roles: fieldRoles(snap.fields, input.laneField),
+		...(snap.tableView ? { viewColumns: viewColumns(snap.tableView, statusId) } : {}),
 		sync: syncLine(input.status, input.live, input.clock),
 		journal: input.journal.slice(0, 40).map(e => ({ time: input.clock(e.at), direction: e.direction, ...(e.item ? { item: e.item } : {}), text: e.text, ...(e.error ? { error: true } : {}) })),
 	};
+}
+
+/** GitHub's table view columns as Table view keys (its built-in fields to ours); what has no column here is left out. */
+export function viewColumns(view: readonly { readonly id: string; readonly dataType: string }[], statusId: string | undefined): string[] {
+	const builtIn: Record<string, string> = { TITLE: 'title', LABELS: 'labels', ASSIGNEES: 'assignees', LINKED_PULL_REQUESTS: 'pr', SUB_ISSUES_PROGRESS: 'subissues' };
+	const keys: string[] = [];
+	for (const c of view) {
+		const key = builtIn[c.dataType] ?? (c.id === statusId ? 'status' : ['SINGLE_SELECT', 'TEXT', 'NUMBER', 'DATE', 'ITERATION'].includes(c.dataType) ? 'f:' + c.id : undefined);
+		if (key && !keys.includes(key)) {
+			keys.push(key);
+		}
+	}
+	return keys;
 }
 
 /** A Table view row: the card, whether its column is done, and its values by filter key. */
@@ -387,15 +406,20 @@ export function tableLogic() {
 			{ key: 'assignees', name: 'Assignees', type: 'list' },
 			{ key: 'prereq', name: 'Blocked by', type: 'prereq' },
 			{ key: 'pr', name: 'PR', type: 'pr' },
+			{ key: 'subissues', name: 'Sub-issues', type: 'progress' },
 			{ key: 'room', name: 'Room', type: 'room' },
 			{ key: 'progress', name: 'Progress', type: 'progress' },
 		);
 		return cols;
 	}
 
-	/** #, Title, Status, Line, executor, reviewer, prerequisite (the note field, else the blockers). */
+	/** GitHub's own table view columns; without one: #, Title, Status, Line, executor, reviewer, prerequisite (the note field, else the blockers). */
 	function defaultKeys(model: BoardModel): string[] {
 		const roles = model.roles || {};
+		if (model.viewColumns && model.viewColumns.length) {
+			const known = new Set(columns(model).map(c => c.key));
+			return [...FIXED, ...model.viewColumns.filter(k => known.has(k) && !FIXED.includes(k))];
+		}
 		const keys = [...FIXED];
 		if (model.statusFieldId) {
 			keys.push('status');
@@ -431,10 +455,11 @@ export function tableLogic() {
 		return [...FIXED, ...chosen.filter(k => !FIXED.includes(k))];
 	}
 
-	/** The shown columns, in the chosen order; the grouped-by column is hidden (the group headers say it). */
+	/** The shown columns, in the chosen order; the grouped-by column is hidden (the group headers say it), unless GitHub's view shows it. */
 	function visible(model: BoardModel, saved: readonly string[] | null | undefined, groupKey: string | null | undefined): TableColumn[] {
 		const all = columns(model);
-		return columnKeys(model, saved).filter(k => k !== groupKey).map(k => all.find(c => c.key === k)!);
+		const keep = (k: string) => k !== groupKey || (model.viewColumns || []).includes(k);
+		return columnKeys(model, saved).filter(keep).map(k => all.find(c => c.key === k)!);
 	}
 
 	/** Adds a column at the end or takes it away; # and Title stay. */
@@ -531,6 +556,7 @@ export function tableLogic() {
 			}
 			case 'room': return card.room ? { text: card.room.type + ' · ' + card.room.phase, tone: card.room.status === 'running' ? 'run' : card.room.status === 'waiting' ? 'warn' : 'muted' } : { text: '—', tone: 'none' };
 			case 'progress': return card.room?.progress ? { text: card.room.progress.done + '/' + card.room.progress.total } : { text: '—', tone: 'none' };
+			case 'subissues': return card.subIssues ? { text: card.subIssues.done + '/' + card.subIssues.total + ' · ' + Math.round(100 * card.subIssues.done / card.subIssues.total) + '%', tone: card.subIssues.done === card.subIssues.total ? 'ok' : 'run' } : { text: '—', tone: 'none' };
 		}
 		const id = key.startsWith('f:') ? key.slice(2) : '';
 		const v = card.fields.find(f => f.fieldId === id)?.value;
@@ -548,8 +574,8 @@ export function tableLogic() {
 			const i = model.columns.findIndex(c => c.cards.some(x => x.id === row.card.id));
 			return i < 0 ? Number.MAX_SAFE_INTEGER : i;
 		}
-		if (key === 'progress') {
-			const p = row.card.room?.progress;
+		if (key === 'progress' || key === 'subissues') {
+			const p = key === 'progress' ? row.card.room?.progress : row.card.subIssues;
 			return p && p.total ? p.done / p.total : -1;
 		}
 		const f = key.startsWith('f:') ? model.fields.find(x => 'f:' + x.id === key) : undefined;

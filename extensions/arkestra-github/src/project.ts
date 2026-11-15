@@ -70,6 +70,8 @@ export interface ProjectItem {
 	readonly reviewDecision?: string;
 	readonly comments?: number;
 	readonly updatedAt?: string;
+	/** An issue's sub-issues: how many, how many closed (GitHub's "Sub-issues progress"). */
+	readonly subIssues?: { readonly done: number; readonly total: number };
 }
 
 export interface ProjectSnapshot {
@@ -81,6 +83,8 @@ export interface ProjectSnapshot {
 	readonly fields: readonly ProjectField[];
 	readonly items: readonly ProjectItem[];
 	readonly fetchedAt: number;
+	/** The columns of the project's first table view on GitHub, in its order (field id and kind). */
+	readonly tableView?: readonly { readonly id: string; readonly dataType: string }[];
 }
 
 /** `tenarkhq/3`, `https://github.com/orgs/tenarkhq/projects/3` or `https://github.com/users/x/projects/3`. */
@@ -131,7 +135,7 @@ export function itemFragment(deps: boolean): string {
 			... on ProjectV2ItemFieldIterationValue{ iterationId title ${FIELD_ID} } } }
 		content{ __typename
 			... on DraftIssue{ id title }
-			... on Issue{ id number title url state updatedAt repository{ nameWithOwner }
+			... on Issue{ id number title url state updatedAt repository{ nameWithOwner } subIssuesSummary{ total completed }
 				labels(first:20){ nodes{ name } } assignees(first:10){ nodes{ login } } comments{ totalCount }
 				${deps ? 'blockedBy(first:20){ nodes{ id number repository{ nameWithOwner } } }' : ''}
 				closedByPullRequestsReferences(first:5){ nodes{ number url state headRefName repository{ nameWithOwner } ${CI} } } }
@@ -144,6 +148,7 @@ const PROJECT_BODY = `id title url number
 		... on ProjectV2FieldCommon{ id name dataType }
 		... on ProjectV2SingleSelectField{ options{ id name color } }
 		... on ProjectV2IterationField{ configuration{ iterations{ id title startDate } } } } }
+	views(first:20){ nodes{ layout fields(first:50){ nodes{ ... on ProjectV2FieldCommon{ id dataType } } } } }
 	items(first:100, after:$after){ pageInfo{ hasNextPage endCursor } nodes{ ...I } }`;
 
 export function projectQuery(ownerKind: 'organization' | 'user', deps: boolean): string {
@@ -174,6 +179,13 @@ function fieldType(dataType: string | undefined): FieldType {
 		case 'ITERATION': return 'iteration';
 		default: return 'other';
 	}
+}
+
+/** The columns of the project's first table view, as GitHub shows them; none: no table view. */
+export function parseTableView(nodes: any[] | undefined): { id: string; dataType: string }[] | undefined {
+	const view = (nodes ?? []).find(v => v?.layout === 'TABLE_LAYOUT');
+	const cols = (view?.fields?.nodes ?? []).filter((f: any) => typeof f?.id === 'string' && typeof f?.dataType === 'string').map((f: any) => ({ id: f.id, dataType: f.dataType }));
+	return cols.length ? cols : undefined;
 }
 
 export function parseFields(nodes: any[] | undefined): ProjectField[] {
@@ -234,6 +246,7 @@ export function parseItem(node: any): ProjectItem | undefined {
 		pullRequests: type === 'pr' ? [prOf(c)] : (c.closedByPullRequestsReferences?.nodes ?? []).map(prOf),
 		...(c.reviewDecision ? { reviewDecision: c.reviewDecision } : {}),
 		...(typeof c.comments?.totalCount === 'number' ? { comments: c.comments.totalCount } : {}),
+		...(c.subIssuesSummary?.total > 0 ? { subIssues: { done: Number(c.subIssuesSummary.completed) || 0, total: Number(c.subIssuesSummary.total) } } : {}),
 		...(c.updatedAt ?? node.updatedAt ? { updatedAt: c.updatedAt ?? node.updatedAt } : {}),
 	};
 }
