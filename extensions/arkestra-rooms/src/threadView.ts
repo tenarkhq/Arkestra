@@ -443,7 +443,8 @@ export class ThreadViews implements vscode.Disposable {
 	}
 
 	private rowHtml(row: Row, s: ThreadStrings, image: ImageResolver, roomId: string): string {
-		const key = `${roomId}:${row.id}:${row.type === 'fold' ? row.items.length : row.text.length}${row.type === 'error' ? `:${row.home?.id ?? ''}` : ''}`;
+		// Who wrote it is part of the key: a thread that moved to another machine's agent shows the new name on its old rows.
+		const key = `${roomId}:${row.id}:${row.type === 'fold' ? `${row.items.length}:${JSON.stringify(row.items).length}` : row.text.length}${row.type === 'agent' || row.type === 'error' ? `:${row.agentId}:${row.name}` : ''}${row.type === 'error' ? `:${row.home?.id ?? ''}` : ''}`;
 		let html = this.rowCache.get(key);
 		if (html === undefined) {
 			const time = row.type === 'agent' && row.at ? new Date(row.at).toLocaleTimeString(vscode.env.language, { hour: '2-digit', minute: '2-digit' }) : '';
