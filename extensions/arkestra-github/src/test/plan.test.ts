@@ -6,6 +6,7 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { criticalPath, levels, parseCounts, parseLog, parseRefs, planModel, versionCompare, type GitInfo } from '../plan';
+import { graphModel } from '../graph';
 import type { RoomInfo } from '../board';
 import type { ProjectItem, ProjectSnapshot } from '../project';
 
@@ -90,6 +91,29 @@ test('rails: the base branch with what landed and the open PRs in order; branche
 	assert.deepEqual(branch.steps.map(s => s.label), ['Schema check', 'Version field', 'now', '01 Tests for bad JSON', 'merge → main']);
 	assert.equal(branch.steps.find(s => s.now)!.roomId, 'r41');
 	assert.ok(p.rails.some(r => r.name === 'x/leverage'));
+});
+
+test('rails without a local repository: no base rail; only branches with an open PR of an open task', () => {
+	const stale = it(37, 'Done', '0.8', { pullRequests: [{ number: 37, url: 'https://github.com/o/r/pull/37', state: 'OPEN', repository: 'o/r', headRef: 'ar02-ci-builds', ci: 'failure' }] });
+	const merged = it(38, 'In progress', '0.9', { pullRequests: [{ number: 38, url: 'https://github.com/o/r/pull/38', state: 'MERGED', repository: 'o/r', headRef: 'old-merged' }] });
+	const p = planModel({ snapshot: { ...snap, items: [...items, stale, merged] }, rooms: [room] });
+	assert.deepEqual(p.rails.map(r => [r.name, r.kind]), [['x/leverage', 'branch']], 'no empty main rail; no stale, merged or PR-less room branch');
+	assert.doesNotMatch(p.rails[0].note, /local repository/, 'nothing about a repository that is not there');
+	assert.deepEqual(p.rails[0].steps.map(s => s.label), ['now', 'PR #208 · CI running', 'merge → main']);
+	const none = planModel({ snapshot: { ...snap, items: items.map(i => ({ ...i, pullRequests: [] })) }, rooms: [] });
+	assert.deepEqual(none.rails, [], 'nothing left: the page leaves the Branches section out');
+});
+
+test('staircase cells say whether they are done; the graph carries the completion', () => {
+	const p = planModel({ snapshot: snap, rooms: [room] });
+	const cells = p.stairs.flatMap(s => s.cells);
+	const cell = (l: string) => cells.find(c => c.label === l)!;
+	assert.deepEqual([cell('#33').done, cell('#33').fill], [true, 1]);
+	assert.deepEqual([cell('#41').done, cell('#41').fill], [false, 0.4]);
+	const g = graphModel(snap, [room], p);
+	const n = (id: string) => g.nodes.find(x => x.id === id)!;
+	assert.deepEqual([n('I33').fill, n('I41').fill, n('I42').fill], [1, 0.4, 0]);
+	assert.equal(n('milestone:0.9').fill, 1 / 5, 'a release: the share of its tasks done');
 });
 
 test('git output parsers', () => {

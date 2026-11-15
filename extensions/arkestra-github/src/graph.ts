@@ -21,6 +21,8 @@ export interface GraphNode {
 	readonly x: number;
 	readonly y: number;
 	readonly done: boolean;
+	/** Completion, 0–1 (the Plan's): drawn as a thin bar, green when done, blue while open. */
+	readonly fill: number;
 	readonly critical: boolean;
 	readonly startable: boolean;
 	readonly url?: string;
@@ -107,7 +109,7 @@ export function graphModel(snap: ProjectSnapshot, rooms: readonly RoomInfo[], pl
 		const [x, y] = at(item.id);
 		return {
 			id: item.id, kind: 'task', label: label(item), title: item.title, ...(status ? { status } : {}), ...(sub ? { sub } : {}), ...(tone ? { tone } : {}),
-			lane: cell?.lane ?? 'Backlog', x, y, done, critical: criticalIds.has(item.id), startable: !!cell?.startable,
+			lane: cell?.lane ?? 'Backlog', x, y, done, fill: done ? 1 : cell?.fill ?? 0, critical: criticalIds.has(item.id), startable: !!cell?.startable,
 			...(item.url ? { url: item.url } : {}), ...(room && room.status !== 'ended' ? { roomId: room.roomId } : {}),
 			linkable: item.type === 'issue' && !!item.contentId,
 		};
@@ -133,7 +135,7 @@ export function graphModel(snap: ProjectSnapshot, rooms: readonly RoomInfo[], pl
 		const own = nodes.filter(n => n.lane === lane);
 		const openCount = own.filter(n => !n.done).length;
 		const [x, y] = at(m);
-		nodes.push({ id: m, kind: 'milestone', label: 'Release', title: `Release ${lane}`, sub: openCount ? `${openCount} open prerequisite${openCount === 1 ? '' : 's'}` : 'ready to release', tone: openCount ? 'warn' : 'ok', lane, x, y, done: !openCount, critical: false, startable: false, linkable: false });
+		nodes.push({ id: m, kind: 'milestone', label: 'Release', title: `Release ${lane}`, sub: openCount ? `${openCount} open prerequisite${openCount === 1 ? '' : 's'}` : 'ready to release', tone: openCount ? 'warn' : 'ok', lane, x, y, done: !openCount, fill: own.length ? (own.length - openCount) / own.length : 1, critical: false, startable: false, linkable: false });
 		// The lane's last tasks lead to the release: those that block nothing else in the lane.
 		for (const n of own) {
 			if (!edges.some(e => e.kind === 'blocks' && e.from === n.id && laneOf.get(e.to) === lane)) {
