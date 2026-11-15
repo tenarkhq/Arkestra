@@ -41,12 +41,13 @@ export function parseCredentials(text: string): Credentials | undefined {
  * themselves) at least tells that session it came from Arkestra.
  */
 export function fromArkestra(text: string): string {
-	return `<cross-session-message from="arkestra" from-name="Arkestra">\n${text.replace(/<\/cross-session-message/gi, '<\\/cross-session-message')}\n</cross-session-message>`;
+	// No session's name (a reply by name would reach that session): the user, writing in Arkestra.
+	return `<cross-session-message from="arkestra-app" from-name="The user, writing in the Arkestra app">\n${text.replace(/<\/cross-session-message/gi, '<\\/cross-session-message')}\n</cross-session-message>`;
 }
 
 /** The words of such a message as the session file keeps it (whatever the receiving CLI put around it); the text unchanged otherwise. */
 export function arkestraWords(text: string): string {
-	const inner = /<cross-session-message from="arkestra"[^>]*>\n?([\s\S]*?)\n?<\/cross-session-message>/.exec(text)?.[1];
+	const inner = /<cross-session-message from="arkestra(?:-app)?"[^>]*>\n?([\s\S]*?)\n?<\/cross-session-message>/.exec(text)?.[1];
 	return inner === undefined ? text : inner.replace(/<\\\/cross-session-message/gi, '</cross-session-message').trim();
 }
 

@@ -242,7 +242,9 @@ test('the account quota: the windows the Claude app shows, read with the beta he
 test('a message sent into a session the Claude app runs names Arkestra as its sender; the session file gives back the words alone', async () => {
 	const { fromArkestra, arkestraWords } = await import('../cloud');
 	const sent = fromArkestra('telepítve');
-	assert.equal(sent, '<cross-session-message from="arkestra" from-name="Arkestra">\ntelepítve\n</cross-session-message>');
+	assert.equal(sent, '<cross-session-message from="arkestra-app" from-name="The user, writing in the Arkestra app">\ntelepítve\n</cross-session-message>');
+	// The first form, already in session files, reads back too.
+	assert.equal(arkestraWords('<cross-session-message from="arkestra" from-name="Arkestra">\ntelepítve az 17674\n</cross-session-message>'), 'telepítve az 17674');
 	assert.equal(arkestraWords(sent), 'telepítve');
 	// Whatever the receiving CLI put around it.
 	assert.equal(arkestraWords(`Another Claude session sent a message: ${sent} This came from another Claude session.`), 'telepítve');
