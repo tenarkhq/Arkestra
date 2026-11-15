@@ -180,6 +180,16 @@ const t4 = text(body);
 assert.ok(t4.includes('Draw prerequisite') && t4.includes('Auto layout') && t4.includes('Release'), 'graph drawn');
 assert.ok(statusSel(), 'filter row on the Graph');
 assert.ok(!find(body, (e: any) => e.tag === 'g' && e.attrs['data-node'] === 'D0').length, 'a filtered-out task is not drawn');
+{
+	// The canvas is cut to the shown tasks: its view box starts near the topmost-leftmost shown node.
+	const svgEl = find(find(body, (e: any) => e.className === 'canvas')[0], (e: any) => e.tag === 'svg')[0];
+	const shownNodes = find(body, (e: any) => e.tag === 'g' && e.attrs['data-node']).map((e: any) => /translate\(([\d.]+),([\d.]+)\)/.exec(e.attrs.transform)!.slice(1).map(Number));
+	const [vx, vy, vw, vh] = String(svgEl.attrs.viewBox).split(' ').map(Number);
+	assert.equal(vx, Math.max(0, Math.min(...shownNodes.map(p => p[0])) - 40), 'view box starts at the shown nodes (x)');
+	assert.equal(vy, Math.max(0, Math.min(...shownNodes.map(p => p[1])) - 40), 'view box starts at the shown nodes (y)');
+	assert.equal(vw, Math.max(...shownNodes.map(p => p[0])) + 200 + 40 - vx, 'view box ends at the shown nodes (x)');
+	assert.ok(vh > 0);
+}
 statusSel().value = ''; statusSel().fire('change');
 const node = find(body, (e: any) => e.tag === 'g' && e.attrs['data-node'] === 'I1')[0];
 node.fire('pointerdown', { clientX: 10, clientY: 10 });

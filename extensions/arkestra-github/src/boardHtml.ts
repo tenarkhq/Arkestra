@@ -125,7 +125,7 @@ main.table { padding: 0 18px; }
 .tone-muted { background: var(--vscode-editorWidget-background); color: var(--vscode-descriptionForeground); }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: currentColor; }
 .board { display: flex; gap: var(--gap); align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
-.col { flex: 0 0 272px; background: var(--vscode-sideBar-background, var(--vscode-editorWidget-background)); border-radius: var(--radius); display: flex; flex-direction: column; max-height: calc(100vh - 150px); }
+.col { flex: 0 0 272px; width: 272px; min-width: 0; background: var(--vscode-sideBar-background, var(--vscode-editorWidget-background)); border-radius: var(--radius); display: flex; flex-direction: column; max-height: calc(100vh - 150px); }
 .col.drop { outline: 2px dashed var(--vscode-focusBorder); }
 .col h3 { margin: 0; padding: 8px 10px; font-size: 12px; font-weight: 600; display: flex; gap: 6px; align-items: center; }
 .cards { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
@@ -133,6 +133,9 @@ main.table { padding: 0 18px; }
 .card:hover { border-color: var(--line2); }
 .card.sel { border-color: var(--selline); }
 .card.dragging { opacity: .4; }
+/* A long prerequisite list wraps inside the card; the column keeps its width. */
+.card .chip { white-space: normal; overflow-wrap: anywhere; max-width: 100%; line-height: 16px; padding: 1px 7px; }
+.card { min-width: 0; }
 .card .top { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; min-height: 0; padding: 0; border-bottom: 0; } /* not the header's .top */
 .card .num { color: var(--vscode-descriptionForeground); font-size: 12px; }
 .card .name { font-weight: 500; }
@@ -655,14 +658,21 @@ function graphEl() {
 	const lanesShown = new Set(g.nodes.filter(n => n.kind === 'task' && shownIds.has(n.id)).map(n => n.lane));
 	const nodes = new Map([...all].filter(([id, n]) => n.kind === 'milestone' ? lanesShown.has(n.lane) : shownIds.has(id)));
 	const z = ui.graph.zoom;
-	const svg = s('svg', { width: Math.round(g.width * z), height: Math.round(g.height * z), viewBox: '0 0 ' + g.width + ' ' + g.height, class: ui.graph.mode !== 'select' ? 'drawing' : '' },
+	// The canvas is cut to the tasks the filters show: kept places of hidden tasks leave no empty field to scroll past.
+	const shown = [...nodes.values()];
+	const pad = 40;
+	const ox = shown.length ? Math.max(0, Math.min(...shown.map(n => n.x)) - pad) : 0;
+	const oy = shown.length ? Math.max(0, Math.min(...shown.map(n => n.y)) - pad) : 0;
+	const gw = shown.length ? Math.max(...shown.map(n => n.x)) + W + pad - ox : g.width;
+	const gh = shown.length ? Math.max(...shown.map(n => n.y)) + H + pad - oy : g.height;
+	const svg = s('svg', { width: Math.round(gw * z), height: Math.round(gh * z), viewBox: ox + ' ' + oy + ' ' + gw + ' ' + gh, class: ui.graph.mode !== 'select' ? 'drawing' : '' },
 		s('defs', {}, s('marker', { id: 'arrow', viewBox: '0 0 10 10', refX: '10', refY: '5', markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' }, s('path', { d: 'M0,0 L10,5 L0,10 z', fill: 'context-stroke' }))));
 	const edgeLayer = s('g', {});
 	const nodeLayer = s('g', {});
 	svg.append(edgeLayer, nodeLayer);
 	const pointIn = (ev) => {
 		const r = svg.getBoundingClientRect ? svg.getBoundingClientRect() : { left: 0, top: 0 };
-		return { x: (ev.clientX - r.left) / z, y: (ev.clientY - r.top) / z };
+		return { x: (ev.clientX - r.left) / z + ox, y: (ev.clientY - r.top) / z + oy };
 	};
 	const drawEdges = () => {
 		edgeLayer.replaceChildren(...g.edges.filter(e => nodes.has(e.from) && nodes.has(e.to)).map(e => {
