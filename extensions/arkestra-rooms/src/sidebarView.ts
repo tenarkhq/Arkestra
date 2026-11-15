@@ -6,9 +6,9 @@
 
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
-import * as path from 'node:path';
 import type { ExistingSession } from './agent';
 import { addSection, deleteSection, keepThreads, layoutThreads, matches, moveSection, moveThread, parseSections, renameSection, sectionOf, sectionsFromCategories, shiftSection, type Section } from './sections';
+import { MachinesPage } from './machinesPage';
 import { sidebarHtml, type SidebarMessage, type SidebarModel, type SidebarRow, type SidebarStrings } from './sidebarHtml';
 import { FONT_ROOT, pageFonts } from './webviewFonts';
 import { projectName, type ThreadSummary } from './threads';
@@ -37,6 +37,8 @@ export interface SidebarSource {
 	machineSessions(): readonly MachineSessions[];
 	/** Clears the cached session lists. */
 	refreshSessions(): void;
+	/** By `<agentId>\n<sessionId>`: the room of the thread a session was continued in. */
+	continuedSessions(): Promise<ReadonlyMap<string, string>>;
 	/** Threads, boards or pins changed. */
 	readonly onDidChange: vscode.Event<void>;
 }
@@ -58,6 +60,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			vscode.window.tabGroups.onDidChangeTabs(() => this.postSelection()),
 			vscode.window.tabGroups.onDidChangeTabGroups(() => this.postSelection()),
 			vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('arkestra.connections.machines')) { this.schedule(); } }),
+			new MachinesPage(source),
 		);
 	}
 
@@ -170,6 +173,9 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			}
 			if (input.viewType.endsWith('arkestra.artifacts')) {
 				return 'nav:artifacts';
+			}
+			if (input.viewType.endsWith('arkestra.machines')) {
+				return 'nav:machines';
 			}
 			return undefined;
 		}
@@ -285,61 +291,8 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 				await vscode.commands.executeCommand('arkestra.artifacts.open');
 				return;
 			case 'machines':
-				await this.machines();
+				await vscode.commands.executeCommand('arkestra.machines.open');
 				return;
-		}
-	}
-
-	/** Machines: the Machines view, the connections, and the CLI sessions on them to continue here. */
-	private async machines(): Promise<void> {
-		type Item = vscode.QuickPickItem & { run?: () => Promise<unknown> };
-		const agents = this.source.machineSessions();
-		const items: Item[] = [
-			{ label: `$(remote) ${vscode.l10n.t('Machines and their folders')}`, run: () => Promise.resolve(vscode.commands.executeCommand('arkestra.machines.focus')) },
-			{ label: `$(plug) ${vscode.l10n.t('Connections')}`, description: vscode.l10n.t('add, check or remove a machine'), run: () => Promise.resolve(vscode.commands.executeCommand('arkestra.connections.show')) },
-			...(agents.length ? [{ label: vscode.l10n.t('Sessions on the machines'), kind: vscode.QuickPickItemKind.Separator } as Item] : []),
-			...agents.map((a): Item => ({
-				label: `$(${a.id.includes('@') ? 'remote' : 'vm'}) ${a.name}`,
-				description: vscode.l10n.t('continue one of its sessions here'),
-				run: () => this.sessions(a),
-			})),
-		];
-		const pick = await vscode.window.showQuickPick(items, { title: vscode.l10n.t('Machines') });
-		await pick?.run?.();
-	}
-
-	private async sessions(agent: MachineSessions): Promise<void> {
-		type Item = vscode.QuickPickItem & { session?: ExistingSession };
-		const qp = vscode.window.createQuickPick<Item>();
-		qp.title = vscode.l10n.t('Sessions of {0}', agent.name);
-		qp.placeholder = vscode.l10n.t('Claude Code and Codex sessions started outside Arkestra. Pick one to continue it here.');
-		qp.matchOnDescription = true;
-		const refresh: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('refresh'), tooltip: vscode.l10n.t('Refresh the sessions') };
-		qp.buttons = [refresh];
-		const when = (iso: string) => iso ? new Date(iso).toLocaleString(vscode.env.language, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-		const load = async () => {
-			qp.busy = true;
-			try {
-				const sessions = await agent.sessions();
-				qp.items = sessions.length
-					? sessions.map(session => ({ label: session.title, description: [session.cwd ? path.posix.basename(session.cwd) : '', when(session.updatedAt)].filter(Boolean).join(' · '), session }))
-					: [{ label: vscode.l10n.t('No sessions on this machine') }];
-			} catch (error) {
-				qp.items = [{ label: vscode.l10n.t('Could not read the sessions: {0}', error instanceof Error ? error.message : String(error)) }];
-			} finally {
-				qp.busy = false;
-			}
-		};
-		const picked = await new Promise<ExistingSession | undefined>(resolve => {
-			qp.onDidTriggerButton(() => { this.source.refreshSessions(); void load(); });
-			qp.onDidAccept(() => { const s = qp.selectedItems[0]?.session; if (s) { resolve(s); qp.hide(); } });
-			qp.onDidHide(() => resolve(undefined));
-			qp.show();
-			void load();
-		});
-		qp.dispose();
-		if (picked) {
-			await vscode.commands.executeCommand('arkestra.rooms.continueSession', agent.id, picked);
 		}
 	}
 }

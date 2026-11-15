@@ -1,6 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Arkestra. Connections: where agents run, this machine or others over SSH. Keeps the
- *  machine list, checks each machine's agent CLIs and shows them on the Connections page.
+ *  machine list, checks each machine's agent CLIs and shows them on the Connections page; the
+ *  Machines page (arkestra-rooms) asks it for the checks, edits and removals.
  *--------------------------------------------------------------------------------------------*/
 
 import { randomBytes } from 'node:crypto';
@@ -10,7 +11,7 @@ import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { newMachineId, readMachines, sshConfigHosts } from './machines';
 import { probe, probeLocal, remoteSpawn, sshTerminalArgs, type Machine, type ProbeResult, type SpawnFn } from './ssh';
-import { MachinesView } from './machinesView';
+import { MachineTools } from './machineTools';
 
 /** What the agent adapters receive. */
 export interface ArkestraConnectionsApi {
@@ -33,7 +34,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraConnectionsA
 
 	const save = (list: Machine[]) => config().update('machines', list, vscode.ConfigurationTarget.Global);
 
-	const check = async (id: string) => {
+	/** Checks a machine ('local' or an SSH machine's id); undefined: no such machine. */
+	const check = async (id: string): Promise<ProbeResult | undefined> => {
 		status.set(id, 'checking');
 		render();
 		const machine = machines().find(m => m.id === id);
@@ -46,6 +48,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraConnectionsA
 			status.delete(id);
 		}
 		render();
+		return result;
 	};
 
 	const add = async () => {
@@ -77,17 +80,43 @@ export function activate(context: vscode.ExtensionContext): ArkestraConnectionsA
 		void check(machine.id);
 	};
 
-	const remove = async (id: string) => {
+	/** Removes a connection; `confirmed`: the Machines page asked already (its inline confirm). */
+	const remove = async (id: string, confirmed = false) => {
 		const machine = machines().find(m => m.id === id);
 		if (!machine) {
 			return;
 		}
 		const yes = vscode.l10n.t('Remove');
-		const answer = await vscode.window.showWarningMessage(vscode.l10n.t('Remove the connection {0}? Its agents leave the invite list.', machine.name), { modal: true }, yes);
+		const answer = confirmed ? yes : await vscode.window.showWarningMessage(vscode.l10n.t('Remove the connection {0}? Its agents leave the invite list.', machine.name), { modal: true }, yes);
 		if (answer === yes) {
 			status.delete(id);
 			await save(machines().filter(m => m.id !== id));
 		}
+	};
+
+	/** Edits a connection's name, SSH destination and project folder; the id stays (its threads keep their agents). */
+	const edit = async (id: string) => {
+		const machine = machines().find(m => m.id === id);
+		if (!machine) {
+			return;
+		}
+		const title = vscode.l10n.t('Edit the connection {0}', machine.name);
+		const host = (await vscode.window.showInputBox({ title, prompt: vscode.l10n.t('SSH destination, for example dev@server.example.com'), value: machine.host + (machine.port ? `:${machine.port}` : ''), ignoreFocusOut: true }))?.trim();
+		if (!host) {
+			return;
+		}
+		const name = (await vscode.window.showInputBox({ title, prompt: vscode.l10n.t('Name shown next to its agents'), value: machine.name, ignoreFocusOut: true }))?.trim();
+		if (!name) {
+			return;
+		}
+		const folder = await vscode.window.showInputBox({ title, prompt: vscode.l10n.t('Project folder on the machine (empty: home folder)'), value: machine.folder ?? '', placeHolder: '~/projects/app', ignoreFocusOut: true });
+		if (folder === undefined) {
+			return;
+		}
+		const port = /^(.+):(\d+)$/.exec(host);
+		const changed: Machine = { id, name, host: port ? port[1] : host, ...(port ? { port: Number(port[2]) } : {}), ...(folder.trim() ? { folder: folder.trim() } : {}) };
+		await save(machines().map(m => m.id === id ? changed : m));
+		void check(id);
 	};
 
 	const render = () => {
@@ -123,15 +152,14 @@ export function activate(context: vscode.ExtensionContext): ArkestraConnectionsA
 
 	context.subscriptions.push(
 		changed,
-		// The Machines view: folders of every SSH machine, drag and drop uploads (AR27).
-		new MachinesView(machines, ssh, changed.event),
+		// A folder of a machine in a terminal, uploads to it (AR27).
+		new MachineTools(machines, ssh),
 		vscode.commands.registerCommand('arkestra.connections.show', show),
 		vscode.commands.registerCommand('arkestra.connections.add', add),
-		// Right click on a machine in the Machines view, or an id.
-		vscode.commands.registerCommand('arkestra.connections.remove', (node?: { machine?: Machine } | string) => {
-			const id = typeof node === 'string' ? node : node?.machine?.id;
-			return id ? remove(id) : undefined;
-		}),
+		// The Machines page's buttons, by machine id.
+		vscode.commands.registerCommand('arkestra.connections.check', (id: unknown) => typeof id === 'string' ? check(id) : undefined),
+		vscode.commands.registerCommand('arkestra.connections.edit', (id: unknown) => typeof id === 'string' ? edit(id) : undefined),
+		vscode.commands.registerCommand('arkestra.connections.remove', (id: unknown, confirmed?: unknown) => typeof id === 'string' ? remove(id, confirmed === true) : undefined),
 		// For sign-in flows: an interactive terminal running a command on a machine ('local' or an SSH machine).
 		vscode.commands.registerCommand('arkestra.connections.runInTerminal', (machineId: string, command: string, args: string[] = [], title?: string) => {
 			const machine = machines().find(m => m.id === machineId);

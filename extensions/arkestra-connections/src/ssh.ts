@@ -147,12 +147,15 @@ export interface ProbeResult {
 	readonly reachable: boolean;
 	readonly clis: string[];
 	readonly error?: string;
+	/** The login's home folder there: where `~` and an empty project folder point. */
+	readonly home?: string;
 }
 
 const PROBE_SCRIPT = [
 	'IFS= read -r ARKESTRA_ENV || exit 97',
 	REMOTE_PATH,
 	`for c in ${KNOWN_CLIS.join(' ')}; do command -v "$c" >/dev/null 2>&1 && echo "$c"; done`,
+	'echo "ARKESTRA_HOME=$HOME"',
 	'echo ARKESTRA_PROBE_OK',
 ].join('\n');
 
@@ -183,7 +186,8 @@ function runProbe(command: string, args: string[], spawn: SpawnFn | undefined, t
 		child.on('close', (code, signal) => {
 			const lines = out.split('\n').map(l => l.trim());
 			if (lines.includes('ARKESTRA_PROBE_OK')) {
-				finish({ reachable: true, clis: KNOWN_CLIS.filter(c => lines.includes(c)) });
+				const home = lines.find(l => l.startsWith('ARKESTRA_HOME='))?.slice('ARKESTRA_HOME='.length);
+				finish({ reachable: true, clis: KNOWN_CLIS.filter(c => lines.includes(c)), ...(home ? { home } : {}) });
 			} else {
 				const last = err.trim().split('\n').at(-1);
 				finish({ reachable: false, clis: [], error: signal === 'SIGKILL' ? 'Connection timed out' : last || `${command} exited with ${code}` });
