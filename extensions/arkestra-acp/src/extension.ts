@@ -6,7 +6,8 @@
 import { homedir } from 'node:os';
 import * as vscode from 'vscode';
 import { AcpAgent, type AcpOptions, type PermissionOption } from './acpAgent';
-import { readAgents, registryId, splitCommandLine, type AcpAgentConfig } from './config';
+import { addFormEntry, addFormSpec, type AddFormStrings } from './addForm';
+import { readAgents, registryId, type AcpAgentConfig } from './config';
 import type { ArkestraConnectionsApi } from './connections';
 import { remoteFiles, type SpawnFn } from './host';
 import { REGISTRY_URL, readRegistry, type RegistryAgent } from './registry';
@@ -160,69 +161,72 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	};
 	sync();
 
-	const addAgent = async () => {
-		type Pick = vscode.QuickPickItem & { agent?: RegistryAgent };
-		const custom: Pick = { label: `$(terminal) ${vscode.l10n.t('Custom command…')}` };
-		const picks = (async (): Promise<Pick[]> => {
-			try {
-				const res = await fetch(REGISTRY_URL);
-				return readRegistry(await res.json()).map(agent => ({
-					label: agent.name,
-					description: agent.needsInstall ? vscode.l10n.t('needs {0} installed', agent.command) : [agent.command, ...agent.args].join(' '),
-					detail: agent.description,
-					agent,
-				}));
-			} catch {
-				return [];
-			}
-		})();
-		const pick = await vscode.window.showQuickPick<Pick>(picks.then(list => [custom, ...list]), { title: vscode.l10n.t('Add an ACP agent'), placeHolder: vscode.l10n.t('From the ACP Registry, or a command of your own'), matchOnDescription: true, matchOnDetail: true });
-		if (!pick) {
-			return;
+	// A new agent comes from a form in Arkestra's own page (the new-chat page's "Another agent"
+	// card, the thread's invite list); this extension gives the form and saves what came back.
+	const formStrings = (): AddFormStrings => ({
+		title: vscode.l10n.t('Add another agent (ACP)'),
+		intro: vscode.l10n.t('From the ACP Registry, or a command of your own.'),
+		noRegistry: vscode.l10n.t('The ACP Registry could not be read; a command of your own still works.'),
+		source: vscode.l10n.t('Agent'),
+		custom: vscode.l10n.t('A command of my own'),
+		needs: vscode.l10n.t('needs {0} installed'),
+		command: vscode.l10n.t('Command that starts the agent in ACP mode'),
+		commandHint: vscode.l10n.t('For example: gemini --acp'),
+		name: vscode.l10n.t('Name shown in the rooms'),
+		nameHint: vscode.l10n.t('Empty: the agent\'s own name.'),
+		machine: vscode.l10n.t('Where it runs'),
+		thisMachine: vscode.l10n.t('This machine'),
+		add: vscode.l10n.t('Add the agent'),
+		cancel: vscode.l10n.t('Cancel'),
+		commandRequired: vscode.l10n.t('Type the command that starts it.'),
+		unknownMachine: vscode.l10n.t('This machine is no longer connected.'),
+		unknownAgent: vscode.l10n.t('Pick an agent from the list.'),
+	});
+	/** The ACP Registry, read once per form; empty when it cannot be read. */
+	let registryList: { agents: RegistryAgent[]; read: boolean } | undefined;
+	const readRegistryList = async () => {
+		try {
+			const res = await fetch(REGISTRY_URL);
+			registryList = { agents: readRegistry(await res.json()), read: true };
+		} catch {
+			registryList = { agents: [], read: false };
 		}
-		let name = pick.agent?.name;
-		let commandLine = pick.agent ? [pick.agent.command, ...pick.agent.args] : undefined;
-		if (!commandLine) {
-			const line = await vscode.window.showInputBox({ title: vscode.l10n.t('Add an ACP agent'), prompt: vscode.l10n.t('Command that starts the agent in ACP mode, for example: gemini --acp') });
-			commandLine = line ? splitCommandLine(line) : undefined;
-			name = commandLine?.[0];
+		return registryList;
+	};
+	const addForm = async () => {
+		const list = await readRegistryList();
+		return addFormSpec(list.agents, (connections?.machines() ?? []).map(m => ({ id: m.id, name: m.name })), formStrings(), list.read);
+	};
+	/** Saves the form's agent; the field that is wrong otherwise. Without values (the palette) the new-chat page opens with the form. */
+	const addAgent = async (values?: unknown): Promise<{ field?: string; message: string } | undefined> => {
+		if (!values || typeof values !== 'object') {
+			await vscode.commands.executeCommand('arkestra.rooms.newChat', { menu: 'acp' });
+			return undefined;
 		}
-		if (!commandLine?.length) {
-			return;
-		}
-		name = (await vscode.window.showInputBox({ title: vscode.l10n.t('Add an ACP agent'), prompt: vscode.l10n.t('Name shown in the rooms'), value: name }))?.trim();
-		if (!name) {
-			return;
-		}
-		const machines = connections?.machines() ?? [];
-		let machine = 'local';
-		if (machines.length) {
-			const where = await vscode.window.showQuickPick([{ label: vscode.l10n.t('This machine'), id: 'local' }, ...machines.map(m => ({ label: m.name, id: m.id }))], { title: vscode.l10n.t('Where does {0} run?', name) });
-			if (!where) {
-				return;
-			}
-			machine = where.id;
-		}
-		const existing = readAgents(config().get('agents'));
-		const base = (pick.agent?.id ?? name).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
-		let id = base;
-		for (let n = 2; existing.some(a => a.id === id && a.machine === machine); n++) {
-			id = `${base}-${n}`;
+		const t = formStrings();
+		const result = addFormEntry(values as Record<string, unknown>, (registryList ?? await readRegistryList()).agents, connections?.machines() ?? [], config().get('agents'), t);
+		if ('field' in result) {
+			return result;
 		}
 		const raw = config().get<unknown[]>('agents') ?? [];
-		await config().update('agents', [...raw, { id, name, command: commandLine[0], args: commandLine.slice(1), ...(machine === 'local' ? {} : { machine }) }], vscode.ConfigurationTarget.Global);
-		if (pick.agent?.needsInstall && pick.agent.website) {
+		await config().update('agents', [...raw, result.entry], vscode.ConfigurationTarget.Global);
+		const website = result.agent?.needsInstall ? result.agent.website : undefined;
+		if (website) {
 			const open = vscode.l10n.t('Open its page');
-			if (await vscode.window.showInformationMessage(vscode.l10n.t('{0} has to be installed on the machine it runs on.', name), open) === open) {
-				void vscode.env.openExternal(vscode.Uri.parse(pick.agent.website));
-			}
+			void Promise.resolve(vscode.window.showInformationMessage(vscode.l10n.t('{0} has to be installed on the machine it runs on.', result.entry.name), open)).then(answer => {
+				if (answer === open) {
+					void vscode.env.openExternal(vscode.Uri.parse(website));
+				}
+			});
 		}
+		return undefined;
 	};
 
 	context.subscriptions.push(
 		{ dispose: () => registered.forEach(r => { r.registration.dispose(); r.agent.dispose(); }) },
 		vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('arkestra.acp')) { sync(); } }),
 		vscode.commands.registerCommand('arkestra.acp.add', addAgent),
+		vscode.commands.registerCommand('arkestra.acp.addForm', addForm),
 	);
 	if (connections) {
 		context.subscriptions.push(connections.onDidChangeMachines(() => { remoteCwd.clear(); sync(); }));

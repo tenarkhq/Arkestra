@@ -48,7 +48,9 @@ test('the first turn sends the preamble and the whole thread, the next resumes t
 	const events: AgentEvent[] = [];
 	const t1 = [msg('user', 'user', 'fix the stop state'), msg('agent', 'codex', 'I edited state.py')];
 	await agent.turn({ roomId: 'r', transcript: t1 }, e => events.push(e), new AbortController().signal);
-	assert.deepEqual(events, [{ kind: 'tool', text: 'Edit src/advisor/state.py' }, { kind: 'text', text: 'Done.' }]);
+	// The tool use's raw line goes first (what Claude produced, AR26); text-only lines are not handed on.
+	const toolLine = JSON.stringify({ type: 'assistant', session_id: 's1', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'src/advisor/state.py' } }, { type: 'text', text: 'Done.' }] } });
+	assert.deepEqual(events, [{ kind: 'line', line: toolLine }, { kind: 'tool', text: 'Edit src/advisor/state.py' }, { kind: 'text', text: 'Done.' }]);
 
 	const t2 = [...t1, msg('agent', 'claude', 'Done.'), msg('user', 'user', 'now the test')];
 	await agent.turn({ roomId: 'r', transcript: t2 }, () => { }, new AbortController().signal);
@@ -165,4 +167,14 @@ test('the thread\'s model and effort go to the CLI; without a choice the setting
 	assert.deepEqual([after(plain, '--model'), after(plain, '--effort')], [undefined, undefined]);
 	const models = (await agent.choices()).models.map(m => m.id);
 	assert.deepEqual(models, ['opus', 'sonnet', 'fable', 'haiku']);
+});
+
+test('Ultracode is an effort of Opus, Sonnet and Fable and goes to the CLI as --effort ultracode', async () => {
+	const { agent, calls } = await setup();
+	const efforts = Object.fromEntries((await agent.choices()).models.map(m => [m.id, m.efforts ?? []]));
+	assert.ok(efforts.opus.includes('ultracode') && efforts.sonnet.includes('ultracode') && efforts.fable.includes('ultracode'));
+	assert.ok(!efforts.haiku.includes('ultracode'));
+	await agent.turn({ roomId: 'u', transcript: [msg('user', 'user', 'hi')], model: 'opus', effort: 'ultracode' }, () => { }, new AbortController().signal);
+	const [call] = await calls();
+	assert.equal(call.args[call.args.indexOf('--effort') + 1], 'ultracode');
 });

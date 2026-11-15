@@ -11,7 +11,7 @@ import type { Agent, ArkestraRoomsApi, Readiness } from './rooms';
 const KEY = 'arkestra.codex.apiKey';
 const INSTALL_GUIDE = 'https://developers.openai.com/codex/cli';
 
-type Action = { readonly title: string; run(): Thenable<unknown> };
+type Action = { readonly title: string; run(): Thenable<unknown>; readonly secret?: { readonly label: string; readonly placeholder?: string; save(value: string): Thenable<unknown> } };
 
 /** The readiness reasons of the Codex agent in the interface language; other text (CLI errors) as it came. */
 function localizeReason(reason: string | undefined): string | undefined {
@@ -84,7 +84,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				return [
 					// A device code works on this machine and over SSH alike.
 					{ title: vscode.l10n.t('Sign in'), run: () => vscode.commands.executeCommand('arkestra.connections.runInTerminal', machineId, base.command, machineId === 'local' ? ['login'] : ['login', '--device-auth'], vscode.l10n.t('Codex sign-in')) },
-					{ title: vscode.l10n.t('Use an API key'), run: () => vscode.commands.executeCommand('arkestra.codex.setApiKey') },
+					// The page asks for the key in its own password field; the palette's command asks at the top.
+					{ title: vscode.l10n.t('Use an API key'), run: () => vscode.commands.executeCommand('arkestra.codex.setApiKey'), secret: { label: vscode.l10n.t('OpenAI API key for Codex'), placeholder: 'sk-…', save: key => context.secrets.store(KEY, key.trim()) } },
 				];
 			default:
 				return [];

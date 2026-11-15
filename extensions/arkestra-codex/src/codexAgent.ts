@@ -5,13 +5,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
+import { promises as fs } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
-import type { Agent, AgentChoices, AgentEvent, ExistingSession, Message, PermissionRequest, Readiness, SessionEntry, SessionHistory, TurnInput, Usage, WorkUpdate } from './rooms';
+import type { Agent, AgentChoices, AgentEvent, ExistingSession, Message, PermissionRequest, Readiness, SessionEntry, SessionHistory, SessionMeta, TurnInput, Usage, WorkUpdate } from './rooms';
 import { RpcClient, type Notification } from './rpc';
-import { followLocal, followRemote } from './follow';
-import { RolloutHistory, checkThreadId, codexImages, codexPiece, codexUserText, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript } from './codexFollow';
+import { LineSplitter, followLocal, followRemote } from './follow';
+import { RolloutHistory, checkThreadId, codexImages, codexMeta, codexPiece, codexToolLine, codexUserText, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript, type RolloutRead } from './codexFollow';
 
 export type CodexAuth = { readonly mode: 'subscription' } | { readonly mode: 'apiKey'; readonly key: string | undefined };
 
@@ -214,6 +215,26 @@ export function codexWork(item: any, completed: boolean): WorkUpdate[] {
 	return out;
 }
 
+/**
+ * A CLI that could not be started, in plain words: not installed (ENOENT; on an SSH machine the
+ * shell's 127), or not allowed to run (EACCES; 126). `where`: the SSH machine's name, none for
+ * this computer. Undefined: some other failure, shown as it is.
+ */
+export function startProblem(product: string, error: { code?: unknown; exitCode?: unknown } | undefined, where?: string): Error | undefined {
+	// On an SSH machine a local spawn error is ssh's own, not the CLI's: only the remote shell's codes count.
+	const code = where ? error?.exitCode : error?.code;
+	if (code === 'ENOENT' || code === 127) {
+		return new Error(where ? `${product} is not installed on ${where}. Install it there or choose another machine.` : `${product} is not installed on this computer. Install it or connect a machine that has it.`);
+	}
+	if (code === 'EACCES' || code === 126) {
+		return new Error(where ? `${product} could not be started on ${where}: it is not allowed to run. Reinstall it there or choose another machine.` : `${product} could not be started on this computer: it is not allowed to run. Reinstall it or connect a machine that has it.`);
+	}
+	return undefined;
+}
+
+/** The most of a turn's rollout lines read back for what Codex produced (AR26). */
+const TURN_READ_MAX = 50_000_000;
+
 export class CodexAgent implements Agent {
 	readonly id: string;
 	readonly name: string;
@@ -223,6 +244,11 @@ export class CodexAgent implements Agent {
 	private models: { list: CodexModel[]; at: number } | undefined;
 	/** The running turns' approval answers per thread (server requests carry the thread id). */
 	private readonly approvals = new Map<string, (method: string, params: any) => Promise<unknown> | undefined>();
+	/**
+	 * 2: the rollout's model and context fill, and its patch lines for what Codex produced (AR26):
+	 * threads read before read their rollout once more.
+	 */
+	readonly historyVersion = 2;
 
 	constructor(private readonly options: CodexOptions) {
 		({ id: this.id, name: this.name, where: this.where } = options.identity ?? { id: 'codex', name: 'Codex', where: 'local' });
@@ -314,7 +340,7 @@ export class CodexAgent implements Agent {
 	}
 
 	/** The thread's rollout file read whole, here or on the SSH machine; undefined: no such file. */
-	private async readRollout(threadId: string, known: string | undefined): Promise<Required<SessionHistory> | undefined> {
+	private async readRollout(threadId: string, known: string | undefined): Promise<RolloutRead | undefined> {
 		if (!this.options.spawn) {
 			const file = known ?? await localRollout(this.localHomes(), threadId);
 			return file ? readLocalRollout(file) : undefined;
@@ -353,9 +379,9 @@ export class CodexAgent implements Agent {
 	}
 
 	/** Follows a thread's rollout file live (AR39): here through the file system, on an SSH machine through `tail -F`. */
-	watchSession(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string) => void, cursor?: string): { dispose(): void } {
+	watchSession(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string, meta?: SessionMeta, lines?: readonly string[]) => void, cursor?: string): { dispose(): void } {
 		checkThreadId(sessionId);
-		const options = { classify: codexPiece, onEntries, ...(cursor !== undefined ? { cursor } : {}) };
+		const options = { classify: codexPiece, meta: codexMeta, keep: codexToolLine, onEntries, ...(cursor !== undefined ? { cursor } : {}) };
 		let known: Promise<string | undefined> | undefined;
 		if (!this.options.spawn) {
 			return followLocal(async () => await (known ??= this.rolloutPath(sessionId)) ?? localRollout(this.localHomes(), sessionId), options);
@@ -380,6 +406,79 @@ export class CodexAgent implements Agent {
 		} catch {
 			return undefined;
 		}
+	}
+
+	/**
+	 * Where the thread's rollout file ends now (a turn's own lines start there): its path and size;
+	 * size 0 while there is none. A thread just started has no file yet: nothing is searched for.
+	 */
+	private async rolloutEnd(threadId: string, fresh: boolean): Promise<{ file?: string; size: number }> {
+		if (fresh) {
+			return { size: 0 };
+		}
+		const known = await this.rolloutPath(threadId);
+		if (!this.options.spawn) {
+			const file = known ?? await localRollout(this.localHomes(), threadId);
+			const stat = file ? await fs.stat(file).catch(() => undefined) : undefined;
+			return { ...(file ? { file } : {}), size: stat?.size ?? 0 };
+		}
+		const out = await this.shell([locateRolloutScript(threadId, known, ['~/.codex', this.options.apiKeyHome]), '[ -n "$f" ] && [ -f "$f" ] || exit 0', `printf '%s\\n%s' "$(wc -c < "$f" | tr -d ' ')" "$f"`].join('\n'), 60_000).catch(() => '');
+		const [size, file] = out.split('\n');
+		return { ...(file ? { file } : {}), size: Number(size) || 0 };
+	}
+
+	/** The patch lines (`codexToolLine`) the rollout file got after `from`: what a turn produced (AR26). */
+	private async rolloutLinesFrom(threadId: string, known: string | undefined, from: number): Promise<string[]> {
+		const splitter = new LineSplitter(from);
+		const lines: string[] = [];
+		const take = (chunk: Buffer) => { for (const l of splitter.push(chunk)) { if (codexToolLine(l.text)) { lines.push(l.text); } } };
+		if (!this.options.spawn) {
+			const file = known ?? await localRollout(this.localHomes(), threadId);
+			const handle = file ? await fs.open(file, 'r').catch(() => undefined) : undefined;
+			if (!handle) {
+				return lines;
+			}
+			try {
+				const { size } = await handle.stat();
+				const end = Math.min(size, from + TURN_READ_MAX);
+				for (let pos = from; pos < end;) {
+					const buf = Buffer.alloc(Math.min(1 << 20, end - pos));
+					const { bytesRead } = await handle.read(buf, 0, buf.length, pos);
+					if (!bytesRead) {
+						break;
+					}
+					take(buf.subarray(0, bytesRead));
+					pos += bytesRead;
+				}
+			} finally {
+				await handle.close();
+			}
+			return lines;
+		}
+		const script = [locateRolloutScript(threadId, known, ['~/.codex', this.options.apiKeyHome]), '[ -n "$f" ] && [ -f "$f" ] || exit 0', `tail -c +${Math.floor(from) + 1} "$f" | head -c ${TURN_READ_MAX}`].join('\n');
+		const spawn = this.options.spawn;
+		await new Promise<void>(resolve => {
+			const child = spawn('sh', ['-c', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+			const timer = setTimeout(() => child.kill('SIGKILL'), 120_000);
+			child.stdout?.on('data', (chunk: Buffer) => take(chunk));
+			child.on('error', () => { clearTimeout(timer); resolve(); });
+			child.on('close', () => { clearTimeout(timer); resolve(); });
+		});
+		return lines;
+	}
+
+	/** A POSIX script on the SSH machine; resolves to its output. */
+	private shell(script: string, timeoutMs: number): Promise<string> {
+		const spawn = this.options.spawn!;
+		return new Promise((resolve, reject) => {
+			const child = spawn('sh', ['-c', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+			let out = '';
+			const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('timeout')); }, timeoutMs);
+			child.stdout?.setEncoding('utf8');
+			child.stdout?.on('data', (c: string) => { out += c; });
+			child.on('error', e => { clearTimeout(timer); reject(e); });
+			child.on('close', code => { clearTimeout(timer); if (code === 0) { resolve(out); } else { reject(new Error(`exited with ${code}`)); } });
+		});
 	}
 
 	async turn(input: TurnInput, onEvent: (event: AgentEvent) => void, signal: AbortSignal): Promise<void> {
@@ -407,6 +506,8 @@ export class CodexAgent implements Agent {
 			room.seen = new Set(); room.sharedVersion = undefined;
 		}
 		const threadId = room.threadId!;
+		// Where this turn's rollout lines will start: read back after it for what Codex produced (AR26).
+		const rollout = await this.rolloutEnd(threadId, freshThread).catch(() => undefined);
 		// A new thread also gets Codex's own earlier answers.
 		const body = formatMessages(input.transcript.filter(m => !room.seen.has(m.id)), this.id, freshThread);
 		const text = input.shared && room.sharedVersion !== input.shared.version ? `${input.shared.text}\n\n${body}` : body;
@@ -514,6 +615,11 @@ export class CodexAgent implements Agent {
 			this.approvals.delete(threadId);
 			signal.removeEventListener('abort', interrupt);
 			subscriptions.forEach(d => d.dispose());
+			if (rollout) {
+				// The rollout lines this turn wrote that add files (the turn's stream has no raw lines of its own).
+				const lines = await this.rolloutLinesFrom(threadId, rollout.file ?? await this.rolloutPath(threadId), rollout.size).catch(() => [] as string[]);
+				lines.forEach(line => onEvent({ kind: 'line', line }));
+			}
 		}
 	}
 
@@ -576,7 +682,8 @@ export class CodexAgent implements Agent {
 		} catch (e) {
 			client.dispose();
 			this.server = undefined;
-			throw e;
+			// `spawn codex ENOENT`: no Codex here; said in plain words (the SSH machine's own shell says 127).
+			throw startProblem('Codex', e as { code?: unknown; exitCode?: unknown }, this.options.spawn ? this.where : undefined) ?? e;
 		}
 		return client;
 	}

@@ -39,6 +39,58 @@ export function newMachineId(name: string, existing: readonly Machine[]): string
 	return id;
 }
 
+/** What a connection form (the Machines and Connections pages) sends: the SSH destination with an optional :port, a name, a folder. */
+export interface ConnectionInput {
+	readonly host?: unknown;
+	readonly name?: unknown;
+	readonly folder?: unknown;
+}
+
+/** The form's problems in the interface language. */
+export interface ConnectionFormStrings {
+	readonly hostRequired: string;
+	readonly hostInvalid: string;
+	readonly portInvalid: string;
+	readonly nameTaken: string;
+}
+
+/**
+ * A machine from a connection form, or the field that is wrong: a new one gets an id from its
+ * name; an edited one keeps its id (its threads keep their agents). An empty name is the host's
+ * name without the user; an empty folder is the home folder.
+ */
+export function connectionFromForm(input: ConnectionInput, existing: readonly Machine[], t: ConnectionFormStrings, id?: string): { machine: Machine } | { field: 'host' | 'name' | 'folder'; message: string } {
+	const text = (v: unknown) => typeof v === 'string' ? v.trim() : '';
+	const raw = text(input.host);
+	if (!raw) {
+		return { field: 'host', message: t.hostRequired };
+	}
+	if (/\s/.test(raw) || raw.startsWith('-')) {
+		return { field: 'host', message: t.hostInvalid };
+	}
+	const port = /^(.+):(\d*)$/.exec(raw);
+	const host = port ? port[1] : raw;
+	const portNumber = port ? Number(port[2]) : undefined;
+	if (port && (!port[2] || !Number.isInteger(portNumber) || portNumber! < 1 || portNumber! > 65535)) {
+		return { field: 'host', message: t.portInvalid };
+	}
+	const name = text(input.name) || host.replace(/^.*@/, '');
+	const others = existing.filter(m => m.id !== id);
+	if (others.some(m => m.name.toLowerCase() === name.toLowerCase())) {
+		return { field: 'name', message: t.nameTaken };
+	}
+	const folder = text(input.folder);
+	return {
+		machine: {
+			id: id ?? newMachineId(name, existing),
+			name,
+			host,
+			...(portNumber ? { port: portNumber } : {}),
+			...(folder ? { folder } : {}),
+		},
+	};
+}
+
 /** Host aliases from an OpenSSH config file's text: `Host` lines without wildcards. */
 export function sshConfigHosts(text: string): string[] {
 	const hosts: string[] = [];

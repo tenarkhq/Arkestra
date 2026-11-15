@@ -93,9 +93,9 @@ test('stdin after the environment line belongs to the CLI (stdio protocols work)
 	assert.ok(out.includes('args: [app-server]'));
 });
 
-test('probe lists the agent CLIs on the machine, or says why it cannot connect', async () => {
-	const { ssh } = await setup();
-	assert.deepEqual(await probe({ id: 'dev', name: 'dev', host: 'dev' }, { ssh }), { reachable: true, clis: ['claude', 'codex'] });
+test('probe lists the agent CLIs and the home folder on the machine, or says why it cannot connect', async () => {
+	const { dir, ssh } = await setup();
+	assert.deepEqual(await probe({ id: 'dev', name: 'dev', host: 'dev' }, { ssh }), { reachable: true, clis: ['claude', 'codex'], home: path.join(dir, 'home') });
 	assert.deepEqual(await probe({ id: 'x', name: 'x', host: 'down' }, { ssh }), { reachable: false, clis: [], error: 'ssh: connect to host down port 22: Connection refused' });
 });
 

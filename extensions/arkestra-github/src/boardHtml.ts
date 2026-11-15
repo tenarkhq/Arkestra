@@ -1,7 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Arkestra. The Board and Table views' page (AR30). The extension posts the board model; the
  *  page draws it and posts back what the user does (move, edit, new issue, start a room). One
- *  header for every view; the Table is plain text cells with a details pane for the edits.
+ *  header and one filter row for every view (Board, Table, Plan, Graph: the same filters, kept
+ *  when the view changes); a click on a card, row, staircase cell or graph node opens the
+ *  details pane on the right. Completion reads green (done) and blue (open), never the accent;
+ *  the critical path is the only red.
  *  Drawn with DOM calls, never with HTML strings from data.
  *--------------------------------------------------------------------------------------------*/
 
@@ -19,7 +22,12 @@ const STYLE = String.raw`
 	--ok: var(--vscode-testing-iconPassed, #3fb950);
 	--warn: var(--vscode-editorWarning-foreground, #cca700);
 	--bad: var(--vscode-errorForeground, #f85149);
-	--run: var(--vscode-progressBar-background, #3794ff);
+	--run: var(--vscode-charts-blue, #3794ff);
+	/* Completion: done green, open work blue; never the accent (coral in Arkestra Dark), so red stays the critical path's. */
+	--done: var(--vscode-testing-iconPassed, #3fb950);
+	--prog: var(--vscode-charts-blue, #3794ff);
+	--crit: var(--vscode-testing-iconFailed, #f85149);
+	--selline: color-mix(in srgb, var(--vscode-foreground) 60%, transparent);
 	--panel: var(--vscode-sideBar-background, var(--vscode-editor-background));
 }
 * { box-sizing: border-box; }
@@ -38,6 +46,7 @@ header { position: relative; z-index: 3; flex: none; background: var(--vscode-ed
 .top .title { font-weight: 500; font-size: 14px; color: var(--vscode-foreground); white-space: nowrap; }
 .top .sub { color: var(--dim); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sub .warn { color: var(--warn); } .sub .bad { color: var(--bad); }
+.sub .live::before { content: '●'; color: var(--ok); font-size: 9px; margin-right: 5px; vertical-align: 1px; }
 .seg { display: inline-flex; border: 1px solid var(--line2); border-radius: 8px; padding: 2px; gap: 2px; flex: none; }
 .seg button { background: transparent; color: var(--mute); padding: 3px 10px; border-radius: 6px; font-size: 12.5px; }
 .seg button.on { background: var(--sel); color: var(--vscode-foreground); }
@@ -111,18 +120,23 @@ main.table { padding: 0 18px; }
 .chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; border-radius: 10px; font-size: 11px; line-height: 18px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); white-space: nowrap; }
 .tone-ok { background: color-mix(in srgb, var(--vscode-testing-iconPassed, #3fb950) 22%, transparent); color: var(--vscode-foreground); }
 .tone-bad { background: color-mix(in srgb, var(--vscode-testing-iconFailed, #f85149) 25%, transparent); color: var(--vscode-foreground); }
-.tone-run { background: color-mix(in srgb, var(--vscode-progressBar-background, #3794ff) 25%, transparent); color: var(--vscode-foreground); }
+.tone-run { background: color-mix(in srgb, var(--run) 25%, transparent); color: var(--vscode-foreground); }
 .tone-warn { background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 25%, transparent); color: var(--vscode-foreground); }
 .tone-muted { background: var(--vscode-editorWidget-background); color: var(--vscode-descriptionForeground); }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: currentColor; }
 .board { display: flex; gap: var(--gap); align-items: flex-start; overflow-x: auto; padding-bottom: 8px; }
-.col { flex: 0 0 272px; background: var(--vscode-sideBar-background, var(--vscode-editorWidget-background)); border-radius: var(--radius); display: flex; flex-direction: column; max-height: calc(100vh - 150px); }
+.col { flex: 0 0 272px; width: 272px; min-width: 0; background: var(--vscode-sideBar-background, var(--vscode-editorWidget-background)); border-radius: var(--radius); display: flex; flex-direction: column; max-height: calc(100vh - 150px); }
 .col.drop { outline: 2px dashed var(--vscode-focusBorder); }
 .col h3 { margin: 0; padding: 8px 10px; font-size: 12px; font-weight: 600; display: flex; gap: 6px; align-items: center; }
 .cards { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
-.card { background: var(--vscode-editor-background); border: 1px solid var(--vscode-panel-border); border-radius: var(--radius); padding: 8px 9px; display: flex; flex-direction: column; gap: 5px; cursor: grab; }
+.card { background: var(--vscode-editor-background); border: 1px solid var(--vscode-panel-border); border-radius: var(--radius); padding: 8px 9px; display: flex; flex-direction: column; gap: 5px; cursor: pointer; }
+.card:hover { border-color: var(--line2); }
+.card.sel { border-color: var(--selline); }
 .card.dragging { opacity: .4; }
-.card .top { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+/* A long prerequisite list wraps inside the card; the column keeps its width. */
+.card .chip { white-space: normal; overflow-wrap: anywhere; max-width: 100%; line-height: 16px; padding: 1px 7px; }
+.card { min-width: 0; }
+.card .top { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; min-height: 0; padding: 0; border-bottom: 0; } /* not the header's .top */
 .card .num { color: var(--vscode-descriptionForeground); font-size: 12px; }
 .card .name { font-weight: 500; }
 .kv { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; font-size: 12px; }
@@ -134,6 +148,14 @@ header .form { margin: 10px 18px 0; }
 .empty { flex: 1; }
 .form input.wide { flex: 1; min-width: 200px; }
 .empty { padding: 40px 20px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.picker { width: min(560px, 100%); display: flex; flex-direction: column; gap: 10px; text-align: left; }
+.plist { display: flex; flex-direction: column; gap: 2px; max-height: 46vh; overflow-y: auto; border: 1px solid var(--vscode-panel-border); border-radius: var(--radius); padding: 4px; }
+.plist .pick { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; text-align: left; background: transparent; color: var(--vscode-foreground); padding: 7px 10px; border-radius: 6px; }
+.plist .pick:hover, .plist .pick:focus-visible { background: var(--vscode-list-hoverBackground); outline: none; filter: none; }
+.plist .pick.on { background: var(--vscode-list-inactiveSelectionBackground); }
+.plist .pt { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plist .pd { color: var(--mute); font-size: 12px; white-space: nowrap; }
+.perr { color: var(--vscode-errorForeground); font-size: 12px; }
 footer { border-top: 1px solid var(--vscode-panel-border); margin-top: 12px; padding: 8px 14px 14px; }
 footer summary { cursor: pointer; font-weight: 600; font-size: 12px; }
 .log { display: grid; grid-template-columns: auto auto 1fr; gap: 2px 10px; font-size: 12px; margin-top: 6px; }
@@ -143,10 +165,10 @@ footer summary { cursor: pointer; font-weight: 600; font-size: 12px; }
 .plan .hint { font-size: 12px; color: var(--vscode-descriptionForeground); margin: 0 0 8px; max-width: 70ch; }
 .lanes { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--gap); }
 .lane { border: 1px solid var(--vscode-panel-border); border-radius: var(--radius); padding: 10px; display: flex; flex-direction: column; gap: 6px; }
-.lane.development { border-color: var(--vscode-focusBorder); }
+.lane.development { border-color: color-mix(in srgb, var(--prog) 55%, var(--vscode-panel-border)); }
 .lane .name { font-weight: 600; font-size: 14px; }
 .bar { height: 6px; border-radius: 3px; background: var(--vscode-editorWidget-background); overflow: hidden; }
-.bar > i { display: block; height: 100%; background: var(--vscode-progressBar-background, #3794ff); }
+.bar > i { display: block; height: 100%; background: var(--done); }
 .rails { display: flex; flex-direction: column; gap: 10px; }
 .rail { border: 1px solid var(--vscode-panel-border); border-radius: var(--radius); padding: 8px 10px; min-width: 0; }
 .rail .head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
@@ -155,20 +177,23 @@ footer summary { cursor: pointer; font-weight: 600; font-size: 12px; }
 .step { flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 0 14px 0 0; position: relative; max-width: 220px; }
 .step::before { content: ''; position: absolute; left: 0; right: 0; top: 5px; height: 2px; background: var(--vscode-panel-border); }
 .step .pin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--vscode-panel-border); background: var(--vscode-editor-background); position: relative; }
-.step.done .pin { background: var(--vscode-testing-iconPassed, #3fb950); border-color: var(--vscode-testing-iconPassed, #3fb950); }
-.step.now .pin { border-color: var(--vscode-focusBorder); background: var(--vscode-focusBorder); }
+.step.done .pin { background: var(--done); border-color: var(--done); }
+.step.now .pin { border-color: var(--prog); background: var(--prog); }
 .step .lbl { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px; }
 .step .sub { font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px; }
 .stairs-wrap { overflow-x: auto; }
-.stairs { display: grid; gap: 4px 6px; align-items: center; min-width: 560px; }
+.stairs { display: grid; gap: 4px 6px; align-items: center; justify-content: start; }
 .stairs .lv { font-size: 11px; color: var(--vscode-descriptionForeground); text-align: center; }
 .stairs .lanehead { grid-column: 1 / -1; font-weight: 600; font-size: 12px; margin-top: 8px; }
 .cell { border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 3px 6px; font-size: 12px; position: relative; overflow: hidden; cursor: pointer; white-space: nowrap; text-overflow: ellipsis; }
-.cell > .fill { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--vscode-progressBar-background, #3794ff) 22%, transparent); }
+.cell > .fill { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--prog) 24%, transparent); }
 .cell > span { position: relative; }
-.cell.critical { border-color: var(--vscode-testing-iconFailed, #f85149); border-width: 2px; }
-.cell.startable { box-shadow: inset 3px 0 0 var(--vscode-testing-iconPassed, #3fb950); }
-.cell.running { box-shadow: inset 3px 0 0 var(--vscode-progressBar-background, #3794ff); }
+.cell.done { color: var(--mute); border-color: color-mix(in srgb, var(--done) 35%, var(--vscode-panel-border)); }
+.cell.done > .fill { background: color-mix(in srgb, var(--done) 16%, transparent); }
+.cell.critical { border-color: var(--crit); border-width: 2px; }
+.cell.startable { box-shadow: inset 3px 0 0 var(--done); }
+.cell.running { box-shadow: inset 3px 0 0 var(--run); }
+.cell.sel { outline: 1.5px solid var(--selline); outline-offset: 1px; }
 .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 6px; }
 .graph-top { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
 .graph-top button.on { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
@@ -178,26 +203,31 @@ footer summary { cursor: pointer; font-weight: 600; font-size: 12px; }
 .node rect { fill: var(--vscode-editorWidget-background); stroke: var(--vscode-panel-border); stroke-width: 1; }
 .node.milestone rect { fill: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 12%, var(--vscode-editor-background)); }
 .node.done rect { opacity: .7; }
-.node.critical rect { stroke: var(--vscode-testing-iconFailed, #f85149); stroke-width: 2; }
-.node.sel rect { stroke: var(--vscode-focusBorder); stroke-width: 2.5; }
+.node.done text { fill: var(--vscode-descriptionForeground); }
+.node.critical rect { stroke: var(--crit); stroke-width: 2; }
+.node.sel rect { stroke: var(--selline); stroke-width: 2.5; }
+.node rect.meter { fill: color-mix(in srgb, var(--vscode-descriptionForeground) 18%, transparent); stroke: none; opacity: 1; }
+.node rect.meter-done { fill: color-mix(in srgb, var(--done) 75%, transparent); stroke: none; opacity: 1; }
+.node rect.meter-prog { fill: var(--prog); stroke: none; opacity: 1; }
 .node text { fill: var(--vscode-foreground); font-size: 12px; pointer-events: none; }
 .node text.sub { fill: var(--vscode-descriptionForeground); font-size: 11px; }
-.node .stripe-ok { fill: var(--vscode-testing-iconPassed, #3fb950); }
-.node .stripe-bad { fill: var(--vscode-testing-iconFailed, #f85149); }
-.node .stripe-run { fill: var(--vscode-progressBar-background, #3794ff); }
+.node .stripe-ok { fill: var(--done); }
+.node .stripe-bad { fill: var(--crit); }
+.node .stripe-run { fill: var(--run); }
 .node .stripe-warn { fill: var(--vscode-editorWarning-foreground, #cca700); }
 .node { cursor: grab; }
 .drawing .node { cursor: crosshair; }
 .edge { fill: none; stroke: var(--vscode-descriptionForeground); stroke-width: 1.5; cursor: pointer; }
 .edge.loose { stroke-dasharray: 5 4; }
 .edge.release { stroke-dasharray: 2 4; stroke-width: 1; }
-.edge.critical { stroke: var(--vscode-testing-iconFailed, #f85149); stroke-width: 2.5; }
-.edge.sel { stroke: var(--vscode-focusBorder); stroke-width: 3; }
+.edge.critical { stroke: var(--crit); stroke-width: 2.5; }
+.edge.sel { stroke: var(--selline); stroke-width: 3; }
 .edge-hit { fill: none; stroke: transparent; stroke-width: 12; cursor: pointer; }
 .ghost { stroke: var(--vscode-focusBorder); stroke-width: 2; stroke-dasharray: 4 3; fill: none; pointer-events: none; }
 .side { flex: 0 0 280px; border: 1px solid var(--vscode-panel-border); border-radius: var(--radius); padding: 10px; display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
-.side h4 { margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--vscode-descriptionForeground); }
-.side ul { margin: 0; padding-left: 16px; }
+.side h4, .facts h4 { margin: 4px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--vscode-descriptionForeground); }
+.side ul, .facts ul { margin: 0; padding-left: 16px; }
+.facts { display: flex; flex-direction: column; gap: 6px; font-size: 12px; padding: 0 4px; }
 @media (max-width: 760px) { .graph-body { flex-direction: column; } .side { flex-basis: auto; width: 100%; } }
 .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; border: 1px solid var(--vscode-panel-border); }
 `;
@@ -232,10 +262,13 @@ function h(tag, attrs, ...kids) {
 }
 const chip = (text, tone, attrs) => h('span', Object.assign({ class: 'chip' + (tone ? ' tone-' + tone : '') }, attrs || {}), text);
 
-// The rows the filters and the search let through, worked out once per drawing (Board and Table).
+// The rows the filters and the search let through, worked out once per drawing (every view).
 let shownRows = [];
 let shownIds = new Set();
 const visible = (card) => shownIds.has(card.id);
+const filtering = () => !!ui.search.trim() || Object.values(ui.filters).some(Boolean);
+/** Opens the details pane on an item (any view); the same item again keeps it. */
+function select(id) { if (ui.selected !== id) { ui.selected = id; save(); drawMain(); } }
 const label = (card) => card.number !== undefined ? '#' + card.number : '';
 
 function roomChip(room) {
@@ -253,9 +286,9 @@ function prereq(card) {
 
 function cardEl(card) {
 	const fields = model.cardFields.map(id => card.fields.find(f => f.fieldId === id)).filter(Boolean);
-	const el = h('div', { class: 'card', draggable: 'true', 'data-id': card.id },
+	const el = h('div', { class: 'card' + (ui.selected === card.id ? ' sel' : ''), draggable: 'true', 'data-id': card.id, onclick: () => select(card.id) },
 		h('div', { class: 'top' }, h('span', { class: 'num' }, label(card) || (card.type === 'draft' ? 'draft' : '')), card.labels.map(l => chip(l)), card.state === 'CLOSED' ? chip('closed', 'muted') : null),
-		h('a', { class: 'name', onclick: () => card.url && post({ type: 'open', url: card.url }) }, card.title),
+		h('span', { class: 'name' }, card.title),
 		fields.length ? h('div', { class: 'kv' }, fields.map(f => [h('span', {}, f.name), h('span', {}, f.value)])) : null,
 		h('div', { class: 'chips' },
 			prereq(card),
@@ -364,7 +397,7 @@ function cellEl(r, c) {
 }
 function rowEl(r, cols) {
 	const id = r.card.id;
-	return h('div', { class: 'tr' + (ui.selected === id ? ' sel' : ''), 'data-id': id, onclick: () => { if (ui.selected !== id) { ui.selected = id; save(); drawMain(); } } }, cols.map(c => cellEl(r, c)));
+	return h('div', { class: 'tr' + (ui.selected === id ? ' sel' : ''), 'data-id': id, onclick: () => select(id) }, cols.map(c => cellEl(r, c)));
 }
 
 function tableEl() {
@@ -381,7 +414,7 @@ function tableEl() {
 		rows.length ? null : h('div', { class: 'nothing' }, t('Nothing matches the filters.')));
 }
 
-/** The selected row's details: the full title and every field, editable; GitHub, chat, room. */
+/** The selected item's details (every view): the full title and every field, editable; GitHub, chat, room; on the Graph also its links. */
 function detailsEl() {
 	const card = model.columns.flatMap(c => c.cards).find(c => c.id === ui.selected);
 	if (!card) return null;
@@ -393,7 +426,8 @@ function detailsEl() {
 		return f.type === 'single_select' || f.type === 'iteration' ? [ed, h('span', { class: 'chev' }, '⌄')] : ed;
 	};
 	const sf = statusField();
-	const close = () => { ui.selected = null; save(); drawMain(); };
+	const close = () => { ui.selected = null; ui.graph.selected = null; save(); drawMain(); };
+	const node = ui.tab === 'graph' && model.graph ? model.graph.nodes.find(n => n.id === card.id) : null;
 	return h('aside', { class: 'details' },
 		h('div', { class: 'dh' }, h('span', {}, label(card) || (card.type === 'draft' ? t('Draft') : '')), h('button', { class: 'icon', title: t('Close'), onclick: close }, '✕')),
 		h('div', { class: 'dtitle' }, card.title),
@@ -408,7 +442,8 @@ function detailsEl() {
 		h('div', { class: 'dacts' },
 			card.url ? h('button', { onclick: () => post({ type: 'open', url: card.url }) }, t('Open on GitHub')) : null,
 			model.canChat ? h('button', { onclick: () => post({ type: 'chat', itemId: card.id }) }, t('Chat about this')) : null,
-			card.startable ? h('button', { class: 'primary', onclick: () => post({ type: 'startRoom', itemId: card.id }) }, t('Start room ▸')) : null));
+			card.startable ? h('button', { class: 'primary', onclick: () => post({ type: 'startRoom', itemId: card.id }) }, t('Start room ▸')) : null),
+		node ? [h('div', { class: 'hr' }), graphFacts(node)] : null);
 }
 
 function newIssueForm() {
@@ -492,12 +527,15 @@ function filterRow() {
 			ui.menu === 'groupChip' ? groupMenu() : null) : null);
 }
 
-/** "owner/number · synced 23:28"; the relay offline in the warning colour, only when it is. */
+/**
+ * "owner/number · updated 23:28 · every 1 min": reading GitHub at intervals is the normal state (the relay is an
+ * optional push channel), so it is neutral; "live" only while the relay is connected; the relay's state in the hover.
+ */
 function syncSub() {
 	const st = model.sync || {};
 	const at = (st.at || '').replace(/^(\d{1,2}:\d{2}):\d{2}/, '$1'); // hours and minutes are enough here
-	const state = st.kind === 'synced' ? h('span', { title: st.at }, t('synced {0}', at))
-		: st.kind === 'offline' ? h('span', { class: 'warn', title: t('The relay is offline: the board reads GitHub at intervals until it is back.') }, t('relay offline · read {0}', at))
+	const state = st.kind === 'synced' ? h('span', { class: 'live', title: t('Live: the relay pushes GitHub changes here as they happen. Last change read {0}.', st.at) }, t('live · updated {0}', at))
+		: st.kind === 'polling' ? h('span', { title: t('Read from GitHub at {0}, then every {1} min. The relay (an optional push channel) is not connected.', st.at, st.everyMin || 1) }, t('updated {0}', at), st.everyMin ? ' · ' + t('every {0} min', st.everyMin) : '')
 			: st.kind === 'error' ? h('span', { class: 'bad' }, st.text)
 				: st.kind === 'loading' ? h('span', {}, t('reading…')) : h('span', {}, st.text || '');
 	return h('span', { class: 'sub' }, model.project.ref + ' · ', state, model.pinned ? ' · ' + t('pinned') : '');
@@ -514,7 +552,7 @@ function headerEl() {
 			h('span', { class: 'anchor' }, h('button', { class: 'icon' + (ui.menu === 'more' || ui.menu === 'columns' || ui.menu === 'group' ? ' on' : ''), title: t('More actions'), onclick: (e) => { e.stopPropagation(); toggleMenu('more'); } }, dotsIcon()),
 				ui.menu === 'more' ? moreMenu() : ui.menu === 'columns' ? columnsMenu() : ui.menu === 'group' ? groupMenu() : null)),
 		ui.form ? newIssueForm() : null,
-		ui.tab === 'board' || ui.tab === 'table' ? filterRow() : null);
+		filterRow());
 }
 
 function footerEl() {
@@ -524,38 +562,53 @@ function footerEl() {
 	return h('footer', {}, d);
 }
 
+/**
+ * The Plan view. The filters choose which tasks show; dependency levels, lane progress and the critical path are
+ * worked out on every task, so a filtered-out prerequisite does not move its followers to another column.
+ */
 function planEl() {
 	const p = model.plan;
 	if (!p) return h('div', { class: 'muted' }, 'No plan yet.');
 	const stateText = { released: 'Released', development: 'In development', next: 'Next', later: 'Later' };
+	const stairs = p.stairs.map(s => Object.assign({}, s, { cells: s.cells.filter(c => shownIds.has(c.id)) }));
+	const shownLanes = new Set(stairs.filter(s => s.cells.length).map(s => s.lane));
+	const narrowed = filtering();
 	const lanes = h('section', {},
 		h('h2', {}, 'Release lanes'),
 		h('p', { class: 'hint' }, (p.live ? 'Live: ' + p.live + ' · ' : '') + (p.laneField ? 'lanes from the ' + p.laneField + ' field' : 'no lane field (Line, Release, Milestone…): everything is in Backlog') + (p.weightField ? ' · weighted by ' + p.weightField : ' · every task weighs the same')),
-		h('div', { class: 'lanes' }, p.lanes.map(l => h('div', { class: 'lane ' + l.state },
+		h('div', { class: 'lanes' }, p.lanes.filter(l => !narrowed || shownLanes.has(l.name)).map(l => h('div', { class: 'lane ' + l.state },
 			h('div', { class: 'muted' }, stateText[l.state]),
 			h('div', { class: 'name' }, l.name),
-			h('div', { class: 'bar' }, h('i', { style: 'width:' + l.percent + '%' })),
+			h('div', { class: 'bar', title: t('{0}% done', l.percent) }, h('i', { style: 'width:' + l.percent + '%' })),
 			h('div', { class: 'muted' }, l.done + '/' + l.total + ' done · ' + l.percent + '%')))));
-	const rails = h('section', {},
+	// Branch rails come from GitHub's open pull requests and the local repository; without either, no section.
+	const rails = p.rails.length ? h('section', {},
 		h('h2', {}, 'Branches'),
-		h('p', { class: 'hint' }, 'Where the base branch and each open branch stand, and what goes on them next, in order.'),
+		h('p', { class: 'hint' }, 'Where the base branch and each branch with an open pull request stand, and what goes on them next, in order.'),
 		h('div', { class: 'rails' }, p.rails.map(r => h('div', { class: 'rail' },
-			h('div', { class: 'head' }, h('span', { class: 'branch' }, r.name), r.head ? h('span', { class: 'muted' }, r.head) : null, h('span', { class: 'muted' }, r.note)),
+			h('div', { class: 'head' }, h('span', { class: 'branch' }, r.name), r.head ? h('span', { class: 'muted' }, r.head) : null, r.note ? h('span', { class: 'muted' }, r.note) : null),
 			h('div', { class: 'steps' }, r.steps.map(s => h('div', { class: 'step' + (s.done ? ' done' : '') + (s.now ? ' now' : ''), onclick: s.url ? () => post({ type: 'open', url: s.url }) : s.roomId ? () => post({ type: 'openRoom', roomId: s.roomId }) : undefined, style: s.url || s.roomId ? 'cursor:pointer' : '' },
-				h('span', { class: 'pin' }), h('span', { class: 'lbl', title: s.label }, (s.done ? '✓ ' : '') + s.label), s.sub ? h('span', { class: 'sub' + (s.tone ? ' tone-' + s.tone : ''), title: s.sub }, s.sub) : null)))))));
-	const cols = 'minmax(120px, 1fr) '.repeat(p.levels);
-	const grid = h('div', { class: 'stairs', style: 'grid-template-columns:' + cols }, Array.from({ length: p.levels }, (_, i) => h('div', { class: 'lv' }, String(i))),
-		p.stairs.filter(s => s.cells.length).map(s => [h('div', { class: 'lanehead' }, s.lane + ' · ' + s.percent + '%'),
-			s.cells.map(c => h('div', { class: 'cell' + (c.critical ? ' critical' : '') + (c.startable ? ' startable' : '') + (c.running ? ' running' : ''), title: c.label + ' ' + c.title, style: 'grid-column:' + (c.level + 1), onclick: () => c.roomId ? post({ type: 'openRoom', roomId: c.roomId }) : c.url && post({ type: 'open', url: c.url }) },
-				h('i', { class: 'fill', style: 'width:' + Math.round(c.fill * 100) + '%' }), h('span', {}, c.label + ' ' + c.title)))]));
-	const stairs = h('section', {},
+				h('span', { class: 'pin' }), h('span', { class: 'lbl', title: s.label }, (s.done ? '✓ ' : '') + s.label), s.sub ? h('span', { class: 'sub' + (s.tone ? ' tone-' + s.tone : ''), title: s.sub }, s.sub) : null))))))) : null;
+	// Columns are capped, so a lane with one level reads as a list, not as full-width bars.
+	const grid = h('div', { class: 'stairs', style: 'grid-template-columns:repeat(' + p.levels + ', minmax(140px, 320px))' }, Array.from({ length: p.levels }, (_, i) => h('div', { class: 'lv' }, String(i))),
+		stairs.filter(s => s.cells.length).map(s => [h('div', { class: 'lanehead' }, s.lane + ' · ' + s.percent + '%'),
+			s.cells.map(c => h('div', { class: 'cell' + (c.done ? ' done' : '') + (c.critical ? ' critical' : '') + (c.startable ? ' startable' : '') + (c.running ? ' running' : '') + (ui.selected === c.id ? ' sel' : ''), title: (c.done ? t('done') : t('{0}% done', Math.round(c.fill * 100))) + ' · ' + c.label + ' ' + c.title, 'data-id': c.id, style: 'grid-column:' + (c.level + 1), onclick: () => select(c.id) },
+				h('i', { class: 'fill', style: 'width:' + Math.round(c.fill * 100) + '%' }), h('span', {}, (c.done ? '✓ ' : '') + c.label + ' ' + c.title)))]));
+	const legendBox = (style) => h('i', { style });
+	const staircase = h('section', {},
 		h('h2', {}, 'Dependency staircase'),
-		h('p', { class: 'hint' }, 'Dependency level instead of time: a task goes one column after its latest prerequisite, so tasks in one column can run in parallel. The fill is completion; the red chain is the critical path.'),
-		h('div', { class: 'stairs-wrap' }, grid),
-		p.critical.map(c => h('div', { class: 'muted' }, 'Critical path · ' + c.lane + ': ' + c.path.join(' → '))),
-		h('div', { class: 'legend' }, h('span', {}, h('i', { style: 'border:2px solid var(--vscode-testing-iconFailed, #f85149)' }), 'critical path'), h('span', {}, h('i', { style: 'background:color-mix(in srgb, var(--vscode-progressBar-background, #3794ff) 22%, transparent)' }), 'completion'), h('span', {}, h('i', { style: 'box-shadow: inset 3px 0 0 var(--vscode-testing-iconPassed, #3fb950)' }), 'startable now'), h('span', {}, h('i', { style: 'box-shadow: inset 3px 0 0 var(--vscode-progressBar-background, #3794ff)' }), 'a room is running on it')),
-		h('p', { class: 'hint' }, 'Click a task to open it, or its running room.'));
-	return h('div', { class: 'plan' }, lanes, rails, stairs);
+		h('p', { class: 'hint' }, 'Dependency level instead of time: a task goes one column after its latest prerequisite, so tasks in one column can run in parallel. Green is done, the blue fill is how far an open task is; the red chain is the critical path.'),
+		narrowed ? h('p', { class: 'hint' }, t('Only the tasks the filters let through; levels, progress and the critical path count every task.')) : null,
+		shownLanes.size ? h('div', { class: 'stairs-wrap' }, grid) : h('div', { class: 'nothing' }, t('Nothing matches the filters.')),
+		p.critical.filter(c => shownLanes.has(c.lane)).map(c => h('div', { class: 'muted' }, 'Critical path · ' + c.lane + ': ' + c.path.join(' → '))),
+		h('div', { class: 'legend' },
+			h('span', {}, legendBox('border:2px solid var(--crit)'), t('critical path')),
+			h('span', {}, legendBox('background:color-mix(in srgb, var(--done) 16%, transparent);border-color:color-mix(in srgb, var(--done) 35%, var(--vscode-panel-border))'), t('✓ done')),
+			h('span', {}, legendBox('background:color-mix(in srgb, var(--prog) 24%, transparent)'), t('in progress (fill = how far)')),
+			h('span', {}, legendBox('box-shadow: inset 3px 0 0 var(--done)'), t('startable now')),
+			h('span', {}, legendBox('box-shadow: inset 3px 0 0 var(--run)'), t('a room is running on it'))),
+		h('p', { class: 'hint' }, t('Click a task for its details.')));
+	return h('div', { class: 'plan' }, lanes, rails, staircase);
 }
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -585,19 +638,49 @@ function edgePath(a, b) {
 }
 const edgeKey = (e) => e.kind + ':' + e.from + '>' + e.to;
 
+/** Whether a graph node is the selected one: a task by the details pane's item, a release by the graph's own pick. */
+const nodeSelected = (n) => n.kind === 'milestone' ? !!(ui.graph.selected && ui.graph.selected.node === n.id) : ui.selected === n.id;
+/** Selects a node: a task opens the details pane, a release shows in the graph's side panel. */
+function selectNode(n) {
+	if (n.kind === 'milestone') { ui.graph.selected = { node: n.id }; ui.selected = null; }
+	else { ui.graph.selected = null; ui.selected = n.id; }
+	save(); drawMain();
+}
+
+/**
+ * The Graph view. The filters choose which tasks show (a release shows while one of its tasks does); places and
+ * the critical path come from every task, and the side panel and the details list hidden links too.
+ */
 function graphEl() {
 	const g = model.graph;
 	if (!g) return h('div', { class: 'muted' }, 'No graph yet.');
-	const nodes = new Map(g.nodes.map(n => [n.id, Object.assign({}, n)]));
+	const all = new Map(g.nodes.map(n => [n.id, Object.assign({}, n)]));
+	const lanesShown = new Set(g.nodes.filter(n => n.kind === 'task' && shownIds.has(n.id)).map(n => n.lane));
+	const nodes = new Map([...all].filter(([id, n]) => n.kind === 'milestone' ? lanesShown.has(n.lane) : shownIds.has(id)));
+	// With filters on, the shown tasks keep their order but close up (columns and rows of hidden tasks go):
+	// kept places of a few tasks lie far apart. This view is not saved as their places.
+	const filtered = g.nodes.some(n => n.kind === 'task' && !shownIds.has(n.id));
+	if (filtered) {
+		const xs = [...new Set([...nodes.values()].map(n => n.x))].sort((a, b) => a - b);
+		const ys = [...new Set([...nodes.values()].map(n => n.y))].sort((a, b) => a - b);
+		for (const n of nodes.values()) { n.x = 40 + xs.indexOf(n.x) * (W + 60); n.y = 40 + ys.indexOf(n.y) * (H + 36); }
+	}
 	const z = ui.graph.zoom;
-	const svg = s('svg', { width: Math.round(g.width * z), height: Math.round(g.height * z), viewBox: '0 0 ' + g.width + ' ' + g.height, class: ui.graph.mode !== 'select' ? 'drawing' : '' },
+	// The canvas is cut to the tasks the filters show: kept places of hidden tasks leave no empty field to scroll past.
+	const shown = [...nodes.values()];
+	const pad = 40;
+	const ox = shown.length ? Math.max(0, Math.min(...shown.map(n => n.x)) - pad) : 0;
+	const oy = shown.length ? Math.max(0, Math.min(...shown.map(n => n.y)) - pad) : 0;
+	const gw = shown.length ? Math.max(...shown.map(n => n.x)) + W + pad - ox : g.width;
+	const gh = shown.length ? Math.max(...shown.map(n => n.y)) + H + pad - oy : g.height;
+	const svg = s('svg', { width: Math.round(gw * z), height: Math.round(gh * z), viewBox: ox + ' ' + oy + ' ' + gw + ' ' + gh, class: ui.graph.mode !== 'select' ? 'drawing' : '' },
 		s('defs', {}, s('marker', { id: 'arrow', viewBox: '0 0 10 10', refX: '10', refY: '5', markerWidth: '7', markerHeight: '7', orient: 'auto-start-reverse' }, s('path', { d: 'M0,0 L10,5 L0,10 z', fill: 'context-stroke' }))));
 	const edgeLayer = s('g', {});
 	const nodeLayer = s('g', {});
 	svg.append(edgeLayer, nodeLayer);
 	const pointIn = (ev) => {
 		const r = svg.getBoundingClientRect ? svg.getBoundingClientRect() : { left: 0, top: 0 };
-		return { x: (ev.clientX - r.left) / z, y: (ev.clientY - r.top) / z };
+		return { x: (ev.clientX - r.left) / z + ox, y: (ev.clientY - r.top) / z + oy };
 	};
 	const drawEdges = () => {
 		edgeLayer.replaceChildren(...g.edges.filter(e => nodes.has(e.from) && nodes.has(e.to)).map(e => {
@@ -610,11 +693,15 @@ function graphEl() {
 		}));
 	};
 	for (const n of nodes.values()) {
-		const sel = ui.graph.selected && ui.graph.selected.node === n.id;
+		const sel = nodeSelected(n);
+		const fill = Math.max(0, Math.min(1, n.fill || 0));
 		const el = s('g', { class: 'node ' + n.kind + (n.done ? ' done' : '') + (ui.graph.critical && n.critical ? ' critical' : '') + (sel ? ' sel' : ''), transform: 'translate(' + n.x + ',' + n.y + ')', 'data-node': n.id },
 			s('rect', { width: W, height: H, rx: n.kind === 'milestone' ? 18 : 6 }),
 			n.tone ? s('rect', { class: 'stripe-' + n.tone, width: 4, height: H, rx: 2 }) : null,
-			s('text', { x: 12, y: 18 }, cut(n.label + (n.status ? ' · ' + n.status : ''), 30)),
+			// Completion as a thin bar along the bottom: green when done, blue while open.
+			s('rect', { class: 'meter', x: 10, y: H - 5, width: W - 20, height: 2, rx: 1 }),
+			fill > 0 ? s('rect', { class: n.done ? 'meter-done' : 'meter-prog', x: 10, y: H - 5, width: Math.round((W - 20) * fill), height: 2, rx: 1 }) : null,
+			s('text', { x: 12, y: 18 }, cut((n.done ? '✓ ' : '') + n.label + (n.status ? ' · ' + n.status : ''), 30)),
 			s('text', { x: 12, y: 36 }, cut(n.title, 30)),
 			n.sub ? s('text', { class: 'sub', x: 12, y: 54 }, cut(n.sub, 32)) : null);
 		el.addEventListener('pointerdown', (ev) => {
@@ -643,7 +730,7 @@ function graphEl() {
 					if (hit && hit.id !== n.id) linkNodes(n, hit, ui.graph.mode);
 					return;
 				}
-				if (moved) post({ type: 'savePosition', id: n.id, x: n.x, y: n.y });
+				if (moved && !filtered) post({ type: 'savePosition', id: n.id, x: n.x, y: n.y });
 				else clickNode(n);
 			};
 			window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
@@ -662,8 +749,8 @@ function graphEl() {
 		h('button', { title: 'Zoom out', onclick: () => { ui.graph.zoom = Math.max(0.4, ui.graph.zoom - 0.15); saveGraph(); drawMain(); } }, '−'),
 		h('button', { title: 'Zoom in', onclick: () => { ui.graph.zoom = Math.min(1.8, ui.graph.zoom + 0.15); saveGraph(); drawMain(); } }, '+'),
 		h('span', { class: 'muted' }, ui.graph.mode === 'pick' ? 'Click the task that has to come first.' : ui.graph.mode === 'draw' ? 'Drag a line from one task to another: it becomes its prerequisite, on GitHub too.' : ui.graph.mode === 'loose' ? 'Drag a line between two tasks: a loose link, it blocks nothing.' : 'Drag to move · click for details'));
-	return h('div', {}, top, h('div', { class: 'graph-body' }, h('div', { class: 'canvas' }, svg), sideEl(g, nodes)),
-		h('div', { class: 'legend' }, h('span', {}, h('i', { style: 'border:2px solid var(--vscode-testing-iconFailed, #f85149)' }), 'critical path'), h('span', {}, '── prerequisite'), h('span', {}, '- - loose link (blocks nothing)'), h('span', {}, '··· leads to the release')));
+	return h('div', {}, top, h('div', { class: 'graph-body' }, h('div', { class: 'canvas' }, svg), sideEl(g, all)),
+		h('div', { class: 'legend' }, h('span', {}, h('i', { style: 'border:2px solid var(--crit)' }), t('critical path')), h('span', {}, h('i', { style: 'background:color-mix(in srgb, var(--done) 75%, transparent)' }), t('✓ done')), h('span', {}, h('i', { style: 'background:var(--prog)' }), t('in progress (bar = how far)')), h('span', {}, '── prerequisite'), h('span', {}, '- - loose link (blocks nothing)'), h('span', {}, '··· leads to the release')));
 }
 
 function linkNodes(a, b, mode) {
@@ -678,11 +765,14 @@ function clickNode(n) {
 		if (target && n.id !== target.id) linkNodes(n, target, 'draw');
 		ui.graph.mode = 'select'; ui.graph.target = null; drawMain(); return;
 	}
-	ui.graph.selected = { node: n.id }; drawMain();
+	selectNode(n);
 }
 
+/** The graph's side panel: a picked link or release, else how to use it; a task's links show in the details pane. */
 function sideEl(g, nodes) {
 	const sel = ui.graph.selected;
+	const task = ui.selected && nodes.get(ui.selected);
+	if (!sel && task && task.kind === 'task') return null;
 	if (!sel) return h('aside', { class: 'side' }, h('div', { class: 'muted' }, 'Select a task to see what it waits for and what waits for it. When every prerequisite of a task is done, it is startable, and one click starts a room on it.'));
 	if (sel.edge) {
 		const e = sel.edge, a = nodes.get(e.from), b = nodes.get(e.to);
@@ -694,24 +784,28 @@ function sideEl(g, nodes) {
 	}
 	const n = nodes.get(sel.node);
 	if (!n) return h('aside', { class: 'side' });
-	const before = g.edges.filter(e => e.to === n.id && e.kind === 'blocks').map(e => nodes.get(e.from));
-	const after = g.edges.filter(e => e.from === n.id && e.kind !== 'loose').map(e => nodes.get(e.to));
-	const loose = g.edges.filter(e => e.kind === 'loose' && (e.from === n.id || e.to === n.id)).map(e => nodes.get(e.from === n.id ? e.to : e.from));
-	const item = (m, state) => h('li', {}, h('a', { onclick: () => { ui.graph.selected = { node: m.id }; drawMain(); } }, m.label + ' ' + cut(m.title, 34)), state ? h('span', { class: 'muted' }, ' · ' + state) : null);
-	const crit = g.critical.find(c => c.lane === n.lane);
 	return h('aside', { class: 'side' },
-		h('div', { class: 'muted' }, n.label + (n.status ? ' · ' + n.status : '') + (n.kind === 'task' ? ' · ' + n.lane : '')),
+		h('div', { class: 'muted' }, n.label),
 		h('div', { class: 'title' }, n.title),
 		n.sub ? chip(n.sub, n.tone) : null,
-		n.kind === 'task' ? [h('h4', {}, 'Prerequisites'), before.length ? h('ul', {}, before.map(m => item(m, m.done ? 'done' : 'open'))) : h('div', { class: 'muted' }, 'None')] : [h('h4', {}, 'Waits for'), h('ul', {}, g.edges.filter(e => e.to === n.id).map(e => item(nodes.get(e.from), nodes.get(e.from).done ? 'done' : 'open')))],
+		graphFacts(n));
+}
+
+/** What a node waits for and what waits for it, its loose links and critical path; for a task, + prerequisite. */
+function graphFacts(n) {
+	const g = model.graph;
+	const nodes = new Map(g.nodes.map(m => [m.id, m]));
+	const before = g.edges.filter(e => e.to === n.id && (n.kind === 'milestone' || e.kind === 'blocks')).map(e => nodes.get(e.from)).filter(Boolean);
+	const after = g.edges.filter(e => e.from === n.id && e.kind !== 'loose').map(e => nodes.get(e.to)).filter(Boolean);
+	const loose = g.edges.filter(e => e.kind === 'loose' && (e.from === n.id || e.to === n.id)).map(e => nodes.get(e.from === n.id ? e.to : e.from)).filter(Boolean);
+	const item = (m, state) => h('li', {}, h('a', { onclick: () => selectNode(m) }, (m.done ? '✓ ' : '') + m.label + ' ' + cut(m.title, 34)), state ? h('span', { class: 'muted' }, ' · ' + state) : null);
+	const crit = g.critical.find(c => c.lane === n.lane);
+	return h('div', { class: 'facts side-facts' },
+		n.kind === 'task' ? [h('h4', {}, 'Prerequisites'), before.length ? h('ul', {}, before.map(m => item(m, m.done ? 'done' : 'open'))) : h('div', { class: 'muted' }, 'None')] : [h('h4', {}, 'Waits for'), h('ul', {}, before.map(m => item(m, m.done ? 'done' : 'open')))],
 		n.kind === 'task' && after.length ? [h('h4', {}, 'It blocks'), h('ul', {}, after.map(m => item(m, m.kind === 'milestone' ? 'release' : 'waits for it')))] : null,
 		loose.length ? [h('h4', {}, 'Loose links'), h('ul', {}, loose.map(m => item(m, '')))] : null,
 		n.critical && crit ? [h('h4', {}, 'Critical path to ' + crit.lane), h('div', {}, crit.path.join(' → ')), h('div', { class: 'muted' }, 'A slip of ' + n.label + ' pushes the whole release.')] : null,
-		h('div', { class: 'row' },
-			n.roomId ? h('button', { class: 'primary', onclick: () => post({ type: 'openRoom', roomId: n.roomId }) }, 'Go to the running room') : null,
-			n.startable && !n.roomId ? h('button', { class: 'primary', onclick: () => post({ type: 'startRoom', itemId: n.id }) }, 'Start room ▸') : null,
-			n.linkable ? h('button', { onclick: () => { ui.graph.mode = 'pick'; ui.graph.target = n.id; drawMain(); } }, 'Add prerequisite') : null,
-			n.url ? h('button', { onclick: () => post({ type: 'open', url: n.url }) }, 'Open on GitHub') : null));
+		n.linkable ? h('div', { class: 'row' }, h('button', { onclick: () => { ui.graph.mode = 'pick'; ui.graph.target = n.id; drawMain(); } }, 'Add prerequisite')) : null);
 }
 window.addEventListener('keydown', (e) => {
 	if (ui.tab !== 'graph' || !ui.graph.selected || !ui.graph.selected.edge) return;
@@ -726,7 +820,7 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keydown', (e) => {
 	if (e.key !== 'Escape') return;
 	if (ui.menu) { ui.menu = null; draw(); return; }
-	if (ui.tab === 'table' && ui.selected && !(document.activeElement && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName || ''))) { ui.selected = null; save(); drawMain(); }
+	if (ui.selected && !(document.activeElement && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName || ''))) { ui.selected = null; ui.graph.selected = null; save(); drawMain(); }
 });
 window.addEventListener('click', () => { if (ui.menu) { ui.menu = null; draw(); } });
 
@@ -741,7 +835,7 @@ function drawMain(pos) {
 	shownIds = new Set(shownRows.map(r => r.card.id));
 	mainEl.className = ui.tab === 'table' ? 'table' : '';
 	mainEl.replaceChildren(ui.tab === 'table' ? tableEl() : ui.tab === 'plan' ? planEl() : ui.tab === 'graph' ? graphEl() : boardEl(), footerEl());
-	const aside = ui.tab === 'table' ? detailsEl() : null;
+	const aside = detailsEl();
 	areaEl.replaceChildren(...(aside ? [mainEl, aside] : [mainEl]));
 	mainEl.scrollTop = top || 0;
 	mainEl.scrollLeft = left || 0;
@@ -749,7 +843,7 @@ function drawMain(pos) {
 	if (again) again.scrollLeft = laneLeft || 0;
 }
 function draw() {
-	if (screen) { mainEl = null; document.body.replaceChildren(emptyEl(screen)); return; }
+	if (screen) { mainEl = null; const focusPick = ui.pickFocus; pickInput = null; document.body.replaceChildren(emptyEl(screen)); if (pickInput && focusPick) { pickInput.focus(); } if (!screen.picker) { ui.pickText = undefined; } return; }
 	if (!model) return;
 	const typing = !!searchInput && document.activeElement === searchInput;
 	const caret = typing ? searchInput.selectionStart : 0;
@@ -773,8 +867,23 @@ let held = false;
 const editing = () => { const a = document.activeElement; return !!a && a !== searchInput && /INPUT|SELECT|TEXTAREA/.test(a.tagName || ''); };
 window.addEventListener('focusout', () => { if (held) { held = false; setTimeout(() => { if (!editing()) draw(); else held = true; }, 0); } });
 function emptyEl(s) {
+	const p = s.picker;
 	return h('div', { class: 'empty' }, h('div', { class: 'title' }, s.title), s.text ? h('div', { class: 'muted' }, s.text) : null,
-		h('div', { class: 'row' }, (s.actions || []).map((a, i) => h('button', { class: i === 0 ? 'primary' : '', onclick: () => post({ type: a.command }) }, a.label))));
+		p ? pickerEl(p) : null,
+		h('div', { class: 'row' }, (s.actions || []).map((a, i) => h('button', { class: i === 0 && !p ? 'primary' : '', onclick: () => post({ type: a.command }) }, a.label))));
+}
+/** The board's own project list (Follow a project…): the user's projects to click, or one typed in. */
+var pickInput = null;
+function pickerEl(p) {
+	const follow = (ref) => post({ type: 'followProject', ref });
+	const input = pickInput = h('input', { class: 'wide', id: 'pickRef', placeholder: t('owner/number or the project URL'), 'aria-label': t('owner/number or the project URL'), value: ui.pickText ?? (p.current || ''), spellcheck: 'false', autocomplete: 'off', oninput: () => { ui.pickText = input.value; }, onfocus: () => { ui.pickFocus = true; }, onblur: () => { ui.pickFocus = false; },
+		onkeydown: (e) => { if (e.key === 'Enter' && input.value.trim()) { e.preventDefault(); follow(input.value.trim()); } } });
+	return h('div', { class: 'picker' },
+		p.loading ? h('div', { class: 'muted' }, t('Reading your projects…')) : null,
+		p.listError ? h('div', { class: 'muted' }, p.listError) : null,
+		p.projects.length ? h('div', { class: 'plist', role: 'list' }, p.projects.map(x => h('button', { class: 'pick' + (x.current ? ' on' : ''), role: 'listitem', onclick: () => follow(x.ref) }, h('span', { class: 'pt' }, x.title), h('span', { class: 'pd' }, x.detail)))) : null,
+		h('div', { class: 'form' }, h('span', { class: 'muted' }, t('Or type one:')), input, h('button', { class: 'primary', onclick: () => { if (input.value.trim()) follow(input.value.trim()); } }, t('Follow'))),
+		p.error ? h('div', { class: 'perr', role: 'alert' }, p.error) : null);
 }
 window.addEventListener('message', (e) => {
 	const m = e.data;

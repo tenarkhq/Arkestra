@@ -7,7 +7,7 @@ import * as assert from 'node:assert/strict';
 import { appendFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { codexPiece, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript, rolloutHistory } from '../codexFollow';
+import { codexMeta, codexPiece, codexToolLine, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript, rolloutHistory } from '../codexFollow';
 import { EntryAssembler, LineSplitter, assemble, followLocal } from '../follow';
 import type { SessionEntry } from '../rooms';
 
@@ -126,4 +126,17 @@ test('history then follow: whatever was written after the read comes once, under
 		});
 		assert.deepEqual(thread, whole, `cut at ${at}`);
 	}
+});
+
+test('what a rollout line says about the thread: a turn\'s model, the latest call\'s context fill (never the running total)', () => {
+	assert.deepEqual(codexMeta(JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5.5', cwd: '/w' } })), { model: 'gpt-5.5' });
+	assert.deepEqual(codexMeta(JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { total_tokens: 900000 }, last_token_usage: { input_tokens: 30000, cached_input_tokens: 20000, output_tokens: 500, total_tokens: 30500 } } } })), { context: 30500 });
+	assert.equal(codexMeta(JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { total_tokens: 1280 } } } })), undefined);
+	assert.equal(codexMeta(JSON.stringify({ type: 'event_msg', payload: { type: 'agent_message', message: 'turn_context' } })), undefined);
+	assert.equal(codexMeta('{"type":"turn_context", cut'), undefined);
+	const patch = JSON.stringify({ type: 'response_item', payload: { type: 'custom_tool_call', name: 'apply_patch', input: '*** Begin Patch\n*** Add File: a.md\n+x\n*** End Patch' } });
+	assert.equal(codexToolLine(patch), true);
+	assert.equal(codexToolLine(JSON.stringify({ type: 'response_item', payload: { type: 'message', content: [{ type: 'output_text', text: 'hi' }] } })), false);
+	const history = rolloutHistory(Buffer.from([JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5.5' } }), patch].join('\n') + '\n'));
+	assert.deepEqual([history.meta, history.lines], [{ model: 'gpt-5.5' }, [patch]]);
 });

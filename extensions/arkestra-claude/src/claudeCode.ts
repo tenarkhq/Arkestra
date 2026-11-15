@@ -5,8 +5,8 @@
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { homedir } from 'node:os';
-import type { Agent, AgentChoices, AgentEvent, ExistingSession, Usage, Message, Readiness, SessionEntry, TurnInput, WorkUpdate } from './rooms';
-import { LIST_SCRIPT, claudePiece, localListing, localSessionFile, localSessionPath, locateScript, parseHistory, parseListing, readScript } from './sessions';
+import type { Agent, AgentChoices, AgentEvent, ExistingSession, Usage, Message, Readiness, SessionEntry, SessionHistory, SessionMeta, TurnInput, WorkUpdate } from './rooms';
+import { ClaudeHistory, LIST_SCRIPT, claudeMeta, claudePiece, claudeToolLine, localHistory, localListing, localSessionPath, locateScript, parseListing, readScript } from './sessions';
 import { followLocal, followRemote } from './follow';
 
 export type AuthMode = 'subscription' | 'apiKey';
@@ -176,12 +176,32 @@ function describeTool(name: string, input: any): string {
 	return typeof target === 'string' ? `${name} ${target.length > 80 ? target.slice(0, 77) + '…' : target}` : name;
 }
 
-/** Claude Code's models (aliases for the latest of each) and its efforts, as `claude --help` lists them. */
+/**
+ * A CLI that could not be started, in plain words: not installed (ENOENT; on an SSH machine the
+ * shell's 127), or not allowed to run (EACCES; 126). `where`: the SSH machine's name, none for
+ * this computer. Undefined: some other failure, shown as it is.
+ */
+export function startProblem(product: string, error: { code?: unknown; exitCode?: unknown } | undefined, where?: string): Error | undefined {
+	// On an SSH machine a local spawn error is ssh's own, not the CLI's: only the remote shell's codes count.
+	const code = where ? error?.exitCode : error?.code;
+	if (code === 'ENOENT' || code === 127) {
+		return new Error(where ? `${product} is not installed on ${where}. Install it there or choose another machine.` : `${product} is not installed on this computer. Install it or connect a machine that has it.`);
+	}
+	if (code === 'EACCES' || code === 126) {
+		return new Error(where ? `${product} could not be started on ${where}: it is not allowed to run. Reinstall it there or choose another machine.` : `${product} could not be started on this computer: it is not allowed to run. Reinstall it or connect a machine that has it.`);
+	}
+	return undefined;
+}
+
+/**
+ * Claude Code's models (aliases for the latest of each) and its efforts, as `claude --help` lists them,
+ * plus `ultracode` (`--effort ultracode`: a workflow on every task), which help does not list; not on Haiku.
+ */
 export const CLAUDE_CHOICES: AgentChoices = {
 	models: [
-		{ id: 'opus', label: 'Opus', detail: 'the latest Opus', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
-		{ id: 'sonnet', label: 'Sonnet', detail: 'the latest Sonnet', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
-		{ id: 'fable', label: 'Fable', detail: 'the latest Fable', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+		{ id: 'opus', label: 'Opus', detail: 'the latest Opus', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] },
+		{ id: 'sonnet', label: 'Sonnet', detail: 'the latest Sonnet', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] },
+		{ id: 'fable', label: 'Fable', detail: 'the latest Fable', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] },
 		{ id: 'haiku', label: 'Haiku', detail: 'the latest Haiku', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
 	],
 };
@@ -191,6 +211,11 @@ export class ClaudeCodeAgent implements Agent {
 	readonly name: string;
 	private readonly where: string;
 	private readonly sessions = new Map<string, RoomSession>();
+	/**
+	 * 2: messages sent while Claude worked, compactions as one line, the model and context fill.
+	 * 3: the tool lines too, for what Claude produced (AR26): threads read before get their artifacts.
+	 */
+	readonly historyVersion = 3;
 
 	constructor(private readonly options: ClaudeCodeOptions) {
 		({ id: this.id, name: this.name, where: this.where } = options.identity ?? { id: 'claude', name: 'Claude', where: 'local' });
@@ -233,8 +258,32 @@ export class ClaudeCodeAgent implements Agent {
 		return parseListing(this.options.spawn ? await this.shell(LIST_SCRIPT) : await localListing(homedir()));
 	}
 
-	async sessionHistory(sessionId: string): Promise<readonly SessionEntry[]> {
-		return parseHistory(this.options.spawn ? await this.shell(readScript(sessionId)) : await localSessionFile(homedir(), sessionId));
+	/** A session's latest messages, its model and context fill, and where the live follow goes on. */
+	async sessionHistory(sessionId: string): Promise<SessionHistory> {
+		return this.options.spawn ? this.remoteHistory(sessionId) : localHistory(homedir(), sessionId);
+	}
+
+	/** The end of a session file on the SSH machine, read as bytes (the follow's cursor is a byte offset). */
+	private remoteHistory(sessionId: string, timeoutMs = 180_000): Promise<SessionHistory> {
+		const script = readScript(sessionId);
+		return new Promise((resolve, reject) => {
+			const child = this.options.spawn!('sh', ['-c', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+			const history = new ClaudeHistory(0, true);
+			let err = '';
+			const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('timeout')); }, timeoutMs);
+			child.stdout?.on('data', (chunk: Buffer) => history.push(chunk));
+			child.stderr?.setEncoding('utf8');
+			child.stderr?.on('data', (c: string) => { err = (err + c).slice(-2000); });
+			child.on('error', e => { clearTimeout(timer); reject(e); });
+			child.on('close', code => {
+				clearTimeout(timer);
+				if (code === 0) {
+					resolve(history.result());
+				} else {
+					reject(new Error(code === 3 ? 'the session file is gone' : err.trim().split('\n').at(-1) || `exited with ${code}`));
+				}
+			});
+		});
 	}
 
 	adoptSession(roomId: string, session: { readonly id: string; readonly cwd?: string }, seen: readonly string[]): void {
@@ -247,8 +296,8 @@ export class ClaudeCodeAgent implements Agent {
 	}
 
 	/** Follows a session file live (AR39): here through the file system, on an SSH machine through `tail -F`. */
-	watchSession(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string) => void, cursor?: string): { dispose(): void } {
-		const options = { classify: claudePiece, onEntries, ...(cursor !== undefined ? { cursor } : {}) };
+	watchSession(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string, meta?: SessionMeta, lines?: readonly string[]) => void, cursor?: string): { dispose(): void } {
+		const options = { classify: claudePiece, meta: claudeMeta, keep: claudeToolLine, onEntries, ...(cursor !== undefined ? { cursor } : {}) };
 		return this.options.spawn
 			? followRemote(this.options.spawn, locateScript(sessionId), options)
 			: followLocal(() => localSessionPath(homedir(), sessionId), options);
@@ -320,6 +369,9 @@ export class ClaudeCodeAgent implements Agent {
 		let sawText = false;
 		let contextUsed: number | undefined;
 		const handle = (line: string) => {
+			if (claudeToolLine(line)) {
+				onEvent({ kind: 'line', line }); // what Claude produced with its tools (AR26)
+			}
 			const parsed = parseLine(line);
 			if (parsed.sessionId) {
 				session.sessionId = parsed.sessionId;
@@ -349,8 +401,10 @@ export class ClaudeCodeAgent implements Agent {
 		child.stderr?.setEncoding('utf8');
 		child.stderr?.on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-4000); });
 
+		const where = this.options.spawn ? this.where : undefined;
 		const code = await new Promise<number | null>((resolve, reject) => {
-			child.on('error', reject);
+			// `spawn claude ENOENT`: no Claude Code here; said in plain words (the SSH machine's own shell says 127).
+			child.on('error', error => reject(startProblem('Claude Code', error as { code?: unknown }, where) ?? error));
 			child.on('close', resolve);
 		}).finally(() => signal.removeEventListener('abort', kill));
 		if (buffer.trim()) {
@@ -358,6 +412,9 @@ export class ClaudeCodeAgent implements Agent {
 		}
 		if (signal.aborted) {
 			return;
+		}
+		if (!result && where && (code === 127 || code === 126)) {
+			throw startProblem('Claude Code', { exitCode: code }, where)!;
 		}
 		if (result?.isError || (code !== 0 && !result)) {
 			throw new Error(result?.text || stderr.trim().split('\n').at(-1) || `claude exited with ${code}`);

@@ -8,7 +8,7 @@ import type { Agent, ArkestraRoomsApi, Readiness } from './rooms';
 
 const KEY = 'arkestra.openai.apiKey';
 
-type Action = { readonly title: string; run(): Thenable<unknown> };
+type Action = { readonly title: string; run(): Thenable<unknown>; readonly secret?: { readonly label: string; readonly placeholder?: string; save(value: string): Thenable<unknown> } };
 
 /** The readiness reasons of the GPT agent in the interface language; other text (API errors) as it came. */
 function localizeReason(reason: string | undefined): string | undefined {
@@ -60,7 +60,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 		api.registerAgent(withActions(agent, (readiness): Action[] => {
 			switch (readiness.fix) {
 				case 'signIn':
-					return [{ title: vscode.l10n.t('Set API key'), run: () => vscode.commands.executeCommand('arkestra.openai.setApiKey') }];
+					// The page asks for the key in its own password field; the palette's command asks at the top.
+					return [{ title: vscode.l10n.t('Set API key'), run: () => vscode.commands.executeCommand('arkestra.openai.setApiKey'), secret: { label: vscode.l10n.t('OpenAI API key for GPT'), placeholder: 'sk-…', save: key => context.secrets.store(KEY, key.trim()) } }];
 				case 'quota':
 					return [{ title: vscode.l10n.t('Usage and billing'), run: () => vscode.env.openExternal(vscode.Uri.parse('https://platform.openai.com/usage')) }];
 				case 'retry':

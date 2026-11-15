@@ -13,7 +13,8 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onWebviewPanel:arkestra.project"
+    "onWebviewPanel:arkestra.project",
+    "onWebviewPanel:arkestra.boards"
   ],
   "main": "./out/extension",
   "capabilities": {
@@ -69,6 +70,12 @@
       {
         "command": "arkestra.github.openBoard",
         "title": "%openBoard%",
+        "category": "Arkestra",
+        "icon": "$(project)"
+      },
+      {
+        "command": "arkestra.github.openBoards",
+        "title": "%openBoards%",
         "category": "Arkestra",
         "icon": "$(project)"
       },
@@ -137,24 +144,13 @@
         "category": "Arkestra"
       },
       {
-        "command": "arkestra.remote.toggleThread",
-        "title": "%remote.toggleThread%",
-        "category": "Arkestra",
-        "icon": "$(radio-tower)"
-      },
-      {
         "command": "arkestra.remote.menu",
         "title": "%remote.menu%",
         "category": "Arkestra"
       }
     ],
     "menus": {
-      "commandPalette": [
-        {
-          "command": "arkestra.remote.toggleThread",
-          "when": "false"
-        }
-      ]
+      "commandPalette": []
     }
   },
   "scripts": {

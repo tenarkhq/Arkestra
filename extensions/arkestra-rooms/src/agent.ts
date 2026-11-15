@@ -18,7 +18,19 @@ export interface Readiness {
 
 export interface ReadinessAction {
 	readonly title: string;
+	/** A line under the title in the page's popover. */
+	readonly detail?: string;
+	/** The palette's way (and the way for an action without `secret`). */
 	run(): Thenable<unknown> | Promise<unknown>;
+	/**
+	 * The action needs one secret (an API key): the page asks for it in its own password field
+	 * and hands it here, instead of `run` prompting at the top of the window.
+	 */
+	readonly secret?: {
+		readonly label: string;
+		readonly placeholder?: string;
+		save(value: string): Thenable<unknown> | Promise<unknown>;
+	};
 }
 
 export type AgentEvent =
@@ -26,7 +38,12 @@ export type AgentEvent =
 	| { readonly kind: 'tool'; readonly text: string }
 	| { readonly kind: 'error'; readonly text: string }
 	| { readonly kind: 'usage'; readonly usage: Usage }
-	| { readonly kind: 'work'; readonly work: WorkUpdate };
+	| { readonly kind: 'work'; readonly work: WorkUpdate }
+	/**
+	 * One raw line of the agent's own output (Claude Code's stream-json, a Codex rollout line), for
+	 * what it produced with its tools (AR26): files written, artifacts published. Optional.
+	 */
+	| { readonly kind: 'line'; readonly line: string };
 
 /**
  * What an agent does beside its answer (AR37), as the vendors' desktop apps show it: its task
@@ -92,6 +109,11 @@ export interface Agent {
 	 */
 	sessionHistory?(sessionId: string): Promise<readonly SessionEntry[] | SessionHistory>;
 	/**
+	 * Goes up when the agent reads more out of its session files than before (a kind of line it
+	 * used to skip): a thread imported with an older reader reads its session once more.
+	 */
+	readonly historyVersion?: number;
+	/**
 	 * Binds the room to an existing session: the next turn continues it (in its folder) and sends
 	 * only the messages not in `seen`. Does nothing while the room already has a session here.
 	 */
@@ -100,9 +122,10 @@ export interface Agent {
 	 * Follows one of those sessions live (it goes on in a terminal or the vendor's app): the
 	 * entries appended (or an answer grown) after `cursor`, each with its id, and the cursor to
 	 * go on from later. No cursor: from now on. The first call comes once it has caught up.
-	 * The turns the room itself sent into the session are left out.
+	 * The turns the room itself sent into the session are left out. `lines`: the session file's
+	 * raw lines read for these entries, tool uses included, for the artifacts (AR26); optional.
 	 */
-	watchSession?(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string) => void, cursor?: string): { dispose(): void };
+	watchSession?(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string, meta?: SessionMeta, lines?: readonly string[]) => void, cursor?: string): { dispose(): void };
 }
 
 /** A session the agent's own CLI already has on its machine (AR39): started in a terminal, an IDE, or earlier. */
@@ -119,6 +142,18 @@ export interface ExistingSession {
 export interface SessionHistory {
 	readonly entries: readonly SessionEntry[];
 	readonly cursor?: string;
+	/** The session file's raw lines read, tool uses included, for the artifacts (AR26); optional. */
+	readonly lines?: readonly string[];
+	/** What the session file says about the session itself, when it says it. */
+	readonly meta?: SessionMeta;
+}
+
+/** A session's model and context fill, as its file tells them (the latest model call). */
+export interface SessionMeta {
+	/** The model id of the latest answer, for example `claude-opus-5-5`. */
+	readonly model?: string;
+	/** Tokens in the context at the latest model call (its window is not in the file). */
+	readonly context?: number;
 }
 
 /** One message of an existing session, as the thread shows it. */

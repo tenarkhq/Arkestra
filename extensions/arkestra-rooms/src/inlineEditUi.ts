@@ -5,8 +5,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import { randomBytes } from 'node:crypto';
 import type { AgentRegistry } from './agent';
 import { CONTEXT_LINES, extractCode, fitReplacement, inlineTranscript, shiftSpan, type InlineRequest, type LineSpan } from './inlineEdit';
+import { INLINE_EDIT_LINES, inlineEditHtml } from './inlineEditHtml';
+import { FONT_ROOT, pageFonts } from './webviewFonts';
 
 const LAST_AGENT = 'arkestra.inline.agent';
 const PENDING_KEY = 'arkestra.inlineEditPending';
@@ -40,6 +43,8 @@ export class InlineEdits implements vscode.Disposable, vscode.CodeLensProvider {
 	});
 	/** Edits Arkestra makes itself do not move a proposal. */
 	private applying = false;
+	/** The instruction field open in an editor (one at a time). */
+	private field: { readonly inset: vscode.WebviewEditorInset; readonly done: (answer: { text: string; agentId: string } | undefined) => void } | undefined;
 
 	constructor(private readonly context: vscode.ExtensionContext, private readonly registry: AgentRegistry) {
 		this.disposables.push(
@@ -81,12 +86,12 @@ export class InlineEdits implements vscode.Disposable, vscode.CodeLensProvider {
 		if (!agentId) {
 			return;
 		}
-		const instruction = await this.ask(agentId, vscode.l10n.t('Edit in place'));
-		if (!instruction) {
+		const answer = await this.ask(editor, agentId, editor.selection.start.line);
+		if (!answer) {
 			return;
 		}
-		const { request, range, indentAt, insertAfter } = this.request(editor, instruction);
-		await this.run(editor, agentId, request, range, indentAt, insertAfter);
+		const { request, range, indentAt, insertAfter } = this.request(editor, answer.text);
+		await this.run(editor, answer.agentId, request, range, indentAt, insertAfter);
 	}
 
 	/** The selection widened to whole lines, or the cursor's line for an insertion. */
@@ -239,8 +244,8 @@ export class InlineEdits implements vscode.Disposable, vscode.CodeLensProvider {
 		if (!p || !editor) {
 			return;
 		}
-		const instruction = await this.ask(p.agentId, vscode.l10n.t('Follow-up'));
-		if (!instruction) {
+		const answer = await this.ask(editor, p.agentId, p.span.start);
+		if (!answer) {
 			return;
 		}
 		const range = proposalRange(editor.document, p);
@@ -248,12 +253,12 @@ export class InlineEdits implements vscode.Disposable, vscode.CodeLensProvider {
 		const request: InlineRequest = {
 			...p.request,
 			selected: current,
-			instruction,
+			instruction: answer.text,
 			history: [...(p.request.history ?? []), { instruction: p.request.instruction, proposal: p.proposal }],
 		};
 		// The follow-up replaces the proposal; Reject afterwards still brings back the original.
 		this.drop(p.uri.toString());
-		await this.run(editor, p.agentId, request, range, '', false);
+		await this.run(editor, answer.agentId, request, range, '', false);
 		const next = this.pending.get(p.uri.toString());
 		if (next) {
 			this.pending.set(p.uri.toString(), { ...next, original: p.original, insertAfter: p.insertAfter, before: p.before });
@@ -269,16 +274,21 @@ export class InlineEdits implements vscode.Disposable, vscode.CodeLensProvider {
 
 	// ---- agents --------------------------------------------------------------------------
 
-	/** The last agent used when it is ready, else the user's pick. */
+	/** The last agent used when it is ready, else the first ready one; the field's drop-down switches it. */
 	private async agentFor(): Promise<string | undefined> {
 		const last = this.context.globalState.get<string>(LAST_AGENT);
 		const entries = await this.registry.inviteList();
 		if (last && entries.some(e => e.agent.id === last && e.readiness.ready)) {
 			return last;
 		}
-		return this.chooseAgent();
+		const ready = entries.find(e => e.readiness.ready)?.agent.id;
+		if (!ready) {
+			void vscode.window.showWarningMessage(entries.length ? vscode.l10n.t('No agent is ready to edit now. Sign in to one on the new-chat page first.') : vscode.l10n.t('No agent is set up yet. Connect one in Arkestra first.'));
+		}
+		return ready;
 	}
 
+	/** The palette's way to set the agent ⌘K ⌘K starts with (the field itself has a drop-down for it). */
 	private async chooseAgent(): Promise<string | undefined> {
 		const entries = await this.registry.inviteList();
 		if (!entries.length) {
@@ -304,45 +314,53 @@ export class InlineEdits implements vscode.Disposable, vscode.CodeLensProvider {
 		return pick.id;
 	}
 
-	/** The instruction box; its button switches the agent. */
-	private ask(agentId: string, title: string): Promise<string | undefined> {
-		return new Promise<string | undefined>(resolve => {
-			const box = vscode.window.createInputBox();
-			let current = agentId;
-			const name = () => this.registry.get(current)?.name ?? current;
-			const label = () => { box.title = `${title} · ${name()}`; };
-			label();
-			box.placeholder = vscode.l10n.t('What should change? (Enter sends, the button switches the agent)');
-			box.buttons = [{ iconPath: new vscode.ThemeIcon('person'), tooltip: vscode.l10n.t('Switch agent') }];
-			let done = false;
-			box.onDidTriggerButton(async () => {
-				done = true;
-				box.hide();
-				const chosen = await this.chooseAgent();
-				if (chosen) {
-					current = chosen;
+	/**
+	 * The instruction field inside the editor, above `line`: what should change and which agent
+	 * does it. Enter sends, Escape or Cancel closes it; another ⌘K ⌘K replaces it.
+	 */
+	private async ask(editor: vscode.TextEditor, agentId: string, line: number): Promise<{ text: string; agentId: string } | undefined> {
+		this.field?.done(undefined);
+		const entries = await this.registry.inviteList();
+		return new Promise(resolve => {
+			const inset = vscode.window.createWebviewTextEditorInset(editor, Math.max(0, line - 1), INLINE_EDIT_LINES, { enableScripts: true, localResourceRoots: [FONT_ROOT] });
+			let settled = false;
+			const done = (answer: { text: string; agentId: string } | undefined) => {
+				if (settled) {
+					return;
 				}
-				done = false;
-				label();
-				box.show();
-			});
-			box.onDidAccept(() => {
-				const value = box.value.trim();
-				if (value) {
-					done = true;
-					box.hide();
-					void this.context.globalState.update(LAST_AGENT, current);
-					box.dispose();
-					resolve(value);
+				settled = true;
+				if (this.field?.inset === inset) {
+					this.field = undefined;
 				}
-			});
-			box.onDidHide(() => {
-				if (!done) {
-					resolve(undefined);
-					box.dispose();
+				inset.dispose();
+				if (answer) {
+					void this.context.globalState.update(LAST_AGENT, answer.agentId);
+				}
+				resolve(answer);
+				void vscode.window.showTextDocument(editor.document, { viewColumn: editor.viewColumn, preserveFocus: false });
+			};
+			this.field = { inset, done };
+			inset.onDidDispose(() => done(undefined));
+			inset.webview.onDidReceiveMessage((m: { type?: string; text?: unknown; agentId?: unknown }) => {
+				if (m.type === 'cancel') {
+					done(undefined);
+				} else if (m.type === 'submit' && typeof m.text === 'string' && m.text.trim() && typeof m.agentId === 'string' && entries.some(e => e.agent.id === m.agentId && e.readiness.ready)) {
+					done({ text: m.text.trim(), agentId: m.agentId });
 				}
 			});
-			box.show();
+			inset.webview.html = inlineEditHtml({
+				nonce: randomBytes(16).toString('base64'),
+				fonts: pageFonts(inset.webview),
+				agents: entries.map(e => ({ id: e.agent.id, name: e.agent.name, ...(e.readiness.ready ? {} : { notReady: e.readiness.reason ?? vscode.l10n.t('not ready') }) })),
+				agentId,
+				t: {
+					placeholder: vscode.l10n.t('What should change in these lines?'),
+					agent: vscode.l10n.t('The agent that edits'),
+					edit: vscode.l10n.t('Edit'),
+					cancel: vscode.l10n.t('Cancel'),
+					hint: vscode.l10n.t('Enter: the agent edits the lines in place · Esc: close'),
+				},
+			});
 		});
 	}
 

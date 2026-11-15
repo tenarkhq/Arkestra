@@ -1,16 +1,18 @@
 /*---------------------------------------------------------------------------------------------
  *  Arkestra. The left bar's page: a flat list like the Claude app. The top items, Pinned, the
- *  user's own sections, the threads in no section, then the archived ones folded. Colours come
- *  from the theme; the layout, spacing and type sizes from the approved render.
+ *  user's own sections, then every thread and CLI session of the machines grouped by agent
+ *  (Claude, Codex, ...), then the archived ones folded. Colours come from the theme; the layout,
+ *  spacing and type sizes from the approved render.
  *--------------------------------------------------------------------------------------------*/
 
 import { fontFaces, fontSrc, TYPE_CSS, type PageFonts } from './fonts';
 
-/** One row: a thread, a pinned board or a pinned artifact. */
+/** One row: a thread, a CLI session no thread continues yet, a pinned board or a pinned artifact. */
 export interface SidebarRow {
-	/** `thread:<id>`, `board:<key>`, `artifact:<key>`; selection and clicks use it. */
+	/** `thread:<id>`, `session:<agentId>\n<sessionId>`, `board:<key>`, `artifact:<key>`; selection and clicks use it. */
 	readonly key: string;
-	readonly kind: 'thread' | 'board' | 'artifact';
+	readonly kind: 'thread' | 'session' | 'board' | 'artifact';
+	/** A thread's id; a session's `<agentId>\n<sessionId>` (opening or moving it continues it first). */
 	readonly id: string;
 	readonly title: string;
 	readonly tip?: string;
@@ -19,6 +21,16 @@ export interface SidebarRow {
 	readonly archived?: boolean;
 	/** The section the thread is in. */
 	readonly section?: string;
+	/** The machine it runs on, only while rows of several machines show. */
+	readonly machine?: string;
+}
+
+/** One agent's group of the default listing; `older`: past the recent window, behind "Show older". */
+export interface SidebarGroup {
+	readonly id: string;
+	readonly name: string;
+	readonly rows: readonly SidebarRow[];
+	readonly older: readonly SidebarRow[];
 }
 
 export interface SidebarModel {
@@ -28,9 +40,10 @@ export interface SidebarModel {
 	readonly selected?: string;
 	readonly pinned: readonly SidebarRow[];
 	readonly sections: readonly { readonly id: string; readonly name: string; readonly rows: readonly SidebarRow[] }[];
-	readonly unsectioned: readonly SidebarRow[];
+	/** Every thread and session in no section and not pinned, by agent. */
+	readonly groups: readonly SidebarGroup[];
 	readonly archived: readonly SidebarRow[];
-	/** No thread at all yet. */
+	/** No thread and no session at all yet. */
 	readonly empty: boolean;
 }
 
@@ -43,8 +56,10 @@ export interface SidebarStrings {
 	readonly machines: string;
 	readonly pinned: string;
 	readonly newSection: string;
-	readonly unsectioned: string;
 	readonly archived: string;
+	/** `Show older ({0})`. */
+	readonly showOlder: string;
+	readonly showFewer: string;
 	readonly noChats: string;
 	readonly noMatch: string;
 	readonly more: string;
@@ -52,6 +67,7 @@ export interface SidebarStrings {
 	readonly moveTo: string;
 	readonly noSection: string;
 	readonly newSectionMenu: string;
+	readonly sectionName: string;
 	readonly pin: string;
 	readonly unpin: string;
 	readonly rename: string;
@@ -69,10 +85,10 @@ export type SidebarMessage =
 	| { type: 'ready' }
 	| { type: 'nav'; item: 'newChat' | 'boards' | 'artifacts' | 'machines' }
 	| { type: 'open'; key: string }
-	| { type: 'thread'; action: 'pin' | 'unpin' | 'rename' | 'archive' | 'unarchive' | 'delete'; id: string }
+	| { type: 'thread'; action: 'pin' | 'unpin' | 'rename' | 'archive' | 'unarchive' | 'delete'; id: string; name?: string }
 	| { type: 'move'; id: string; section: string | null }
-	| { type: 'moveToNew'; id: string }
-	| { type: 'section'; action: 'new' | 'rename' | 'delete' | 'up' | 'down'; id?: string }
+	| { type: 'moveToNew'; id: string; name: string }
+	| { type: 'section'; action: 'new' | 'rename' | 'delete' | 'up' | 'down'; id?: string; name?: string }
 	| { type: 'reorder'; id: string; before: string | null }
 	| { type: 'search'; query: string };
 
@@ -113,6 +129,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 	.it svg { width: 16px; height: 16px; flex: none; color: var(--mute); }
 	.it .n { overflow: hidden; text-overflow: ellipsis; flex: 1; }
 	.it .k { color: var(--dim); font-size: 11.5px; }
+	.it .m { flex: none; max-width: 36%; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
 	.it.new { font-weight: 500; }
 	.it .run, .it .gap { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 	.it .run { background: var(--accent); }
@@ -122,6 +139,8 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 	.it.muted, .it.muted .n { color: var(--mute); }
 	.it.add { color: var(--dim); }
 	.it.add svg { color: var(--dim); }
+	.it.older { color: var(--dim); font-size: 12px; height: 28px; padding-left: 27px; }
+	.ed { flex: 1; min-width: 0; height: 24px; padding: 0 7px; font: inherit; color: var(--fg); background: var(--vscode-input-background); border: 1px solid var(--vscode-focusBorder); border-radius: 6px; outline: none; }
 	.q { display: none; flex: 1; min-width: 0; border: 0; padding: 0; background: transparent; color: var(--fg); font: inherit; outline: none; }
 	.q::placeholder { color: var(--dim); }
 	.it.on { background: var(--vscode-input-background); box-shadow: inset 0 0 0 1px var(--vscode-focusBorder); cursor: text; }
@@ -136,7 +155,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 	.proj .more:hover { color: var(--fg); }
 	.drop { background: var(--vscode-list-dropBackground, var(--hover)); }
 	.empty { color: var(--dim); padding: 10px; line-height: 1.5; }
-	.menu { position: fixed; z-index: 5; min-width: 180px; max-width: calc(100vw - 8px); box-sizing: border-box; background: var(--vscode-menu-background); color: var(--vscode-menu-foreground); border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, transparent)); border-radius: 10px; padding: 5px; box-shadow: 0 10px 30px var(--vscode-widget-shadow, rgba(0, 0, 0, .45)); display: flex; flex-direction: column; }
+	.menu { position: fixed; z-index: 5; min-width: 180px; max-width: calc(100% - 8px); box-sizing: border-box; background: var(--vscode-menu-background); color: var(--vscode-menu-foreground); border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border, transparent)); border-radius: 10px; padding: 5px; box-shadow: 0 10px 30px var(--vscode-widget-shadow, rgba(0, 0, 0, .45)); display: flex; flex-direction: column; }
 	.mi { display: flex; justify-content: space-between; align-items: center; gap: 12px; height: 30px; padding: 0 10px; border-radius: 6px; cursor: pointer; outline: none; white-space: nowrap; }
 	.mi .l { overflow: hidden; text-overflow: ellipsis; }
 	.mi:hover, .mi:focus { background: var(--vscode-menu-selectionBackground, var(--sel)); color: var(--vscode-menu-selectionForeground, inherit); }
@@ -164,7 +183,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 	const list = document.getElementById('list');
 	const search = document.querySelector('[data-nav="search"]');
 	const input = search.querySelector('.q');
-	const ui = Object.assign({ archivedOpen: false }, vscode.getState() || {});
+	const ui = Object.assign({ archivedOpen: false, olderOpen: {} }, vscode.getState() || {});
 	const T_THREAD = 'application/x-arkestra-thread';
 	const T_SECTION = 'application/x-arkestra-section';
 	let model;
@@ -172,6 +191,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 	let menu, menuKey;
 	let dragging = '';
 	let pending = false;
+	let hovering = false;
 	let typing;
 
 	const post = m => vscode.postMessage(m);
@@ -187,17 +207,20 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		it.dataset.key = r.key;
 		it.dataset.kind = r.kind;
 		it.dataset.id = r.id;
-		if (r.kind === 'thread') {
+		const chat = r.kind === 'thread' || r.kind === 'session';
+		if (chat) {
 			const dot = el('span', r.running ? 'run' : 'gap');
 			if (r.running) { dot.title = S.running; }
 			it.append(dot);
 			it.draggable = true;
+			it.dataset.menu = '1';
 		} else {
 			it.append(icon(r.kind));
 		}
 		it.append(el('span', 'n', r.title));
+		if (r.machine) { it.append(el('span', 'k m', r.machine)); }
 		it.title = r.tip || r.title;
-		if (r.kind === 'thread') {
+		if (chat) {
 			const more = el('span', 'more', '⋯');
 			more.setAttribute('role', 'button');
 			more.setAttribute('aria-label', S.more);
@@ -228,9 +251,45 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		return h;
 	}
 
+	// ---- a name typed in place (new section, rename): no input box at the top of the window
+	let editing = false;
+	function editName(host, initial, done) {
+		const input = document.createElement('input');
+		input.className = 'ed';
+		input.type = 'text';
+		input.spellcheck = false;
+		input.value = initial || '';
+		input.placeholder = S.sectionName;
+		const n = host.querySelector('.n');
+		if (n) { n.replaceWith(input); } else { host.append(input); }
+		const more = host.querySelector('.more');
+		if (more) { more.style.display = 'none'; }
+		editing = true;
+		let finished = false;
+		const finish = ok => {
+			if (finished) { return; }
+			finished = true;
+			editing = false;
+			pending = false;
+			const value = input.value.trim();
+			if (ok && value && value !== (initial || '')) { done(value); }
+			render();
+		};
+		input.addEventListener('keydown', e => {
+			e.stopPropagation();
+			if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+			else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+		});
+		input.addEventListener('blur', () => finish(true));
+		input.addEventListener('click', e => e.stopPropagation());
+		input.focus();
+		input.select();
+	}
+	const addRow = () => document.querySelector('.it.add');
+
 	function render() {
 		if (!model) { return; }
-		if (dragging) { pending = true; return; }
+		if (dragging || editing) { pending = true; return; }
 		const focused = keyOf(document.activeElement && document.activeElement.closest && document.activeElement.closest('[data-key], [data-section], [data-action]'));
 		const q = model.query;
 		rows = new Map();
@@ -252,9 +311,20 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 			add.append(icon('plus'), el('span', 'n', S.newSection));
 			out.append(add);
 		}
-		if (model.unsectioned.length) {
-			out.append(header(S.unsectioned, ''));
-			model.unsectioned.forEach(r => out.append(row(r)));
+		// The default listing, by agent; a header takes a row dragged out of its section back here.
+		for (const g of model.groups) {
+			out.append(header(g.name, ''));
+			g.rows.forEach(r => out.append(row(r)));
+			if (g.older.length) {
+				const open = !!ui.olderOpen[g.id];
+				if (open) { g.older.forEach(r => out.append(row(r))); }
+				const more = el('div', 'it older', open ? S.showFewer : S.showOlder.replace('{0}', String(g.older.length)));
+				more.tabIndex = -1;
+				more.setAttribute('role', 'button');
+				more.setAttribute('aria-expanded', String(open));
+				more.dataset.action = 'older:' + g.id;
+				out.append(more);
+			}
 		}
 		if (model.archived.length) {
 			const open = !!q || ui.archivedOpen;
@@ -268,7 +338,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 			out.append(h);
 			if (open) { model.archived.forEach(r => out.append(row(r, true))); }
 		}
-		const any = model.pinned.length || model.unsectioned.length || model.archived.length || model.sections.some(s => s.rows.length);
+		const any = model.pinned.length || model.groups.length || model.archived.length || model.sections.some(s => s.rows.length);
 		if (q && !any) {
 			out.append(el('div', 'empty', S.noMatch));
 		} else if (!q && model.empty) {
@@ -317,7 +387,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 	input.addEventListener('blur', () => { if (!input.value) { stopSearch(true); } });
 
 	// ---- menus: the row's and the section's; a submenu opens in place (the bar is narrow)
-	function closeMenu() {
+	function closeMenu(reopen) {
 		if (!menu) { return; }
 		menu.remove();
 		menu = undefined;
@@ -325,10 +395,11 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		const owner = menuKey && focusables().find(e => keyOf(e) === menuKey);
 		menuKey = undefined;
 		owner?.focus({ preventScroll: true });
+		if (!reopen) { flush(); }
 	}
 
 	function openMenu(items, at, owner) {
-		closeMenu();
+		closeMenu(true);
 		menu = el('div', 'menu');
 		menu.setAttribute('role', 'menu');
 		menuKey = keyOf(owner);
@@ -342,7 +413,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 				m.setAttribute('role', 'menuitem');
 				m.tabIndex = -1;
 				m.append(el('span', 'l', i.label));
-				if (i.sub) { m.append(el('span', 's', '›')); }
+				if (i.sub && !i.back) { m.append(el('span', 's', '›')); }
 				if (i.check) { m.append(el('span', 's', '✓')); }
 				m.addEventListener('click', ev => {
 					ev.stopPropagation();
@@ -353,9 +424,11 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 				menu.append(m);
 			}
 			const w = menu.offsetWidth, h = menu.offsetHeight;
-			const left = Math.max(4, Math.min(at.left, innerWidth - w - 4));
+			// The page's usable width and height: innerWidth counts the scrollbar, which would cover the menu's edge.
+			const vw = document.documentElement.clientWidth || innerWidth, vh = document.documentElement.clientHeight || innerHeight;
+			const left = Math.max(4, Math.min(at.left, vw - w - 4));
 			let top = at.bottom + 2;
-			if (top + h > innerHeight - 4) { top = Math.max(4, at.top - h - 2); }
+			if (top + h > vh - 4) { top = Math.max(4, at.top - h - 2); }
 			menu.style.left = left + 'px';
 			menu.style.top = top + 'px';
 			menu.querySelector('.mi')?.focus();
@@ -365,21 +438,22 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 
 	function rowMenu(it, at) {
 		const r = rows.get(it.dataset.key);
-		if (!r || r.kind !== 'thread') { return; }
+		if (!r || (r.kind !== 'thread' && r.kind !== 'session')) { return; }
 		const act = action => () => post({ type: 'thread', action, id: r.id });
 		const main = () => [
 			{ label: S.moveTo, sub: moveTo },
 			...(r.archived ? [] : [{ label: r.pinned ? S.unpin : S.pin, run: act(r.pinned ? 'unpin' : 'pin') }]),
-			{ label: S.rename, run: act('rename') },
+			{ label: S.rename, run: () => editName(it, r.title, name => post({ type: 'thread', action: 'rename', id: r.id, name })) },
 			{ label: r.archived ? S.restore : S.archive, run: act(r.archived ? 'unarchive' : 'archive') },
-			{ label: S.delete, danger: true, run: act('delete') },
+			// A session no thread continues yet stays on its machine: nothing here to delete.
+			...(r.kind === 'thread' ? [{ label: S.delete, danger: true, run: act('delete') }] : []),
 		];
 		const moveTo = () => [
 			{ label: '‹ ' + S.moveTo, back: true, sub: main },
 			...model.sections.map(s => ({ label: s.name, check: r.section === s.id, run: () => post({ type: 'move', id: r.id, section: s.id }) })),
 			...(r.section ? [{ label: S.noSection, run: () => post({ type: 'move', id: r.id, section: null }) }] : []),
 			{ sep: true },
-			{ label: '+ ' + S.newSectionMenu, run: () => post({ type: 'moveToNew', id: r.id }) },
+			{ label: '+ ' + S.newSectionMenu, run: () => { const add = addRow(); if (add) { editName(add, '', name => post({ type: 'moveToNew', id: r.id, name })); } } },
 		];
 		openMenu(main(), at, it);
 	}
@@ -389,7 +463,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		const i = model.sections.findIndex(s => s.id === id);
 		const act = action => () => post({ type: 'section', action, id });
 		openMenu([
-			{ label: S.renameSection, run: act('rename') },
+			{ label: S.renameSection, run: () => editName(h, (model.sections[i] || {}).name, name => post({ type: 'section', action: 'rename', id, name })) },
 			...(i > 0 ? [{ label: S.moveUp, run: act('up') }] : []),
 			...(i >= 0 && i < model.sections.length - 1 ? [{ label: S.moveDown, run: act('down') }] : []),
 			{ sep: true },
@@ -422,8 +496,9 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 			return;
 		}
 		const action = t.closest('[data-action]');
-		if (action && action.dataset.action === 'newSection') { post({ type: 'section', action: 'new' }); return; }
+		if (action && action.dataset.action === 'newSection') { editName(action, '', name => post({ type: 'section', action: 'new', name })); return; }
 		if (action && action.dataset.action === 'archived') { ui.archivedOpen = !ui.archivedOpen; vscode.setState(ui); render(); return; }
+		if (action && action.dataset.action.startsWith('older:')) { const g = action.dataset.action.slice(6); ui.olderOpen = Object.assign({}, ui.olderOpen, { [g]: !ui.olderOpen[g] }); vscode.setState(ui); render(); return; }
 		if (it) {
 			model.selected = it.dataset.key;
 			markSelected();
@@ -434,7 +509,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 
 	document.addEventListener('contextmenu', e => {
 		e.preventDefault();
-		const it = e.target.closest('.it[data-kind="thread"]');
+		const it = e.target.closest('.it[data-menu]');
 		const head = e.target.closest('.proj');
 		if (it) { rowMenu(it, point(e)); } else if (head) { sectionMenu(head, point(e)); } else { closeMenu(); }
 	});
@@ -461,19 +536,19 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		} else if (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey)) {
 			e.preventDefault();
 			const r = cur.getBoundingClientRect();
-			if (cur.matches('.it[data-kind="thread"]')) { rowMenu(cur, r); } else if (cur.matches('.proj')) { sectionMenu(cur, r); }
+			if (cur.matches('.it[data-menu]')) { rowMenu(cur, r); } else if (cur.matches('.proj')) { sectionMenu(cur, r); }
 		}
 	});
-	addEventListener('blur', closeMenu);
-	addEventListener('resize', closeMenu);
-	document.addEventListener('scroll', closeMenu, true);
+	addEventListener('blur', () => closeMenu());
+	addEventListener('resize', () => closeMenu());
+	document.addEventListener('scroll', () => closeMenu(), true);
 
 	// ---- drag a thread onto a section header (or "No section"); drag a section header to reorder
 	const dropTarget = e => e.target.closest && e.target.closest('[data-drop]');
 	const clearDrop = () => { for (const d of document.querySelectorAll('.drop')) { d.classList.remove('drop'); } };
 	const endDrag = () => { dragging = ''; clearDrop(); if (pending) { pending = false; render(); } };
 	document.addEventListener('dragstart', e => {
-		const it = e.target.closest && e.target.closest('.it[data-kind="thread"]');
+		const it = e.target.closest && e.target.closest('.it[data-menu]');
 		const head = e.target.closest && e.target.closest('.proj');
 		closeMenu();
 		if (it) { e.dataTransfer.setData(T_THREAD, it.dataset.id); dragging = 'thread'; }
@@ -507,9 +582,21 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 	});
 	document.addEventListener('dragend', endDrag);
 
+	// A list refreshed in the background waits while the mouse is on it or a menu is open, so no
+	// row moves under the pointer; what the user just did shows at once.
+	function flush() {
+		if (pending && !dragging && !editing && !menu && !hovering) { pending = false; render(); }
+	}
+	list.addEventListener('mouseenter', () => { hovering = true; });
+	list.addEventListener('mouseleave', () => { hovering = false; flush(); });
+
 	addEventListener('message', e => {
 		const m = e.data;
-		if (m && m.type === 'model') { model = m.model; render(); }
+		if (m && m.type === 'model') {
+			model = m.model;
+			if (m.quiet && (hovering || menu)) { pending = true; return; }
+			render();
+		}
 		else if (m && m.type === 'select' && model) { model.selected = m.key; markSelected(); }
 	});
 	post({ type: 'ready' });

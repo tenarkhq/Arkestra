@@ -7,32 +7,66 @@
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
-import type { ExistingSession, SessionEntry } from './rooms';
-import { assemble, type Piece } from './follow';
+import type { ExistingSession, SessionEntry, SessionHistory, SessionMeta } from './rooms';
+import { EntryAssembler, LineSplitter, type Piece } from './follow';
 import { folderStore, withImages, type ImageStore, type SessionImage } from './sessionImages';
 
 const MARK = '\u001eFILE ';
 /** How many sessions a machine lists, newest first. */
 export const LIST_LIMIT = 60;
+/**
+ * How many of the newest session files the listing looks at to find them: scripts and agent
+ * pipelines (`claude -p`, the Agent SDK) write many sessions nobody chats in, and those are
+ * skipped, so the people's own threads are not pushed out of the list.
+ */
+export const SCAN_LIMIT = 2000;
+/** How much of a file's start tells who wrote the session (its first lines name the entrypoint). */
+export const KIND_BYTES = 16_384;
+/** A session a script or an agent pipeline ran (`claude -p`, the Agent SDK), not a chat. */
+export const AUTOMATED = /"entrypoint":"sdk-/;
+/** The folder of sessions run in a temporary folder (/tmp, macOS's /var/folders): throwaway runs, not chats. */
+export const TEMP_FOLDER = /^-(private-)?(tmp|var-folders)(-|$)/;
 const HEAD_BYTES = 262_144;
 const CANDIDATES = /"type":"(summary|user|custom-title)"/;
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** The listing on a POSIX machine: per session its time, file, and the lines that name it. */
+/**
+ * The listing on a POSIX machine: per session its time, file, and the lines that name it. One
+ * `head` reads the start of the newest files (/dev/null first, so it always prints the file
+ * headers) and awk keeps the first LIST_LIMIT that are no script's or pipeline's. Sessions
+ * of a temporary folder are left out too (TEMP_FOLDER).
+ */
 export const LIST_SCRIPT = [
 	'cd "$HOME/.claude/projects" 2>/dev/null || exit 0',
-	`for f in $(ls -t */*.jsonl 2>/dev/null | grep -v '/agent-' | head -n ${LIST_LIMIT}); do`,
+	// ./ first: the folders are named after paths (-home-...), which ls and head would read as options.
+	`files=$(ls -t ./*/*.jsonl 2>/dev/null | grep -v -E '/agent-|^\\./-(private-)?(tmp|var-folders)[-/]' | head -n ${SCAN_LIMIT})`,
+	'[ -n "$files" ] || exit 0',
+	`for f in $(head -c ${KIND_BYTES} /dev/null $files 2>/dev/null | awk -v max=${LIST_LIMIT} '`,
+	`  /^==> .* <==$/ { if (f != "" && f != "/dev/null" && !auto) { print f; if (++n >= max) exit } f = substr($0, 5, length($0) - 8); auto = 0; next }`,
+	`  /"entrypoint":"sdk-/ { auto = 1 }`,
+	`  END { if (f != "" && f != "/dev/null" && !auto && n < max) print f }'); do`,
+	`  [ "$f" = /dev/null ] && continue`,
 	`  printf '\\036FILE %s %s\\n' "$(date -r "$f" +%s 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)" "$f"`,
 	`  head -c ${HEAD_BYTES} "$f" | grep -E '"type":"(summary|user|custom-title)"' | head -n 8`,
 	'done',
 ].join('\n');
 
-/** The script that prints one session file (the id is checked before it gets here). */
+/** How much of a session file the history reads: its end, where the latest messages are. */
+export const READ_MAX = 50_000_000;
+
+/**
+ * The script that prints the end of one session file (the id is checked before it gets here):
+ * a first line `\036AT <offset>` says where in the file the bytes start; exit 3: no such file.
+ */
 export function readScript(id: string): string {
-	if (!SESSION_ID.test(id)) {
-		throw new Error(`not a Claude session id: ${id}`);
-	}
-	return `cat "$HOME"/.claude/projects/*/${id}.jsonl 2>/dev/null | head -c 50000000`;
+	return [
+		locateScript(id),
+		'[ -n "$f" ] && [ -f "$f" ] || exit 3',
+		`s=$(wc -c < "$f" | tr -d ' ')`,
+		`n=$(( s > ${READ_MAX} ? s - ${READ_MAX} : 0 ))`,
+		`printf '\\036AT %s\\n' "$n"`,
+		'exec tail -c +$((n + 1)) "$f"',
+	].join('\n');
 }
 
 /** The same listing on this machine, without a shell (Windows too). */
@@ -45,7 +79,7 @@ export async function localListing(home: string): Promise<string> {
 		return '';
 	}
 	const files: { file: string; rel: string; mtime: number }[] = [];
-	await Promise.all(dirs.map(async dir => {
+	await Promise.all(dirs.filter(dir => !TEMP_FOLDER.test(dir)).map(async dir => {
 		const names = await fs.readdir(path.join(root, dir)).catch(() => [] as string[]);
 		await Promise.all(names.filter(n => n.endsWith('.jsonl') && !n.startsWith('agent-')).map(async name => {
 			const file = path.join(root, dir, name);
@@ -56,17 +90,30 @@ export async function localListing(home: string): Promise<string> {
 		}));
 	}));
 	files.sort((a, b) => b.mtime - a.mtime);
-	const parts = await Promise.all(files.slice(0, LIST_LIMIT).map(async f => {
-		const handle = await fs.open(f.file, 'r');
+	// The newest sessions that are chats, as the shell listing finds them.
+	const parts: string[] = [];
+	for (const f of files.slice(0, SCAN_LIMIT)) {
+		if (parts.length >= LIST_LIMIT) {
+			break;
+		}
+		const handle = await fs.open(f.file, 'r').catch(() => undefined);
+		if (!handle) {
+			continue;
+		}
 		try {
+			const kind = Buffer.alloc(KIND_BYTES);
+			const start = await handle.read(kind, 0, KIND_BYTES, 0);
+			if (AUTOMATED.test(kind.subarray(0, start.bytesRead).toString('utf8'))) {
+				continue;
+			}
 			const buf = Buffer.alloc(HEAD_BYTES);
 			const { bytesRead } = await handle.read(buf, 0, HEAD_BYTES, 0);
 			const lines = buf.subarray(0, bytesRead).toString('utf8').split('\n').filter(l => CANDIDATES.test(l)).slice(0, 8);
-			return `${MARK}${f.mtime} ${f.rel}\n${lines.join('\n')}`;
+			parts.push(`${MARK}${f.mtime} ${f.rel}\n${lines.join('\n')}`);
 		} finally {
 			await handle.close();
 		}
-	}));
+	}
 	return parts.join('\n');
 }
 
@@ -140,7 +187,7 @@ function userText(content: unknown): string | undefined {
 		text = content.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') || undefined;
 	}
 	text = text?.trim();
-	if (!text || /^(<command-|<local-command|Caveat: |\[Request interrupted)/.test(text)) {
+	if (!text || /^(<command-|<local-command|<system-reminder>|Caveat: |\[Request interrupted)/.test(text)) {
 		return undefined;
 	}
 	return text;
@@ -216,7 +263,80 @@ export function claudeImages(content: unknown): SessionImage[] {
 	});
 }
 
-/** One line of a session file as the thread sees it: what the user wrote (with its pictures), Claude's text, a task report. */
+/** The thread's line where Claude Code compacted the conversation (summed it up and went on from the summary). */
+export const COMPACTED = 'Conversation compacted';
+
+/** The summary Claude Code writes after a compaction, known by its text too (a line without the flag). */
+export function isCompactSummary(text: string): boolean {
+	return /This session is being continued from a previous conversation/.test(text.slice(0, 1000));
+}
+
+type Base = { readonly id?: string; readonly at?: string };
+
+/** What the user wrote (a message, or a message sent while Claude worked), with its pictures; a task report as a short line. */
+function userPiece(content: unknown, base: Base): Piece {
+	const raw = typeof content === 'string' ? content
+		: Array.isArray(content) && !content.some(b => b?.type === 'tool_result') ? content.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') : '';
+	const notice = taskNotice(raw.trim());
+	if (notice) {
+		return { kind: 'notice', text: notice, ...base };
+	}
+	if (isCompactSummary(raw)) {
+		return undefined;
+	}
+	const text = userText(content);
+	const images = Array.isArray(content) && !content.some((b: any) => b?.type === 'tool_result') ? claudeImages(content) : [];
+	if (images.length && (text || !raw.trim())) {
+		// Claude Code's own placeholders ([Image #1]) give way to the pictures.
+		return { kind: 'user', text: withImages((text ?? '').replace(/\[Image #\d+\]/g, '').replace(/[ \t]{2,}/g, ' ').trim(), images, imageStore), ...base };
+	}
+	return text ? { kind: 'user', text, ...base } : undefined;
+}
+
+/** One parsed line as the thread sees it. */
+function pieceOf(data: any): Piece {
+	if (!data || data.isSidechain || data.isMeta || data.isCompactSummary || data.isVisibleInTranscriptOnly) {
+		return undefined;
+	}
+	const base: Base = { ...(typeof data.uuid === 'string' ? { id: data.uuid } : {}), ...(typeof data.timestamp === 'string' ? { at: data.timestamp } : {}) };
+	if (data.type === 'user') {
+		return userPiece(data.message?.content, base);
+	}
+	if (data.type === 'assistant' && Array.isArray(data.message?.content)) {
+		const text = data.message.content.filter((b: any) => b?.type === 'text' && typeof b.text === 'string' && b.text.trim()).map((b: any) => b.text.trim()).join('\n\n');
+		return text ? { kind: 'agent', text, ...base } : undefined;
+	}
+	if (data.type === 'system' && data.subtype === 'compact_boundary') {
+		return { kind: 'notice', text: COMPACTED, ...base };
+	}
+	// A message the user sent while Claude was working: Claude Code hands it over mid-turn and
+	// keeps it as an attachment line (its queue-operation lines say the same again: not read).
+	const a = data.type === 'attachment' ? data.attachment : undefined;
+	if (a?.type === 'queued_command') {
+		if (a.commandMode === 'task-notification') {
+			const notice = typeof a.prompt === 'string' ? taskNotice(a.prompt.trim()) : undefined;
+			return notice ? { kind: 'notice', text: notice, ...base } : undefined;
+		}
+		return a.commandMode === undefined || a.commandMode === 'prompt' ? userPiece(a.prompt, base) : undefined;
+	}
+	return undefined;
+}
+
+/** What a parsed line says about the session: the model and context fill of a main-chain answer. */
+function metaOf(data: any): SessionMeta | undefined {
+	const m = data?.type === 'assistant' && !data.isSidechain ? data.message : undefined;
+	if (typeof m?.model !== 'string' || !m.model || m.model.startsWith('<')) {
+		return undefined; // `<synthetic>`: Claude Code's own stand-in answer
+	}
+	const u = m.usage;
+	const context = u && typeof u === 'object' ? (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) : 0;
+	return { model: m.model, ...(context > 0 ? { context } : {}) };
+}
+
+/**
+ * One line of a session file as the thread sees it: what the user wrote (with its pictures, also
+ * while Claude worked), Claude's text, a task report, a compaction.
+ */
 export function claudePiece(line: string): Piece {
 	let data: any;
 	try {
@@ -224,31 +344,106 @@ export function claudePiece(line: string): Piece {
 	} catch {
 		return undefined;
 	}
-	if (!data || data.isSidechain || data.isMeta || data.isCompactSummary) {
+	return pieceOf(data);
+}
+
+/**
+ * A line that can hold what Claude produced with its tools (AR26): a tool use (Write, Edit, the
+ * Artifact tool), or a tool's result that names a claude.ai artifact. The rest (text, the results
+ * of reads and commands: most of a long session file) is not handed on, so a 50 MB read stays small.
+ */
+export function claudeToolLine(line: string): boolean {
+	return line.includes('"tool_use"') || (line.includes('"tool_result"') && line.includes('claude.ai/'));
+}
+
+/** The model and context fill one line tells, if it tells them (an answer of the main chain). */
+export function claudeMeta(line: string): SessionMeta | undefined {
+	if (!line.includes('"assistant"')) {
 		return undefined;
 	}
-	const base = { ...(typeof data.uuid === 'string' ? { id: data.uuid } : {}), ...(typeof data.timestamp === 'string' ? { at: data.timestamp } : {}) };
-	if (data.type === 'user') {
-		const content = data.message?.content;
-		const raw = typeof content === 'string' ? content
-			: Array.isArray(content) && !content.some(b => b?.type === 'tool_result') ? content.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') : '';
-		const notice = taskNotice(raw.trim());
-		if (notice) {
-			return { kind: 'notice', text: notice, ...base };
-		}
-		const text = userText(content);
-		const images = Array.isArray(content) && !content.some((b: any) => b?.type === 'tool_result') ? claudeImages(content) : [];
-		if (images.length && (text || !raw.trim())) {
-			// Claude Code's own placeholders ([Image #1]) give way to the pictures.
-			return { kind: 'user', text: withImages((text ?? '').replace(/\[Image #\d+\]/g, '').replace(/[ \t]{2,}/g, ' ').trim(), images, imageStore), ...base };
-		}
-		return text ? { kind: 'user', text, ...base } : undefined;
+	try {
+		return metaOf(JSON.parse(line));
+	} catch {
+		return undefined;
 	}
-	if (data.type === 'assistant' && Array.isArray(data.message?.content)) {
-		const text = data.message.content.filter((b: any) => b?.type === 'text' && typeof b.text === 'string' && b.text.trim()).map((b: any) => b.text.trim()).join('\n\n');
-		return text ? { kind: 'agent', text, ...base } : undefined;
+}
+
+/**
+ * A session file read the way the live follow reads it: the same entries under the same ids,
+ * the room's own turns left out, its latest model and context fill, and the cursor the follow
+ * goes on from. Fed in pieces from `offset` (the end of a long file); with `header`, the bytes
+ * start with the read script's `\036AT <offset>` line.
+ */
+export class ClaudeHistory {
+	private splitter: LineSplitter;
+	private readonly assembler = new EntryAssembler({ mute: true });
+	private readonly entries: SessionEntry[] = [];
+	/** The tool lines read (`claudeToolLine`), for what Claude produced (AR26). */
+	private lines: string[] = [];
+	private meta: SessionMeta | undefined;
+	private head: Buffer | undefined;
+
+	constructor(offset = 0, header = false) {
+		this.splitter = new LineSplitter(offset);
+		this.head = header ? Buffer.alloc(0) : undefined;
 	}
-	return undefined;
+
+	push(chunk: Buffer): void {
+		if (this.head) {
+			this.head = Buffer.concat([this.head, chunk]);
+			const nl = this.head.indexOf(10);
+			if (nl < 0) {
+				return;
+			}
+			const m = /^\u001eAT (\d+)$/.exec(this.head.toString('utf8', 0, nl));
+			chunk = this.head.subarray(nl + 1);
+			this.head = undefined;
+			this.splitter = new LineSplitter(m ? Number(m[1]) : 0);
+		}
+		for (const line of this.splitter.push(chunk)) {
+			this.line(line.text, line.start);
+		}
+	}
+
+	private line(text: string, start: number): void {
+		if (!text.trim()) {
+			return;
+		}
+		let data: any;
+		try {
+			data = JSON.parse(text);
+		} catch {
+			return; // the first line of a read from the middle, or one still being written
+		}
+		if (claudeToolLine(text)) {
+			this.lines.push(text);
+		}
+		const meta = metaOf(data);
+		if (meta) {
+			this.meta = { ...this.meta, ...meta };
+		}
+		const entry = this.assembler.feed(pieceOf(data), start);
+		if (!entry) {
+			return;
+		}
+		const last = this.entries.at(-1);
+		if (entry.role === 'agent' && last?.role === 'agent' && last.id === entry.id) {
+			this.entries[this.entries.length - 1] = entry; // the same answer, grown
+		} else {
+			this.entries.push(entry);
+		}
+	}
+
+	/**
+	 * The latest `limit` entries, where the follow goes on (after the last whole line, or where an
+	 * answer still growing began), the model and fill, and the tool lines read. The lines are
+	 * handed over once: this reader lets go of them.
+	 */
+	result(limit = 300): SessionHistory & { readonly cursor: string } {
+		const lines = this.lines;
+		this.lines = [];
+		return { entries: this.entries.slice(-limit), cursor: this.assembler.cursor(this.splitter.position), ...(this.meta ? { meta: this.meta } : {}), ...(lines.length ? { lines } : {}) };
+	}
 }
 
 /**
@@ -256,5 +451,33 @@ export function claudePiece(line: string): Piece {
  * request (its tool steps left out), under the id of the line each began with.
  */
 export function parseHistory(text: string, limit = 300): SessionEntry[] {
-	return assemble(text, claudePiece, limit);
+	const history = new ClaudeHistory();
+	history.push(Buffer.from(text.endsWith('\n') ? text : `${text}\n`));
+	return [...history.result(limit).entries];
+}
+
+/** The end of a session file on this machine (at most READ_MAX bytes), read in pieces. */
+export async function localHistory(home: string, id: string, limit = 300): Promise<SessionHistory> {
+	const file = await localSessionPath(home, id);
+	const handle = file ? await fs.open(file, 'r').catch(() => undefined) : undefined;
+	if (!handle) {
+		throw new Error('the session file is gone');
+	}
+	try {
+		const { size } = await handle.stat();
+		const from = Math.max(0, size - READ_MAX);
+		const history = new ClaudeHistory(from);
+		for (let pos = from; pos < size;) {
+			const buf = Buffer.alloc(Math.min(1 << 20, size - pos));
+			const { bytesRead } = await handle.read(buf, 0, buf.length, pos);
+			if (!bytesRead) {
+				break;
+			}
+			history.push(buf.subarray(0, bytesRead));
+			pos += bytesRead;
+		}
+		return history.result(limit);
+	} finally {
+		await handle.close();
+	}
 }

@@ -51,7 +51,8 @@ export class RpcClient {
 		};
 		child.stdin?.on('error', () => { }); // EPIPE after the process died; 'close' reports it
 		child.on('error', close);
-		child.on('close', code => close(new Error(this.lastStderrLine() || `codex app-server exited with ${code}`)));
+		// The exit code goes with it: 127 from an SSH machine's shell means no Codex there.
+		child.on('close', code => close(Object.assign(new Error(this.lastStderrLine() || `codex app-server exited with ${code}`), { exitCode: code })));
 	}
 
 	get closed(): boolean {

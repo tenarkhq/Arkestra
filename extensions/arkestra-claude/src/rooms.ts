@@ -15,7 +15,13 @@ export interface Readiness {
 	readonly ready: boolean;
 	readonly reason?: string;
 	readonly fix?: 'install' | 'signIn' | 'quota' | 'retry';
-	readonly actions?: readonly { readonly title: string; run(): Thenable<unknown> | Promise<unknown> }[];
+	readonly actions?: readonly {
+		readonly title: string;
+		readonly detail?: string;
+		run(): Thenable<unknown> | Promise<unknown>;
+		/** One secret the page asks for in its own password field (an API key), handed to `save` instead of `run` prompting. */
+		readonly secret?: { readonly label: string; readonly placeholder?: string; save(value: string): Thenable<unknown> | Promise<unknown> };
+	}[];
 }
 
 export type AgentEvent =
@@ -23,7 +29,9 @@ export type AgentEvent =
 	| { readonly kind: 'tool'; readonly text: string }
 	| { readonly kind: 'error'; readonly text: string }
 	| { readonly kind: 'usage'; readonly usage: Usage }
-	| { readonly kind: 'work'; readonly work: WorkUpdate };
+	| { readonly kind: 'work'; readonly work: WorkUpdate }
+	/** One raw line of the agent's own output (stream-json, a rollout line), for what it produced with its tools (AR26). */
+	| { readonly kind: 'line'; readonly line: string };
 
 /**
  * What an agent does beside its answer (AR37), as the vendors' desktop apps show it: its task
@@ -80,7 +88,9 @@ export interface Agent {
 	/** The sessions its CLI already has on its machine (AR39); an agent without it has none to offer. */
 	existingSessions?(): Promise<readonly ExistingSession[]>;
 	/** The messages of one of those sessions. */
-	sessionHistory?(sessionId: string): Promise<readonly SessionEntry[]>;
+	sessionHistory?(sessionId: string): Promise<readonly SessionEntry[] | SessionHistory>;
+	/** Goes up when the agent reads more out of its session files than before: older imports read again once. */
+	readonly historyVersion?: number;
 	/**
 	 * Binds the room to an existing session: the next turn continues it (in its folder) and sends
 	 * only the messages not in `seen`. Does nothing while the room already has a session here.
@@ -89,8 +99,9 @@ export interface Agent {
 	/**
 	 * Follows one of those sessions live: the entries appended (or an answer grown) after
 	 * `cursor`, each with its id, and the cursor to go on from later. No cursor: from now on.
+	 * `lines`: the session file's raw lines behind them that hold tool uses, for the artifacts (AR26).
 	 */
-	watchSession?(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string) => void, cursor?: string): { dispose(): void };
+	watchSession?(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string, meta?: SessionMeta, lines?: readonly string[]) => void, cursor?: string): { dispose(): void };
 }
 
 /** What an agent can run with: its models, each with the reasoning efforts it knows (none: no effort choice). */
@@ -102,6 +113,24 @@ export interface ExistingSession {
 	readonly cwd?: string;
 	/** ISO time of its last activity. */
 	readonly updatedAt: string;
+}
+
+/** A session's messages as read, and where the live follow goes on from. */
+export interface SessionHistory {
+	readonly entries: readonly SessionEntry[];
+	readonly cursor?: string;
+	/** The session file's raw lines read that hold tool uses, for the artifacts (AR26). */
+	readonly lines?: readonly string[];
+	/** What the session file says about the session itself, when it says it. */
+	readonly meta?: SessionMeta;
+}
+
+/** A session's model and context fill, as its file tells them (the latest model call). */
+export interface SessionMeta {
+	/** The model id of the latest answer, for example `claude-opus-5-5`. */
+	readonly model?: string;
+	/** Tokens in the context at the latest model call (its window is not in the file). */
+	readonly context?: number;
 }
 
 /** One message of an existing session, as the thread shows it. */

@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Arkestra. The Plan view's model (AR31), Planner style: release lanes with weighted
- *  progress, branch rails (where the base branch and each open branch stand and what goes on
- *  them next, in order), and a dependency staircase with the critical path. From the GitHub
- *  Project, the repository's branches and the rooms. No VS Code here.
+ *  progress, branch rails (where the base branch and each open-PR branch stand and what goes on
+ *  them next, in order; the base only with a local repository), and a dependency staircase with
+ *  the critical path. From the GitHub Project, the repository's branches and the rooms. No VS Code here.
  *--------------------------------------------------------------------------------------------*/
 
 import { valueText, type ProjectField, type ProjectItem, type ProjectSnapshot } from './project';
@@ -53,6 +53,7 @@ export interface StairCell {
 	readonly level: number;
 	/** Completion, 0–1. */
 	readonly fill: number;
+	readonly done: boolean;
 	readonly critical: boolean;
 	readonly startable: boolean;
 	readonly running: boolean;
@@ -284,7 +285,7 @@ export function planModel(input: PlanInput): PlanModel {
 		cells: items.filter(i => laneOf(i) === lane.name).sort((a, b) => (lv.get(a.id)! - lv.get(b.id)!) || ((a.number ?? 0) - (b.number ?? 0))).map(i => {
 			const room = rooms.get(i.id);
 			return {
-				id: i.id, label: label(i), title: i.title, level: lv.get(i.id) ?? 0, fill: fill(i), critical: onPath.has(i.id),
+				id: i.id, label: label(i), title: i.title, level: lv.get(i.id) ?? 0, fill: fill(i), done: isDone(i, statusId), critical: onPath.has(i.id),
 				startable: startable(i), running: room?.status === 'running',
 				...(i.url ? { url: i.url } : {}), ...(room && room.status !== 'ended' ? { roomId: room.roomId } : {}),
 			};
@@ -310,7 +311,8 @@ function rails(input: PlanInput, items: readonly ProjectItem[], statusId: string
 	const byContent = new Map(items.filter(i => i.contentId).map(i => [i.contentId!, i]));
 	const out: Rail[] = [];
 
-	// The base branch: what landed last, now, and the open PRs in dependency order, then the release.
+	// The base branch (only with a local repository: without one there is nothing to show on it):
+	// what landed last, now, and the open PRs in dependency order, then the release.
 	const past: Step[] = (git?.log ?? []).slice(0, 3).reverse().map(c => {
 		const tag = c.refs.find(r => r.startsWith('tag: '))?.slice(5);
 		const pr = /\(#(\d+)\)\s*$/.exec(c.subject)?.[1];
@@ -321,6 +323,10 @@ function rails(input: PlanInput, items: readonly ProjectItem[], statusId: string
 	const openPrs: { item: ProjectItem; pr: ProjectItem['pullRequests'][number] }[] = [];
 	const seen = new Set<number>();
 	for (const item of items) {
+		// A done task's leftover PR is not on the way (its branch was merged or dropped long ago).
+		if (item.type !== 'pr' && isDone(item, statusId)) {
+			continue;
+		}
 		for (const pr of item.pullRequests) {
 			if (pr.state === 'OPEN' && !seen.has(pr.number)) {
 				seen.add(pr.number);
@@ -335,13 +341,15 @@ function rails(input: PlanInput, items: readonly ProjectItem[], statusId: string
 		return { label: `${label(item)} → ${base}`, sub: blockers.length ? `after ${blockers.join(', ')} · ${ci.sub}` : ci.sub, tone: ci.tone, url: pr.url };
 	});
 	const dev = lanes.find(l => l.state === 'development');
-	out.push({
-		name: base, kind: 'base', ...(git?.baseHead ? { head: git.baseHead } : {}),
-		note: git ? `${next.length} open PR${next.length === 1 ? '' : 's'} on the way` : 'no local repository',
-		steps: [...past, { label: 'now', now: true }, ...next, ...(dev ? [{ label: `${dev.name} tag`, sub: `${dev.done}/${dev.total} done · ${dev.percent}%` }] : [])],
-	});
+	if (git) {
+		out.push({
+			name: base, kind: 'base', ...(git.baseHead ? { head: git.baseHead } : {}),
+			note: `${next.length} open PR${next.length === 1 ? '' : 's'} on the way`,
+			steps: [...past, { label: 'now', now: true }, ...next, ...(dev ? [{ label: `${dev.name} tag`, sub: `${dev.done}/${dev.total} done · ${dev.percent}%` }] : [])],
+		});
+	}
 
-	// Open branches: of open PRs and of rooms' work trees.
+	// Open branches: of open PRs (GitHub's data), and of running rooms' work trees the local repository has.
 	const branches = new Map<string, { item?: ProjectItem; room?: RoomInfo; pr?: ProjectItem['pullRequests'][number] }>();
 	for (const { item, pr } of openPrs) {
 		if (pr.headRef && pr.headRef !== base) {
@@ -353,6 +361,9 @@ function rails(input: PlanInput, items: readonly ProjectItem[], statusId: string
 			continue;
 		}
 		for (const b of room.branches ?? []) {
+			if (!branches.has(b) && !git?.branches.has(b)) {
+				continue; // no open PR and not in the local repository: nothing to say where it stands
+			}
 			const num = room.refs.map(r => /^#(\d+)$/.exec(r)?.[1] ?? /\/(?:issues|pull)\/(\d+)$/.exec(r)?.[1]).find(Boolean);
 			const item = num ? byNumber.get(Number(num)) : undefined;
 			branches.set(b, { ...branches.get(b), ...(item ? { item } : {}), room });
@@ -378,7 +389,7 @@ function rails(input: PlanInput, items: readonly ProjectItem[], statusId: string
 			steps.push({ label: ci.sub, tone: ci.tone, url: info.pr.url });
 		}
 		steps.push({ label: `merge → ${info.room?.base ?? base}` });
-		const where = ref ? [`${ref.ahead ?? '?'} ahead`, ref.behind ? `${ref.behind} behind` : ''].filter(Boolean).join(' · ') : 'not in the local repository';
+		const where = ref ? [`${ref.ahead ?? '?'} ahead`, ref.behind ? `${ref.behind} behind` : ''].filter(Boolean).join(' · ') : git ? 'not in the local repository' : '';
 		const room = info.room ? `${info.room.type} room · ${info.room.phase}${info.room.agents ? ` · ${info.room.agents} agents` : ''}` : '';
 		out.push({
 			name, kind: 'branch', ...(ref?.sha ? { head: ref.sha } : {}),

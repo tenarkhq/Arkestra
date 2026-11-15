@@ -8,18 +8,20 @@ import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { ActivityBoard, type AgentActivity } from './activity';
 import { AgentRegistry, type Agent, type ExistingSession, type InviteEntry } from './agent';
-import { AgentNotReadyError, Room, importedRoomState, newRoomState } from './room';
+import { AgentNotReadyError, Room, RoomOpener, importedRoomState, newRoomState } from './room';
+import { agentKind, cleanSessionMessages, continueOn, elsewhere, healAdopted, homeOf, isForeign, placeLocalSessions, type ListedSession } from './sessionHome';
 import { RoomStore } from './store';
 import { SessionFollow } from './sessionFollow';
 import { laneAgent, laneEntries, type LaneEntry } from './lanes';
 import { copyFile, mkdir, readFile, stat } from 'node:fs/promises';
+import { statSync } from 'node:fs';
 import { progressItems, taskRooms, type TaskRoom } from './tasks';
 import { TURN_TEXT, turnState, workHtml } from './work';
 import { ActivityView } from './activityView';
-import { choiceLabel, effortsFor, fitChoice, type Choice } from './choice';
+import { currentModelLabel, fitChoice, type Choice } from './choice';
 import { threadListItem, threadSnapshot, type ThreadListItem, type ThreadSnapshot } from './threadSnapshot';
 import type { AgentChoices } from './agent';
-import { templateForm } from './templateForm';
+import { TemplateFormPage, type TemplateRequest } from './templateForm';
 import { ChangesUi } from './changesView';
 import { InlineEdits } from './inlineEditUi';
 import { References } from './referencesUi';
@@ -95,6 +97,61 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	// AR39 · A thread that continues a CLI session follows it live while loaded.
 	const follow = new SessionFollow(registry);
 	context.subscriptions.push(follow);
+	/** Rooms whose adopted sessions are being checked (a copy moved to its machine, an older import read again). */
+	const healing = new Map<string, Promise<void>>();
+	/** Whether a folder an agent's session worked in exists on this machine. */
+	const localFolder = (cwd: string): boolean => {
+		try {
+			return statSync(cwd).isDirectory();
+		} catch {
+			return false;
+		}
+	};
+	// AR39 · The sessions the agents' CLIs already have on their machines; an SSH listing is slow, so kept for a while.
+	const sessionLists = new Map<string, { at: number; sessions: readonly ExistingSession[] }>();
+	const sessionsOf = async (agent: Agent, fresh = false): Promise<readonly ExistingSession[]> => {
+		const cached = sessionLists.get(agent.id);
+		if (cached && !fresh && Date.now() - cached.at < 120_000) {
+			return cached.sessions;
+		}
+		const sessions = await agent.existingSessions!();
+		sessionLists.set(agent.id, { at: Date.now(), sessions });
+		return sessions;
+	};
+	/** The SSH agents running the same CLI as this one, each with its sessions (none when the machine cannot be read). */
+	const twins = (agentId: string) => Promise.all(registry.all()
+		.filter(a => a.id.includes('@') && agentKind(a.id) === agentKind(agentId) && a.existingSessions && a.sessionHistory)
+		.map(async a => ({ agent: a, sessions: await sessionsOf(a).catch(() => [] as readonly ExistingSession[]) })));
+	/** The SSH agent that really has a session this machine holds only a copy of. */
+	const sessionHome = async (agentId: string, session: { readonly id: string; readonly cwd?: string }) =>
+		isForeign(agentId, session.cwd, localFolder) ? homeOf(agentId, session, localFolder, await twins(agentId)) : undefined;
+	/** This machine's sessions without the copies an SSH machine has; a copy nobody has is marked. */
+	const listedSessions = async (agent: Agent, fresh = false): Promise<readonly ListedSession[]> => {
+		const sessions = await sessionsOf(agent, fresh);
+		if (agent.id.includes('@') || !sessions.some(s => isForeign(agent.id, s.cwd, localFolder))) {
+			return sessions;
+		}
+		return placeLocalSessions(agent.id, sessions, localFolder, (await twins(agent.id)).map(t => t.sessions));
+	};
+	/**
+	 * Once per open: a thread that follows a copy of an SSH machine's session moves to that
+	 * machine's agent and catches up there; a thread an older reader imported reads its session
+	 * again (what it missed goes in at its place). Then it follows live.
+	 */
+	const heal = async (room: Room): Promise<void> => {
+		if (await healAdopted(room.state, registry, sessionHome)) {
+			room.touch();
+		}
+	};
+	// An SSH machine's agent comes after the thread opened: a copy's thread can move to it now.
+	context.subscriptions.push(registry.onDidChange(() => {
+		for (const room of loaded.values()) {
+			if (Object.entries(room.state.adopted ?? {}).some(([id, link]) => isForeign(id, link.cwd, localFolder))) {
+				const next = (healing.get(room.id) ?? Promise.resolve()).then(() => heal(room)).catch(() => undefined).finally(() => follow.refresh(room));
+				healing.set(room.id, next);
+			}
+		}
+	}));
 
 	const track = (room: Room): Room => {
 		loaded.set(room.id, room);
@@ -117,21 +174,19 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 				currentChanged.fire();
 			}
 		});
-		follow.attach(room);
+		if (room.state.adopted) {
+			// A session imported by an older build: the CLI's own lines it shows as the user's become short lines.
+			if (cleanSessionMessages(room.state)) {
+				void store.save(room.state);
+			}
+			healing.set(room.id, heal(room).catch(() => undefined).finally(() => follow.refresh(room)));
+		}
 		return room;
 	};
 
-	const open = async (id: string | undefined): Promise<Room | undefined> => {
-		if (!id) {
-			return undefined;
-		}
-		const cached = loaded.get(id);
-		if (cached) {
-			return cached;
-		}
-		const state = await store.load(id);
-		return state ? track(new Room(state, registry)) : undefined;
-	};
+	// One Room per thread: opens that overlap (the thread panel, the left bar, the details) share one load.
+	const opener = new RoomOpener(loaded, id => store.load(id), state => track(new Room(state, registry)));
+	const open = (id: string | undefined): Promise<Room | undefined> => opener.open(id);
 
 	const use = async (room: Room): Promise<Room> => {
 		if (current !== room) {
@@ -174,64 +229,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		await actions.find(a => a.title === picked)?.run();
 	};
 
-	const pickAndInvite = async (room: Room): Promise<string | undefined> => {
-		const entries = await registry.inviteList(room.roster);
-		if (!entries.length) {
-			void vscode.window.showInformationMessage(vscode.l10n.t('No other agent is known yet.'));
-			return undefined;
-		}
-		const pick = await vscode.window.showQuickPick(entries.map(entry => ({
-			label: entry.readiness.ready ? entry.agent.name : `$(warning) ${entry.agent.name}`,
-			description: entry.agent.detail,
-			detail: describe(entry),
-			entry,
-		})), { title: vscode.l10n.t('Invite an agent into “{0}”', room.state.title), placeHolder: vscode.l10n.t('It receives the thread from the beginning') });
-		if (!pick) {
-			return undefined;
-		}
-		if (!pick.entry.readiness.ready) {
-			await explain(pick.entry);
-			return undefined;
-		}
-		const joined = await invite(room, pick.entry.agent.id);
-		if (pick.entry.agent.choices && room.roster.includes(pick.entry.agent.id)) {
-			await chooseFor(room, pick.entry.agent.id, true);
-		}
-		return joined;
-	};
-
-	/** Who works in a new thread: several can be ticked; the last choice comes ticked. */
+	/** Who worked in the last new thread (the new-chat page ticks them again). */
 	const LAST_AGENTS = 'arkestra.rooms.lastAgents';
-	const pickAgents = (title: string): Promise<string[] | undefined> => new Promise(resolve => {
-		type Item = vscode.QuickPickItem & { entry: InviteEntry };
-		const qp = vscode.window.createQuickPick<Item>();
-		qp.title = title;
-		qp.canSelectMany = true;
-		qp.busy = true;
-		qp.placeholder = vscode.l10n.t('Who works in this thread? More can be invited later.');
-		let done = false;
-		const finish = (ids: string[] | undefined) => { if (!done) { done = true; resolve(ids); qp.dispose(); } };
-		qp.onDidAccept(() => finish(qp.selectedItems.map(i => i.entry.agent.id)));
-		qp.onDidHide(() => finish(undefined));
-		qp.show();
-		void registry.inviteList([]).then(entries => {
-			const last = context.globalState.get<string[]>(LAST_AGENTS) ?? [];
-			qp.items = entries.map(entry => ({
-				label: entry.readiness.ready ? entry.agent.name : `$(warning) ${entry.agent.name}`,
-				description: entry.agent.detail,
-				...(entry.readiness.ready ? {} : { detail: describe(entry) }),
-				entry,
-			}));
-			qp.selectedItems = qp.items.filter(i => i.entry.readiness.ready && last.includes(i.entry.agent.id));
-			qp.busy = false;
-		});
-	});
-	/** A new thread with the agents asked for (or picked), in a project (default: this window's). */
-	const startThread = async (agentIds: readonly string[] | undefined, project?: string): Promise<void> => {
-		const ids = agentIds ?? await pickAgents(vscode.l10n.t('New thread'));
-		if (!ids) {
-			return;
-		}
+	/** A new thread with these agents, in a project (default: this window's). */
+	const startThread = async (ids: readonly string[], project?: string): Promise<void> => {
 		const room = await createRoom(vscode.l10n.t('Room'), project);
 		for (const id of ids) {
 			await invite(room, id);
@@ -274,43 +275,6 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		if (room === current) {
 			currentChanged.fire();
 		}
-	};
-	/** Asks the model, then the effort when the model has efforts. Esc keeps what was there. */
-	const chooseFor = async (room: Room, agentId: string, atInvite = false): Promise<void> => {
-		const agent = registry.get(agentId);
-		const name = agent?.name ?? agentId;
-		const choices = await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: vscode.l10n.t('Reading {0}\'s models…', name) }, () => agentChoices(agentId));
-		if (!choices?.models.length) {
-			if (!atInvite) {
-				void vscode.window.showInformationMessage(vscode.l10n.t('{0} offers no model choice.', name));
-			}
-			return;
-		}
-		const now = room.state.choices?.[agentId] ?? {};
-		type Item = vscode.QuickPickItem & { value: string | undefined };
-		const models: Item[] = [
-			{ label: `$(circle-slash) ${vscode.l10n.t('Default')}`, description: vscode.l10n.t('the agent\'s own setting'), value: undefined },
-			...choices.models.map(m => ({ label: m.label, description: [m.id !== m.label ? m.id : '', m.id === now.model ? vscode.l10n.t('chosen') : ''].filter(Boolean).join(' · '), ...(m.detail ? { detail: m.detail } : {}), value: m.id })),
-		];
-		const model = await vscode.window.showQuickPick(models, { title: vscode.l10n.t('Model for {0} in “{1}”', name, room.state.title), placeHolder: atInvite ? vscode.l10n.t('Esc: the agent\'s default') : undefined, matchOnDescription: true });
-		if (!model) {
-			return;
-		}
-		let effort = model.value === now.model ? now.effort : undefined;
-		const efforts = effortsFor(choices, model.value);
-		if (efforts.length) {
-			const picked = await vscode.window.showQuickPick<Item>([
-				{ label: `$(circle-slash) ${vscode.l10n.t('Default')}`, description: vscode.l10n.t('the model\'s own'), value: undefined },
-				...efforts.map(e => ({ label: e, ...(e === now.effort ? { description: vscode.l10n.t('chosen') } : {}), value: e })),
-			], { title: vscode.l10n.t('Effort for {0}', name) });
-			if (!picked) {
-				return;
-			}
-			effort = picked.value;
-		}
-		await setChoice(room, agentId, { ...(model.value ? { model: model.value } : {}), ...(effort ? { effort } : {}) });
-		const label = choiceLabel(room.state.choices?.[agentId], choices);
-		void vscode.window.setStatusBarMessage(label ? vscode.l10n.t('{0} in this thread: {1}', name, label) : vscode.l10n.t('{0} in this thread: its default model', name), 4000);
 	};
 
 	const invite = async (room: Room, agentId: string): Promise<string> => {
@@ -473,10 +437,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 				return;
 			}
 			if (request.command === 'invite') {
-				const message = await pickAndInvite(room);
-				if (message) {
-					stream.markdown(message);
-				}
+				// The invite list opens on the thread's page, above + agent.
+				await vscode.commands.executeCommand('arkestra.rooms.invite', room.id);
 				return;
 			}
 			const inRoom = room.roster.map(id => registry.get(id)?.name ?? id).join(', ') || vscode.l10n.t('nobody yet');
@@ -632,7 +594,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		agentsPanel.title = room ? vscode.l10n.t('Agents · {0}', room.state.title) : vscode.l10n.t('Agents');
 		agentsPanel.webview.html = agentsHtml(room ? room.roster.map(id => {
 			const agent = registry.get(id);
-			return { id, name: agent?.name ?? id, detail: agent?.detail ?? vscode.l10n.t('not available now'), activity: activity.get(room.id, id), choice: choiceLabel(room.state.choices?.[id], choiceCache.get(id)?.choices), canChoose: !!agent?.choices };
+			return { id, name: agent?.name ?? id, detail: agent?.detail ?? vscode.l10n.t('not available now'), activity: activity.get(room.id, id), choice: currentModelLabel(room.state.choices?.[id], choiceCache.get(id)?.choices, room.state.adopted?.[id]?.model), canChoose: !!agent?.choices };
 		}) : undefined);
 	};
 	const adoptAgentsPanel = (panel: vscode.WebviewPanel) => {
@@ -742,7 +704,31 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		},
 		send: sendToRoom,
 		stop: roomId => remoteStop(roomId),
-		modelLabel: async (room, agentId) => choiceLabel(room.state.choices?.[agentId], await agentChoices(agentId)),
+		modelLabel: async (room, agentId) => currentModelLabel(room.state.choices?.[agentId], await agentChoices(agentId), room.state.adopted?.[agentId]?.model, vscode.l10n.t('Default')),
+		agentChoices,
+		setChoice,
+		invite,
+		setMode: async (room, mode) => {
+			if (room.state.mode === mode || room.state.template) {
+				return;
+			}
+			room.state.mode = mode;
+			room.post(mode === 'plan' ? PLAN_ON : PLAN_OFF);
+			await store.save(room.state);
+			threadChanged.fire(room.id);
+		},
+		// A thread whose local agent's CLI is not on this computer: the SSH machine that has its session takes over.
+		sessionElsewhere: async (room, agentId) => {
+			const agent = elsewhere(agentId, room.state.adopted?.[agentId]?.session, await twins(agentId));
+			return agent ? { id: agent.id, machine: agent.name.split(' · ')[1] || agent.id.slice(agent.id.indexOf('@') + 1) } : undefined;
+		},
+		continueOn: async (room, from, to) => {
+			const agent = registry.get(to);
+			if (agent && await continueOn(room.state, from, agent)) {
+				room.touch();
+				follow.refresh(room);
+			}
+		},
 	});
 	context.subscriptions.push(threads, new DetailsView({
 		registry, activity, onDidChangeThread: threadChanged.event, threads, open,
@@ -818,17 +804,53 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			changedThreads.fire();
 		}
 	}, () => undefined);
-	// AR39 · The sessions the agents' CLIs already have on their machines; an SSH listing is slow, so kept for a while.
-	const sessionLists = new Map<string, { at: number; sessions: readonly ExistingSession[] }>();
 	const sessionAgents = () => registry.all().filter(a => a.existingSessions && a.sessionHistory && a.adoptSession).sort((a, b) => a.name.localeCompare(b.name));
-	const sessionsOf = async (agent: Agent): Promise<readonly ExistingSession[]> => {
-		const cached = sessionLists.get(agent.id);
-		if (cached && Date.now() - cached.at < 120_000) {
-			return cached.sessions;
+	/** Sessions being continued now, by CLI and session id: a second click waits for the first. */
+	const adopting = new Map<string, Promise<string | undefined>>();
+	/**
+	 * The thread that continues a CLI session (AR39): the one made before (it catches up first
+	 * when it is to be shown), else a new one with the session's history that follows it live.
+	 * A copy here of an SSH machine's session goes on there. Its room id; a failed read throws.
+	 */
+	const adoptSession = (agentId: string, asSession: ExistingSession, show: boolean): Promise<string | undefined> => {
+		const key = `${agentKind(agentId)}\n${asSession.id}`;
+		const running = adopting.get(key);
+		if (running) {
+			return running;
 		}
-		const sessions = await agent.existingSessions!();
-		sessionLists.set(agent.id, { at: Date.now(), sessions });
-		return sessions;
+		const work = (async (): Promise<string | undefined> => {
+			const asked = registry.get(agentId);
+			if (!asked?.sessionHistory) {
+				return undefined;
+			}
+			// A copy here of an SSH machine's session goes on there: that is where it grows and where Claude runs it.
+			const { agent, session } = await sessionHome(asked.id, asSession) ?? { agent: asked, session: asSession };
+			if (!agent.sessionHistory) {
+				return undefined;
+			}
+			// A session continued here before opens its thread again (also one that followed this machine's copy of it).
+			const before = (await store.list()).find(s => Object.entries(s.adopted ?? {}).some(([id, link]) => link.session === session.id && agentKind(id) === agentKind(agent.id)));
+			if (before) {
+				// It catches up on what the session wrote since, then follows it live (AR39).
+				if (show && await open(before.id)) {
+					await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Reading the {0} session…', agent.name) }, async () => {
+						await healing.get(before.id);
+						await follow.caughtUp(before.id);
+					});
+				}
+				return before.id;
+			}
+			// The history and where its live follow goes on: nothing written after the read is lost.
+			const history = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Reading the {0} session…', agent.name) }, () => agent.sessionHistory!(session.id));
+			// A local session's folder is its project; an SSH machine's folder is not one here.
+			const project = !agent.id.includes('@') && session.cwd ? vscode.Uri.file(session.cwd).toString() : undefined;
+			const room = track(new Room(importedRoomState({ id: agent.id, name: agent.name, ...(agent.historyVersion !== undefined ? { historyVersion: agent.historyVersion } : {}) }, session, history, project), registry));
+			await store.save(room.state);
+			refreshThreads();
+			return room.id;
+		})().finally(() => adopting.delete(key));
+		adopting.set(key, work);
+		return work;
 	};
 	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 	const refreshThreads: () => void = () => {
@@ -864,6 +886,50 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}
 	};
 
+	// A 2ARK template room from its page: the room, both agents, its folder and work trees, then its thread.
+	const startTemplateRoom = async (req: TemplateRequest): Promise<void> => {
+		const room = await createRoom(req.title);
+		for (const role of ['A', 'B'] as Role[]) {
+			await room.invite(req.members[role].id);
+		}
+		const folder = path.join(context.globalStorageUri.fsPath, 'room-files', room.id);
+		await mkdir(folder, { recursive: true });
+		let review: ReviewState | undefined;
+		if (req.review) {
+			const project = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+			const local = req.review.source && !/^https?:/.test(req.review.source) ? path.resolve(project, req.review.source) : undefined;
+			const isFile = local ? await stat(local).then(st => st.isFile(), () => false) : false;
+			if (local && isFile) {
+				await copyFile(local, path.join(folder, 'v1.md'));
+			}
+			review = {
+				reviewer: req.review.reviewer,
+				prompt: req.review.source && !isFile ? `${req.review.prompt}\n\nAz anyag: ${req.review.source}` : req.review.prompt,
+				...(req.review.source ? { source: req.review.source } : {}),
+				version: isFile ? 1 : 0,
+				strict: req.review.strict,
+			};
+		}
+		let code: CodeState | undefined;
+		if (req.code) {
+			const trees = await createWorkTrees(req.code.repo, req.code.base, room.id, { A: req.members.A.name, B: req.members.B.name });
+			code = { ...req.code, ...trees };
+		}
+		const state: TemplateState = {
+			type: req.type, members: req.members, folder, rounds: 0, max: req.max, briefed: {}, waiting: {},
+			...(review ? { review } : {}),
+			...(code ? { code } : {}),
+			...(req.audit ? { audit: { ...req.audit, phase: 'audit' as const, done: {} } } : {}),
+		};
+		room.state.template = state;
+		await store.save(room.state);
+		ensureRun(room)!.engine.start();
+		refreshThreads();
+		await threads.open(room.id);
+	};
+	const templatePage = new TemplateFormPage(registry, startTemplateRoom);
+	context.subscriptions.push(templatePage);
+
 	context.subscriptions.push(
 		sessionParticipant,
 		controller,
@@ -875,8 +941,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			currentThread: () => current?.id,
 			boards: () => github?.boards() ?? [],
 			pinnedArtifacts: () => gallery.pinnedArtifacts(),
-			machineSessions: () => sessionAgents().map(a => ({ id: a.id, name: a.name, sessions: () => sessionsOf(a) })),
+			machineSessions: () => sessionAgents().map(a => ({ id: a.id, name: a.name, sessions: (fresh?: boolean) => listedSessions(a, fresh) })),
+			adoptSession: (agentId, session) => adoptSession(agentId, session, false),
 			refreshSessions: () => sessionLists.clear(),
+			continuedSessions: async () => new Map((await store.list()).flatMap(s => Object.entries((loaded.get(s.id)?.state ?? s).adopted ?? {}).map(([agentId, a]) => [`${agentId}\n${a.session}`, s.id] as const))),
 			onDidChange: changedThreads.event,
 		}),
 		gallery.onDidChangePins(() => changedThreads.fire()),
@@ -889,30 +957,16 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.continueSession', async (arg: unknown, sessionArg?: ExistingSession) => {
 			const node = arg as { agentId?: string; session?: ExistingSession } | undefined;
-			const agent = registry.get(typeof arg === 'string' ? arg : node?.agentId ?? '');
-			const session = sessionArg ?? node?.session;
-			if (!agent?.sessionHistory || !session) {
-				return;
-			}
-			// A session continued here before opens its thread again.
-			const before = (await store.list()).find(s => s.adopted?.[agent.id]?.session === session.id);
-			if (before) {
-				// It catches up on what the session wrote since, then follows it live (AR39).
-				if (await open(before.id)) {
-					await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Reading the {0} session…', agent.name) }, () => follow.caughtUp(before.id));
-				}
-				await vscode.commands.executeCommand('arkestra.rooms.openThread', before.id);
+			const agentId = typeof arg === 'string' ? arg : node?.agentId ?? '';
+			const asSession = sessionArg ?? node?.session;
+			if (!asSession) {
 				return;
 			}
 			try {
-				// The history and where its live follow goes on: nothing written after the read is lost.
-				const history = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Reading the {0} session…', agent.name) }, () => agent.sessionHistory!(session.id));
-				// A local session's folder is its project; an SSH machine's folder is not one here.
-				const project = !agent.id.includes('@') && session.cwd ? vscode.Uri.file(session.cwd).toString() : undefined;
-				const room = track(new Room(importedRoomState({ id: agent.id, name: agent.name }, session, history, project), registry));
-				await store.save(room.state);
-				refreshThreads();
-				await vscode.commands.executeCommand('arkestra.rooms.openThread', room.id);
+				const room = await adoptSession(agentId, asSession, true);
+				if (room) {
+					await vscode.commands.executeCommand('arkestra.rooms.openThread', room);
+				}
 			} catch (error) {
 				void vscode.window.showErrorMessage(vscode.l10n.t('Could not read the session: {0}', error instanceof Error ? error.message : String(error)));
 			}
@@ -926,52 +980,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		vscode.commands.registerCommand('arkestra.rooms.newTemplateRoom', async (arg?: unknown) => {
 			// From a project view: { type, brief } presets the form (the task's link as the brief).
 			const preset = arg && typeof arg === 'object' && !Array.isArray(arg) ? arg as { type?: 'coding' | 'audit' | 'review'; brief?: string } : undefined;
-			const req = await templateForm(registry, (await currentRoom())?.roster, preset);
-			if (!req) {
-				return;
-			}
-			try {
-				const room = await createRoom(req.title);
-				for (const role of ['A', 'B'] as Role[]) {
-					await room.invite(req.members[role].id);
-				}
-				const folder = path.join(context.globalStorageUri.fsPath, 'room-files', room.id);
-				await mkdir(folder, { recursive: true });
-				let review: ReviewState | undefined;
-				if (req.review) {
-					const project = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-					const local = req.review.source && !/^https?:/.test(req.review.source) ? path.resolve(project, req.review.source) : undefined;
-					const isFile = local ? await stat(local).then(st => st.isFile(), () => false) : false;
-					if (local && isFile) {
-						await copyFile(local, path.join(folder, 'v1.md'));
-					}
-					review = {
-						reviewer: req.review.reviewer,
-						prompt: req.review.source && !isFile ? `${req.review.prompt}\n\nAz anyag: ${req.review.source}` : req.review.prompt,
-						...(req.review.source ? { source: req.review.source } : {}),
-						version: isFile ? 1 : 0,
-						strict: req.review.strict,
-					};
-				}
-				let code: CodeState | undefined;
-				if (req.code) {
-					const trees = await createWorkTrees(req.code.repo, req.code.base, room.id, { A: req.members.A.name, B: req.members.B.name });
-					code = { ...req.code, ...trees };
-				}
-				const state: TemplateState = {
-					type: req.type, members: req.members, folder, rounds: 0, max: req.max, briefed: {}, waiting: {},
-					...(review ? { review } : {}),
-					...(code ? { code } : {}),
-					...(req.audit ? { audit: { ...req.audit, phase: 'audit' as const, done: {} } } : {}),
-				};
-				room.state.template = state;
-				await store.save(room.state);
-				ensureRun(room)!.engine.start();
-				refreshThreads();
-				await threads.open(room.id);
-			} catch (error) {
-				void vscode.window.showErrorMessage(vscode.l10n.t('The template room could not start: {0}', error instanceof Error ? error.message : String(error)));
-			}
+			await templatePage.open((await currentRoom())?.roster, preset);
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.newThread', async (arg?: unknown) => {
 			// From a project's row: a thread of that project.
@@ -980,18 +989,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.newThreadWith', async (arg?: unknown) => {
 			const id = typeof arg === 'string' ? arg : (arg as { entry?: InviteEntry } | undefined)?.entry?.agent.id;
-			await startThread(id ? [id] : undefined);
-		}),
-		vscode.commands.registerCommand('arkestra.rooms.fixAgent', async (arg?: unknown) => {
-			const entry = (arg as { entry?: InviteEntry } | undefined)?.entry;
-			if (!entry) {
-				return;
-			}
-			const actions = entry.readiness.actions ?? [];
-			if (actions.length === 1) {
-				await actions[0].run();
+			if (id) {
+				await startThread([id]);
 			} else {
-				await explain(entry);
+				threads.openNew(); // who works in it is chosen on the new-chat page
 			}
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.pin', arg => editRoom(arg, room => { room.state.pinned = true; })),
@@ -1025,74 +1026,48 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			await store.remove(room.id);
 			refreshThreads();
 		}),
-		vscode.commands.registerCommand('arkestra.rooms.rename', async (arg: unknown) => {
+		vscode.commands.registerCommand('arkestra.rooms.rename', async (arg: unknown, name?: unknown) => {
+			// The left bar renames in place and passes the new name.
 			const room = await open(threadId(arg));
-			const title = room && (await vscode.window.showInputBox({ title: vscode.l10n.t('Rename thread'), value: room.state.title }))?.trim();
+			const title = typeof name === 'string' ? name.trim() : '';
 			if (room && title) {
 				await editRoom(room.id, r => { r.state.title = title; });
-			}
-		}),
-		vscode.commands.registerCommand('arkestra.rooms.setCategory', async (arg: unknown) => {
-			const room = await open(threadId(arg));
-			if (!room) {
-				return;
-			}
-			const existing = [...new Set((await allThreads()).map(t => t.category).filter((c): c is string => !!c))].sort();
-			const none = vscode.l10n.t('No category');
-			const other = vscode.l10n.t('New category…');
-			const pick = await vscode.window.showQuickPick([...existing, other, none], { title: vscode.l10n.t('Category of “{0}”', room.state.title) });
-			const category = pick === other ? (await vscode.window.showInputBox({ title: vscode.l10n.t('New category') }))?.trim() : pick;
-			if (pick === none) {
-				await editRoom(room.id, r => { delete r.state.category; });
-			} else if (category) {
-				await editRoom(room.id, r => { r.state.category = category; });
 			}
 		}),
 	);
 
 	context.subscriptions.push(
 		participant,
-		vscode.commands.registerCommand('arkestra.rooms.new', async () => {
-			const title = await vscode.window.showInputBox({ prompt: vscode.l10n.t('Name of the new room') });
-			if (title !== undefined) {
-				await createRoom(title || vscode.l10n.t('Room'));
-			}
-		}),
+		// The new-chat page: who works in the thread, then its first message.
+		vscode.commands.registerCommand('arkestra.rooms.new', () => threads.openNew()),
 		vscode.commands.registerCommand('arkestra.rooms.invite', async (roomId?: unknown) => {
-			// From a thread's button: that thread's room. From the palette: the room used last.
+			// From a thread's page, a tile or /invite: that thread. From the palette: the thread used last. The list opens above + agent.
 			const id = threadId(roomId);
 			const room = (id ? await open(id) : undefined) ?? await currentRoom();
 			if (!room) {
-				void vscode.window.showInformationMessage(vscode.l10n.t('Start a room in the chat with @room first.'));
+				threads.openNew();
 				return;
 			}
-			const message = await pickAndInvite(room);
-			if (message) {
-				void vscode.window.showInformationMessage(message);
-			}
+			await threads.showMenu(room.id, 'invite');
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.chooseModel', async (arg?: unknown, agentArg?: unknown) => {
+			// The model popover on the thread's page: at the agent's chip, or whose model first.
 			const id = typeof arg === 'string' ? arg : (arg as { thread?: { id: string } } | undefined)?.thread?.id;
 			const room = (id ? await open(id) : undefined) ?? await currentRoom();
 			if (!room) {
-				void vscode.window.showInformationMessage(vscode.l10n.t('Start a room in the chat with @room first.'));
+				threads.openNew();
 				return;
 			}
-			let agentId = typeof agentArg === 'string' ? agentArg : undefined;
-			if (!agentId) {
-				agentId = room.roster.length === 1 ? room.roster[0] : (await vscode.window.showQuickPick(room.roster.map(a => ({ label: registry.get(a)?.name ?? a, description: choiceLabel(room.state.choices?.[a], choiceCache.get(a)?.choices) || vscode.l10n.t('default'), id: a })), { title: vscode.l10n.t('Whose model and effort?') }))?.id;
-			}
-			if (agentId) {
-				await chooseFor(room, agentId);
-			}
+			const agentId = typeof agentArg === 'string' ? agentArg : undefined;
+			await threads.showMenu(room.id, agentId ? 'model' : 'models', agentId);
 		}),
+		// The palette's way to a thread (the left bar lists them too).
 		vscode.commands.registerCommand('arkestra.rooms.open', async () => {
 			const rooms = await store.list();
 			const pick = await vscode.window.showQuickPick(rooms.map(r => ({ label: r.title, description: `${r.roster.length} agent`, id: r.id })),
 				{ title: vscode.l10n.t('Open a room') });
-			const room = pick && await open(pick.id);
-			if (room) {
-				await use(room);
+			if (pick) {
+				await threads.open(pick.id);
 			}
 		}),
 	);

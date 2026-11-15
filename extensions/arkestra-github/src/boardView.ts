@@ -12,8 +12,9 @@ import { boardHtml } from './boardHtml';
 import { readGitInfo } from './gitInfo';
 import { planModel, type GitInfo } from './plan';
 import { graphModel, wouldCycle, type GraphSaved } from './graph';
-import type { FieldInput, ProjectSnapshot } from './project';
+import type { FieldInput, ProjectChoice, ProjectSnapshot } from './project';
 import type { JournalEntry, SyncStatus } from './sync';
+import { pickerProjects, type ProjectPicker } from './projectPicker';
 
 /** The bundled Inter (media/fonts, SIL OFL 1.1): out/ (tsc) and dist/ (esbuild) are both one level under the extension's root. */
 const FONT_ROOT = vscode.Uri.file(path.join(__dirname, '..', 'media', 'fonts'));
@@ -50,6 +51,20 @@ function pageStrings(): Record<string, string> {
 		'+ New issue': vscode.l10n.t('+ New issue'),
 		'{0}: all': vscode.l10n.t('{0}: all'),
 		'{0}: not done': vscode.l10n.t('{0}: not done'),
+		'{0}% done': vscode.l10n.t('{0}% done'),
+		'✓ done': vscode.l10n.t('✓ done'),
+		'a room is running on it': vscode.l10n.t('a room is running on it'),
+		'Click a task for its details.': vscode.l10n.t('Click a task for its details.'),
+		'critical path': vscode.l10n.t('critical path'),
+		'every {0} min': vscode.l10n.t('every {0} min'),
+		'in progress (bar = how far)': vscode.l10n.t('in progress (bar = how far)'),
+		'in progress (fill = how far)': vscode.l10n.t('in progress (fill = how far)'),
+		'Live: the relay pushes GitHub changes here as they happen. Last change read {0}.': vscode.l10n.t('Live: the relay pushes GitHub changes here as they happen. Last change read {0}.'),
+		'live · updated {0}': vscode.l10n.t('live · updated {0}'),
+		'Only the tasks the filters let through; levels, progress and the critical path count every task.': vscode.l10n.t('Only the tasks the filters let through; levels, progress and the critical path count every task.'),
+		'Read from GitHub at {0}, then every {1} min. The relay (an optional push channel) is not connected.': vscode.l10n.t('Read from GitHub at {0}, then every {1} min. The relay (an optional push channel) is not connected.'),
+		'startable now': vscode.l10n.t('startable now'),
+		'updated {0}': vscode.l10n.t('updated {0}'),
 		'another project': vscode.l10n.t('another project'),
 		'Assignees': vscode.l10n.t('Assignees'),
 		'Blocked by': vscode.l10n.t('Blocked by'),
@@ -84,19 +99,20 @@ function pageStrings(): Record<string, string> {
 		'Progress': vscode.l10n.t('Progress'),
 		'reading…': vscode.l10n.t('reading…'),
 		'Refresh': vscode.l10n.t('Refresh'),
-		'relay offline · read {0}': vscode.l10n.t('relay offline · read {0}'),
 		'Remove filter': vscode.l10n.t('Remove filter'),
 		'Room': vscode.l10n.t('Room'),
 		'Search title or #': vscode.l10n.t('Search title or #'),
 		'Sort by {0}': vscode.l10n.t('Sort by {0}'),
 		'Start room ▸': vscode.l10n.t('Start room ▸'),
 		'Status': vscode.l10n.t('Status'),
-		'synced {0}': vscode.l10n.t('synced {0}'),
 		'Table': vscode.l10n.t('Table'),
-		'The relay is offline: the board reads GitHub at intervals until it is back.': vscode.l10n.t('The relay is offline: the board reads GitHub at intervals until it is back.'),
 		'Title': vscode.l10n.t('Title'),
 		'Title of the new issue': vscode.l10n.t('Title of the new issue'),
 		'Unpin this board': vscode.l10n.t('Unpin this board'),
+		'owner/number or the project URL': vscode.l10n.t('owner/number or the project URL'),
+		'Reading your projects…': vscode.l10n.t('Reading your projects…'),
+		'Or type one:': vscode.l10n.t('Or type one:'),
+		'Follow': vscode.l10n.t('Follow'),
 	};
 }
 
@@ -115,6 +131,10 @@ export interface BoardHost {
 	/** Whether "owner/number" is the workspace's own project (its board follows the setting). */
 	isWorkspace(ref: string): boolean;
 	setPinned(ref: string, pinned: boolean): Promise<void>;
+	/** The projects the signed-in user can follow, the one followed now ("owner/number"), or why the list could not be read. */
+	projectChoices(): Promise<{ projects: readonly ProjectChoice[]; current: string; error?: string }>;
+	/** The workspace follows this project (owner/number or its URL); what is wrong otherwise. */
+	followProject(text: string): Promise<string | undefined>;
 }
 
 /** Every open board: one editor tab per project, any number at once (the workspace's own and others). */
@@ -163,20 +183,34 @@ export class ProjectBoards implements vscode.Disposable {
 	}
 
 	/** Opens the board of a project, or shows it when it is already open. */
-	open(ref: string | undefined): void {
+	open(ref: string | undefined): BoardPanel {
 		if (ref && this.host.isWorkspace(ref)) {
 			ref = undefined;
 		}
 		const open = [...this.panels].find(p => p.ref === ref);
 		if (open) {
 			open.panel.reveal();
-			return;
+			return open;
 		}
 		const board = this.adopt(vscode.window.createWebviewPanel(VIEW, vscode.l10n.t('Project'), vscode.ViewColumn.Active, { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [FONT_ROOT] }), ref);
 		const key = board.pinKey();
 		if (key && this.host.isPinned(key)) {
 			void vscode.commands.executeCommand('workbench.action.pinEditor');
 		}
+		return board;
+	}
+
+	/** The workspace's board with its project list open (the palette's "Follow a project"). */
+	pickProject(): void {
+		void this.open(undefined).showPicker();
+	}
+
+	projectChoices(): ReturnType<BoardHost['projectChoices']> {
+		return this.host.projectChoices();
+	}
+
+	followProject(text: string): Promise<string | undefined> {
+		return this.host.followProject(text);
 	}
 
 	isPinned(ref: string): boolean {
@@ -240,6 +274,8 @@ class BoardPanel implements vscode.Disposable {
 	private gitTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly gitTicker: ReturnType<typeof setInterval>;
 	private disposed = false;
+	/** The project list shown instead of the board while one is chosen. */
+	private picker: ProjectPicker | undefined;
 
 	constructor(private readonly boards: ProjectBoards, readonly panel: vscode.WebviewPanel, readonly ref: string | undefined, private readonly lease: BoardLease) {
 		this.source = lease.source;
@@ -317,6 +353,25 @@ class BoardPanel implements vscode.Disposable {
 		this.timer = setTimeout(() => this.post(), 80);
 	}
 
+	/** The page's own project list (Follow a project…): read, then shown instead of the board until one is chosen. */
+	async showPicker(): Promise<void> {
+		this.panel.reveal();
+		const current = this.picker;
+		this.picker = { loading: true, projects: current?.projects ?? [], current: current?.current ?? '' };
+		this.schedule();
+		const choices = await this.boards.projectChoices();
+		if (!this.picker || this.disposed) {
+			return;
+		}
+		this.picker = {
+			loading: false,
+			projects: pickerProjects(choices.projects, choices.current, { closed: vscode.l10n.t('closed'), current: vscode.l10n.t('current') }),
+			current: choices.current,
+			...(choices.error ? { listError: vscode.l10n.t('The list could not be read: {0}', choices.error) } : {}),
+		};
+		this.schedule();
+	}
+
 	private post(): void {
 		const panel = this.panel;
 		if (this.disposed) {
@@ -324,6 +379,17 @@ class BoardPanel implements vscode.Disposable {
 		}
 		const snap = this.source.snapshot();
 		const status = this.source.status();
+		if (this.picker) {
+			void panel.webview.postMessage({
+				type: 'screen', ref: this.ref ?? null, screen: {
+					title: vscode.l10n.t('Which project does this workspace follow?'),
+					text: vscode.l10n.t('Its Board and Table show here and stay in sync with GitHub both ways.'),
+					picker: this.picker,
+					actions: this.source.configured() ? [{ label: vscode.l10n.t('Cancel'), command: 'pickCancel' }] : [{ label: vscode.l10n.t('Sign in to GitHub'), command: 'signIn' }],
+				},
+			});
+			return;
+		}
 		if (!this.source.configured()) {
 			void panel.webview.postMessage({ type: 'screen', ref: this.ref ?? null, screen: { title: vscode.l10n.t('No GitHub Project for this workspace'), text: vscode.l10n.t('Pick the project this workspace follows; its Board and Table show here and stay in sync with GitHub both ways.'), actions: [{ label: vscode.l10n.t('Follow a project…'), command: 'setProject' }, { label: vscode.l10n.t('Sign in to GitHub'), command: 'signIn' }] } });
 			return;
@@ -377,7 +443,17 @@ class BoardPanel implements vscode.Disposable {
 				case 'togglePin': await this.boards.togglePin(this); return;
 				case 'openBoard': await vscode.commands.executeCommand('arkestra.github.openBoard'); return;
 				case 'signIn': await vscode.commands.executeCommand('arkestra.github.signIn'); return;
-				case 'setProject': await vscode.commands.executeCommand('arkestra.github.setProject'); return;
+				case 'setProject': await this.showPicker(); return;
+				case 'pickCancel': this.picker = undefined; this.schedule(); return;
+				case 'followProject': {
+					if (!this.picker) {
+						return;
+					}
+					const error = await this.boards.followProject(String(m.ref ?? ''));
+					this.picker = error ? { ...this.picker, error } : undefined;
+					this.schedule();
+					return;
+				}
 				case 'move': {
 					const statusId = this.statusFieldId();
 					if (statusId) {

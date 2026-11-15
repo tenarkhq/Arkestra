@@ -1,21 +1,32 @@
 /*---------------------------------------------------------------------------------------------
  *  Arkestra. The left bar as one page (arkestra.sidebar): New chat, Search, Boards, Artifacts,
- *  Machines, then Pinned, the user's sections, the threads in no section and the archived ones.
- *  The user makes the sections and puts threads into them; nothing is filed on its own.
+ *  Machines, then Pinned, the user's sections, every thread and CLI session of the connected
+ *  machines grouped by agent, and the archived ones. The user makes the sections and puts
+ *  threads into them, which takes them out of the agent lists; nothing is filed on its own.
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
-import * as path from 'node:path';
-import type { ExistingSession } from './agent';
+import type { ListedSession } from './sessionHome';
+import { agentGroups, machineCount as rowMachines, sessionRowId, type AgentListing, type GroupItem, type SessionEntry } from './leftBar';
+import { LOCAL, readMachineEntries, relativeTime } from './machinesModel';
 import { addSection, deleteSection, keepThreads, layoutThreads, matches, moveSection, moveThread, parseSections, renameSection, sectionOf, sectionsFromCategories, shiftSection, type Section } from './sections';
-import { sidebarHtml, type SidebarMessage, type SidebarModel, type SidebarRow, type SidebarStrings } from './sidebarHtml';
+import { MachinesPage } from './machinesPage';
+import { sidebarHtml, type SidebarGroup, type SidebarMessage, type SidebarModel, type SidebarRow, type SidebarStrings } from './sidebarHtml';
 import { FONT_ROOT, pageFonts } from './webviewFonts';
 import { projectName, type ThreadSummary } from './threads';
 
 /** The sections in globalState: [{ id, name, threadIds }]. */
-export const SECTIONS_KEY = 'arkestra.rooms.sections';
+export /** A non-empty string from the page. */
+const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
+const SECTIONS_KEY = 'arkestra.rooms.sections';
 const NEW_CHAT = 'arkestra.rooms.newChat';
+/** While the bar is visible its machines' sessions are read again this often. */
+const POLL_MS = 30_000;
+/** A machine whose listing failed is asked again only after this long (it may be off). */
+const RETRY_MS = 120_000;
+/** Renders this soon after something the user did show at once, even under the mouse. */
+const LOUD_MS = 3_000;
 
 export interface SidebarBoard { readonly key: string; readonly title: string; readonly workspace: boolean; readonly pinned: boolean }
 
@@ -23,7 +34,11 @@ export interface SidebarBoard { readonly key: string; readonly title: string; re
 export interface MachineSessions {
 	readonly id: string;
 	readonly name: string;
-	sessions(): Promise<readonly ExistingSession[]>;
+	/**
+	 * Newest first; this machine's list leaves out the copies an SSH machine has and marks the
+	 * others. `fresh`: read the machine again instead of a listing kept from the last minutes.
+	 */
+	sessions(fresh?: boolean): Promise<readonly ListedSession[]>;
 }
 
 /** What the page shows, fed by the extension. */
@@ -37,6 +52,13 @@ export interface SidebarSource {
 	machineSessions(): readonly MachineSessions[];
 	/** Clears the cached session lists. */
 	refreshSessions(): void;
+	/**
+	 * Continues a session in a thread (with its history and the live follow) without opening it,
+	 * or finds the thread that already does; its room id.
+	 */
+	adoptSession(agentId: string, session: ListedSession): Promise<string | undefined>;
+	/** By `<agentId>\n<sessionId>`: the room of the thread a session was continued in. */
+	continuedSessions(): Promise<ReadonlyMap<string, string>>;
 	/** Threads, boards or pins changed. */
 	readonly onDidChange: vscode.Event<void>;
 }
@@ -47,8 +69,19 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 	private query = '';
 	private timer: ReturnType<typeof setTimeout> | undefined;
 	private dirty = false;
+	/** Whether the pending render only refreshes (the page holds it while the mouse is on the list). */
+	private quiet = true;
+	/** When the user last did something in the bar. */
+	private actedAt = 0;
 	/** The threads of the last render, for the selection. */
 	private shown: readonly ThreadSummary[] = [];
+	/** The last listing that worked, per agent: a machine that fails keeps what it showed. */
+	private readonly listings = new Map<string, readonly ListedSession[]>();
+	private readonly listing = new Set<string>();
+	private readonly failedAt = new Map<string, number>();
+	private poll: ReturnType<typeof setInterval> | undefined;
+	/** The session rows of the last render by id, for the actions that continue them first. */
+	private sessionRows = new Map<string, SessionEntry>();
 	private readonly disposables: vscode.Disposable[] = [];
 
 	constructor(private readonly context: vscode.ExtensionContext, private readonly source: SidebarSource) {
@@ -58,11 +91,13 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			vscode.window.tabGroups.onDidChangeTabs(() => this.postSelection()),
 			vscode.window.tabGroups.onDidChangeTabGroups(() => this.postSelection()),
 			vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('arkestra.connections.machines')) { this.schedule(); } }),
+			new MachinesPage(source),
 		);
 	}
 
 	dispose(): void {
 		clearTimeout(this.timer);
+		clearInterval(this.poll);
 		for (const d of this.disposables) {
 			d.dispose();
 		}
@@ -72,16 +107,79 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 		this.view = view;
 		view.webview.options = { enableScripts: true, localResourceRoots: [FONT_ROOT] };
 		view.webview.html = sidebarHtml(randomBytes(16).toString('base64'), strings(), pageFonts(view.webview));
-		view.onDidDispose(() => { if (this.view === view) { this.view = undefined; } }, undefined, this.disposables);
-		view.onDidChangeVisibility(() => { if (view.visible && this.dirty) { this.schedule(); } }, undefined, this.disposables);
+		view.onDidDispose(() => { if (this.view === view) { this.view = undefined; this.watch(false); } }, undefined, this.disposables);
+		view.onDidChangeVisibility(() => {
+			this.watch(view.visible);
+			if (view.visible) {
+				this.loadSessions(true);
+				if (this.dirty) { this.schedule(); }
+			}
+		}, undefined, this.disposables);
+		this.watch(view.visible);
+		this.loadSessions(false);
 		view.webview.onDidReceiveMessage((m: SidebarMessage) => this.receive(m).catch(error => {
 			void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
 		}), undefined, this.disposables);
 	}
 
-	private schedule(): void {
+	private schedule(quiet = true): void {
+		this.quiet &&= quiet && Date.now() - this.actedAt > LOUD_MS;
 		clearTimeout(this.timer);
-		this.timer = setTimeout(() => void this.render(), 80);
+		this.timer = setTimeout(() => {
+			const q = this.quiet;
+			this.quiet = true;
+			void this.render(q);
+		}, 80);
+	}
+
+	// ---- the machines' sessions --------------------------------------------------------------
+	/** Every ~30 s while the bar is visible. */
+	private watch(on: boolean): void {
+		clearInterval(this.poll);
+		this.poll = on ? setInterval(() => this.loadSessions(true), POLL_MS) : undefined;
+	}
+
+	/**
+	 * Reads every agent's sessions on its machine, each on its own; one still reading is not asked
+	 * again, one that failed lately waits. A failure keeps the last list and says nothing.
+	 */
+	private loadSessions(fresh: boolean): void {
+		const agents = this.source.machineSessions();
+		const ids = new Set(agents.map(a => a.id));
+		for (const id of [...this.listings.keys()]) {
+			if (!ids.has(id)) {
+				this.listings.delete(id);
+				this.schedule();
+			}
+		}
+		for (const agent of agents) {
+			if (this.listing.has(agent.id) || Date.now() - (this.failedAt.get(agent.id) ?? 0) < RETRY_MS) {
+				continue;
+			}
+			this.listing.add(agent.id);
+			agent.sessions(fresh).then(sessions => {
+				this.failedAt.delete(agent.id);
+				this.listings.set(agent.id, sessions);
+				this.schedule();
+			}, () => {
+				this.failedAt.set(agent.id, Date.now());
+			}).finally(() => this.listing.delete(agent.id));
+		}
+	}
+
+	/** A thread's id; a session row's id continues the session first (or finds its thread). */
+	private async roomOf(id: string): Promise<string | undefined> {
+		const entry = this.sessionRows.get(id);
+		if (!entry) {
+			return id;
+		}
+		const room = await this.source.adoptSession(entry.agentId, entry.session);
+		this.acted();
+		return room;
+	}
+
+	private acted(): void {
+		this.actedAt = Date.now();
 	}
 
 	// ---- state -----------------------------------------------------------------------------
@@ -91,25 +189,21 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 
 	private async save(sections: readonly Section[]): Promise<void> {
 		await this.context.globalState.update(SECTIONS_KEY, sections);
-		this.schedule();
+		this.schedule(false);
 	}
 
-	private async askName(title: string, value = ''): Promise<string | undefined> {
-		return (await vscode.window.showInputBox({ title, value, prompt: vscode.l10n.t('The name of the section') }))?.trim() || undefined;
-	}
-
-	private async newSection(): Promise<string | undefined> {
-		const name = await this.askName(vscode.l10n.t('New section'));
-		if (!name) {
+	/** A new section with the name typed in place in the left bar. */
+	private async newSection(name: unknown): Promise<string | undefined> {
+		if (!text(name) || !name.trim()) {
 			return undefined;
 		}
 		const id = randomBytes(6).toString('hex');
-		await this.save(addSection(this.sections(), id, name));
+		await this.save(addSection(this.sections(), id, name.trim()));
 		return id;
 	}
 
 	// ---- the page ----------------------------------------------------------------------------
-	private async render(): Promise<void> {
+	private async render(quiet = false): Promise<void> {
 		const view = this.view;
 		if (!view) {
 			return;
@@ -130,33 +224,64 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 		}
 		const q = this.query;
 		const layout = layoutThreads(threads, sections, q);
-		const when = (iso: string) => iso ? new Date(iso).toLocaleString(vscode.env.language, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-		const row = (t: ThreadSummary): SidebarRow => {
+		const now = Date.now();
+		const language = vscode.env.language;
+		const when = (iso: string) => relativeTime(iso, now, language);
+		const machines = machineNames();
+		const listings: AgentListing[] = this.source.machineSessions().flatMap(a => {
+			const sessions = this.listings.get(a.id);
+			return sessions ? [{ agentId: a.id, sessions }] : [];
+		});
+		const groups = agentGroups({ threads: layout.unsectioned, all: threads, listings, query: q, now, busy: id => this.source.busy(id), label: groupName });
+		const several = rowMachines(groups) > 1;
+		const machineLabel = (id: string | undefined) => several && id ? machines.get(id) ?? id : undefined;
+		const thread = (t: ThreadSummary, item?: GroupItem): SidebarRow => {
 			const section = sectionOf(sections, t.id);
+			const machine = machineLabel(item?.machine);
 			return {
 				key: `thread:${t.id}`, kind: 'thread', id: t.id, title: t.title,
-				tip: [t.title, [projectName(t.project), when(t.lastAt)].filter(Boolean).join(' · ')].filter(Boolean).join('\n'),
-				...(this.source.busy(t.id) ? { running: true } : {}),
+				tip: [t.title, [projectName(t.project), item?.machine ? machines.get(item.machine) ?? item.machine : '', when(item?.at ?? t.lastAt)].filter(Boolean).join(' · ')].filter(Boolean).join('\n'),
+				...((item ? item.running : this.source.busy(t.id)) ? { running: true } : {}),
 				...(t.pinned ? { pinned: true } : {}),
 				...(t.archived ? { archived: true } : {}),
 				...(section ? { section } : {}),
+				...(machine ? { machine } : {}),
+			};
+		};
+		const sessionRows = new Map<string, SessionEntry>();
+		const row = (item: GroupItem): SidebarRow => {
+			if (item.kind === 'thread') {
+				return thread(item.thread, item);
+			}
+			const { agentId, session } = item.entry;
+			const id = sessionRowId(agentId, session.id);
+			sessionRows.set(id, item.entry);
+			const folder = session.cwd?.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '';
+			const machine = machineLabel(item.machine);
+			return {
+				key: `session:${id}`, kind: 'session', id, title: session.title,
+				tip: [session.title, [folder, machines.get(item.machine) ?? item.machine, when(session.updatedAt)].filter(Boolean).join(' · '), vscode.l10n.t('Opening it continues the session here.')].join('\n'),
+				...(item.running ? { running: true } : {}),
+				...(machine ? { machine } : {}),
 			};
 		};
 		const boards = this.source.boards().filter(b => b.pinned && matches(b.title, q))
 			.map((b): SidebarRow => ({ key: `board:${b.key}`, kind: 'board', id: b.key, title: b.title, tip: b.key }));
 		const artifacts = (await this.source.pinnedArtifacts()).filter(a => matches(a.title, q))
 			.map((a): SidebarRow => ({ key: `artifact:${a.key}`, kind: 'artifact', id: a.key, title: a.title, tip: `${a.title}\n${a.kind}` }));
+		const sidebarGroups = groups.map((g): SidebarGroup => ({ id: g.id, name: groupName(g.id), rows: g.items.map(row), older: g.older.map(row) }));
+		this.sessionRows = sessionRows;
 		const model: SidebarModel = {
 			machines: machineCount(),
 			query: q,
 			...(this.selected() ? { selected: this.selected() } : {}),
-			pinned: [...boards, ...artifacts, ...layout.pinned.map(row)],
-			sections: layout.sections.map(s => ({ id: s.section.id, name: s.section.name, rows: s.threads.map(row) })),
-			unsectioned: layout.unsectioned.map(row),
-			archived: layout.archived.map(row),
-			empty: !threads.length,
+			pinned: [...boards, ...artifacts, ...layout.pinned.map(t => thread(t))],
+			sections: layout.sections.map(s => ({ id: s.section.id, name: s.section.name, rows: s.threads.map(t => thread(t)) })),
+			groups: sidebarGroups,
+			archived: layout.archived.map(t => thread(t)),
+			empty: !threads.length && !listings.some(l => l.sessions.length),
 		};
-		await view.webview.postMessage({ type: 'model', model });
+		await view.webview.postMessage({ type: 'model', model, ...(quiet ? { quiet: true } : {}) });
 	}
 
 	/** The row of what the active tab shows: a board, the artifact gallery, else the current thread. */
@@ -170,6 +295,9 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			}
 			if (input.viewType.endsWith('arkestra.artifacts')) {
 				return 'nav:artifacts';
+			}
+			if (input.viewType.endsWith('arkestra.machines')) {
+				return 'nav:machines';
 			}
 			return undefined;
 		}
@@ -189,10 +317,11 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 	}
 
 	private async receive(m: SidebarMessage): Promise<void> {
-		const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
+		this.acted();
 		switch (m?.type) {
 			case 'ready':
 				this.query = '';
+				this.loadSessions(false);
 				await this.render();
 				return;
 			case 'search':
@@ -206,21 +335,32 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			case 'thread': {
 				const commands: Record<string, string> = { pin: 'arkestra.rooms.pin', unpin: 'arkestra.rooms.unpin', rename: 'arkestra.rooms.rename', archive: 'arkestra.rooms.archive', unarchive: 'arkestra.rooms.unarchive', delete: 'arkestra.rooms.delete' };
 				const command = commands[m.action];
-				if (command && text(m.id)) {
-					await vscode.commands.executeCommand(command, m.id);
+				if (m.action === 'rename' && !(text(m.name) && m.name.trim())) {
+					return; // renamed in place: an empty name keeps the old one
+				}
+				if (m.action === 'delete' && text(m.id) && this.sessionRows.has(m.id)) {
+					return; // a session no thread continues stays on its machine
+				}
+				// A session row is continued in a thread first; the thread then gets the action.
+				const room = command && text(m.id) ? await this.roomOf(m.id) : undefined;
+				if (command && room) {
+					await vscode.commands.executeCommand(command, room, ...(m.action === 'rename' ? [m.name] : []));
 				}
 				return;
 			}
-			case 'move':
-				if (text(m.id)) {
-					await this.save(moveThread(this.sections(), m.id, text(m.section) ? m.section : undefined));
+			case 'move': {
+				const room = text(m.id) ? await this.roomOf(m.id) : undefined;
+				if (room) {
+					await this.save(moveThread(this.sections(), room, text(m.section) ? m.section : undefined));
 				}
 				return;
+			}
 			case 'moveToNew':
 				if (text(m.id)) {
-					const id = await this.newSection();
-					if (id) {
-						await this.save(moveThread(this.sections(), m.id, id));
+					const id = await this.newSection(m.name);
+					const room = id ? await this.roomOf(m.id) : undefined;
+					if (id && room) {
+						await this.save(moveThread(this.sections(), room, id));
 					}
 				}
 				return;
@@ -230,13 +370,13 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 				}
 				return;
 			case 'section':
-				return this.section(m.action, m.id);
+				return this.section(m.action, m.id, m.name);
 		}
 	}
 
-	private async section(action: string, id: unknown): Promise<void> {
+	private async section(action: string, id: unknown, name: unknown): Promise<void> {
 		if (action === 'new') {
-			await this.newSection();
+			await this.newSection(name);
 			return;
 		}
 		const list = this.sections();
@@ -245,9 +385,8 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			return;
 		}
 		if (action === 'rename') {
-			const name = await this.askName(vscode.l10n.t('Rename section'), section.name);
-			if (name) {
-				await this.save(renameSection(this.sections(), section.id, name));
+			if (text(name) && name.trim()) {
+				await this.save(renameSection(this.sections(), section.id, name.trim()));
 			}
 		} else if (action === 'delete') {
 			await this.save(deleteSection(list, section.id));
@@ -262,6 +401,15 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 		const id = key.slice(at + 1);
 		if (kind === 'thread') {
 			await vscode.commands.executeCommand('arkestra.rooms.openThread', id);
+		} else if (kind === 'session') {
+			// Continued in a thread (its history, then the live follow) and opened; the list reads again.
+			const entry = this.sessionRows.get(id);
+			if (entry) {
+				await vscode.commands.executeCommand('arkestra.rooms.continueSession', entry.agentId, entry.session);
+				this.acted();
+				this.loadSessions(true);
+				this.schedule(false);
+			}
 		} else if (kind === 'board') {
 			// The window's own board opens with '' (as from its project), any other by its key.
 			const board = this.source.boards().find(b => b.key === id);
@@ -279,69 +427,34 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 				return;
 			}
 			case 'boards':
-				await vscode.commands.executeCommand('arkestra.github.openBoard', '');
+				await vscode.commands.executeCommand('arkestra.github.openBoards');
 				return;
 			case 'artifacts':
 				await vscode.commands.executeCommand('arkestra.artifacts.open');
 				return;
 			case 'machines':
-				await this.machines();
+				await vscode.commands.executeCommand('arkestra.machines.open');
 				return;
 		}
 	}
+}
 
-	/** Machines: the Machines view, the connections, and the CLI sessions on them to continue here. */
-	private async machines(): Promise<void> {
-		type Item = vscode.QuickPickItem & { run?: () => Promise<unknown> };
-		const agents = this.source.machineSessions();
-		const items: Item[] = [
-			{ label: `$(remote) ${vscode.l10n.t('Machines and their folders')}`, run: () => Promise.resolve(vscode.commands.executeCommand('arkestra.machines.focus')) },
-			{ label: `$(plug) ${vscode.l10n.t('Connections')}`, description: vscode.l10n.t('add, check or remove a machine'), run: () => Promise.resolve(vscode.commands.executeCommand('arkestra.connections.show')) },
-			...(agents.length ? [{ label: vscode.l10n.t('Sessions on the machines'), kind: vscode.QuickPickItemKind.Separator } as Item] : []),
-			...agents.map((a): Item => ({
-				label: `$(${a.id.includes('@') ? 'remote' : 'vm'}) ${a.name}`,
-				description: vscode.l10n.t('continue one of its sessions here'),
-				run: () => this.sessions(a),
-			})),
-		];
-		const pick = await vscode.window.showQuickPick(items, { title: vscode.l10n.t('Machines') });
-		await pick?.run?.();
+/** The groups' names: the CLI, else the agents' mix. */
+function groupName(id: string): string {
+	switch (id) {
+		case 'claude': return 'Claude';
+		case 'codex': return 'Codex';
+		case 'several': return vscode.l10n.t('Several agents');
+		case 'other': return vscode.l10n.t('Other chats');
+		default: return id.charAt(0).toUpperCase() + id.slice(1);
 	}
+}
 
-	private async sessions(agent: MachineSessions): Promise<void> {
-		type Item = vscode.QuickPickItem & { session?: ExistingSession };
-		const qp = vscode.window.createQuickPick<Item>();
-		qp.title = vscode.l10n.t('Sessions of {0}', agent.name);
-		qp.placeholder = vscode.l10n.t('Claude Code and Codex sessions started outside Arkestra. Pick one to continue it here.');
-		qp.matchOnDescription = true;
-		const refresh: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('refresh'), tooltip: vscode.l10n.t('Refresh the sessions') };
-		qp.buttons = [refresh];
-		const when = (iso: string) => iso ? new Date(iso).toLocaleString(vscode.env.language, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
-		const load = async () => {
-			qp.busy = true;
-			try {
-				const sessions = await agent.sessions();
-				qp.items = sessions.length
-					? sessions.map(session => ({ label: session.title, description: [session.cwd ? path.posix.basename(session.cwd) : '', when(session.updatedAt)].filter(Boolean).join(' · '), session }))
-					: [{ label: vscode.l10n.t('No sessions on this machine') }];
-			} catch (error) {
-				qp.items = [{ label: vscode.l10n.t('Could not read the sessions: {0}', error instanceof Error ? error.message : String(error)) }];
-			} finally {
-				qp.busy = false;
-			}
-		};
-		const picked = await new Promise<ExistingSession | undefined>(resolve => {
-			qp.onDidTriggerButton(() => { this.source.refreshSessions(); void load(); });
-			qp.onDidAccept(() => { const s = qp.selectedItems[0]?.session; if (s) { resolve(s); qp.hide(); } });
-			qp.onDidHide(() => resolve(undefined));
-			qp.show();
-			void load();
-		});
-		qp.dispose();
-		if (picked) {
-			await vscode.commands.executeCommand('arkestra.rooms.continueSession', agent.id, picked);
-		}
-	}
+/** The machines' names by id, for the small machine label of a row. */
+function machineNames(): Map<string, string> {
+	const entries = readMachineEntries(vscode.workspace.getConfiguration('arkestra.connections').get('machines'));
+	// Short: it sits beside the title in a narrow bar.
+	return new Map([[LOCAL, process.platform === 'darwin' ? 'Mac' : vscode.l10n.t('This machine')], ...entries.map(m => [m.id, m.name] as const)]);
 }
 
 /** The SSH machines of the Connections extension and this one. */
@@ -360,15 +473,17 @@ function strings(): SidebarStrings {
 		machines: vscode.l10n.t('Machines'),
 		pinned: vscode.l10n.t('Pinned'),
 		newSection: vscode.l10n.t('New section'),
-		unsectioned: vscode.l10n.t('No section'),
 		archived: vscode.l10n.t('Archived'),
-		noChats: vscode.l10n.t('No chats yet. Start one with New chat.'),
+		showOlder: vscode.l10n.t('Show older ({0})'),
+		showFewer: vscode.l10n.t('Show fewer'),
+		noChats: vscode.l10n.t('No chats yet. Start one with New chat, or connect a machine under Machines.'),
 		noMatch: vscode.l10n.t('Nothing matches.'),
 		more: vscode.l10n.t('More actions'),
 		running: vscode.l10n.t('An agent is working'),
 		moveTo: vscode.l10n.t('Move to section'),
-		noSection: vscode.l10n.t('No section'),
+		noSection: vscode.l10n.t('Remove from section'),
 		newSectionMenu: vscode.l10n.t('New section…'),
+		sectionName: vscode.l10n.t('Name of the section'),
 		pin: vscode.l10n.t('Pin'),
 		unpin: vscode.l10n.t('Unpin'),
 		rename: vscode.l10n.t('Rename'),

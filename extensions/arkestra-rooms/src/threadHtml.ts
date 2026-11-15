@@ -7,6 +7,8 @@
 import { fontFaces, fontSrc, TYPE_CSS, type PageFonts } from './fonts';
 import { imageName, imageRefs, imageSource, userImages, type ImageResolver } from './images';
 import { agentLabel, foldLabel, providerOf, type FoldItem, type LivePart, type Row } from './threadModel';
+import type { MenuItem } from './choice';
+import { FORM_CLIENT, FORM_CSS, formHtml, type FormSpec } from './pageForm';
 
 export function escapeHtml(value: string): string {
 	return value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]!));
@@ -88,6 +90,11 @@ export interface MarkdownOptions {
 	readonly image?: ImageResolver;
 }
 
+/** A table cell: inline markdown, and the `<br>` agents write for a line break inside a cell. */
+function cell(text: string): string {
+	return inline(text).replace(/&lt;br\s*\/?&gt;/gi, '<br>');
+}
+
 /** Markdown as safe HTML: every character escaped, then headings, code blocks with a copy button, lists, tables, quotes, links, images. */
 export function renderMarkdown(text: string, opts: MarkdownOptions = {}): string {
 	const before = resolveImage;
@@ -166,7 +173,7 @@ function render(text: string): string {
 				body.push(cells(lines[i]));
 				i++;
 			}
-			out.push(`<div class="tbl"><table><thead><tr>${head.map((c, n) => `<th${attr(n)}>${inline(c)}</th>`).join('')}</tr></thead><tbody>${body.map(r => `<tr>${head.map((_, n) => `<td${attr(n)}>${inline(r[n] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+			out.push(`<div class="tbl"><table><thead><tr>${head.map((c, n) => `<th${attr(n)}>${cell(c)}</th>`).join('')}</tr></thead><tbody>${body.map(r => `<tr>${head.map((_, n) => `<td${attr(n)}>${cell(r[n] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
 			continue;
 		}
 		if (LIST.test(line)) {
@@ -229,6 +236,9 @@ export interface ThreadStrings {
 	readonly other: (n: number) => string;
 	readonly working: string;
 	readonly copy: string;
+	/** An error row's second sentence when an SSH machine has the thread's session, and its button. */
+	readonly runsOn?: (machine: string) => string;
+	readonly continueOn?: (machine: string) => string;
 }
 
 const letter = (agentId: string, name: string) => `<i class="av ${providerOf(agentId)}">${escapeHtml((name.trim()[0] ?? '?').toUpperCase())}</i>`;
@@ -248,7 +258,21 @@ export function rowHtml(row: Row, s: ThreadStrings, md: (text: string, opts?: Ma
 				+ `<div class="acts"><button class="act" data-copy="${escapeHtml(row.id)}" title="${escapeHtml(s.copy)}" aria-label="${escapeHtml(s.copy)}">${COPY_ICON}</button>${time ? `<span>${escapeHtml(time)}</span>` : ''}</div></div>`;
 		case 'fold':
 			return foldHtml(row.items, s);
+		case 'error':
+			return errorHtml(row, s);
 	}
+}
+
+/**
+ * An agent's failed turn: a notice in the error tone, under whose turn it was. When the agent's
+ * CLI is not on this computer and an SSH machine has the session, it says so and offers to go on there.
+ */
+function errorHtml(row: Extract<Row, { type: 'error' }>, s: ThreadStrings): string {
+	const home = row.missing ? row.home : undefined;
+	// The first sentence says what is wrong; the second, what to do (here: go on where the session is).
+	const text = home ? `${row.text.replace(/^(.*?\.)\s[\s\S]*$/, '$1')} ${(s.runsOn ?? (m => `This session runs on ${m}: open it from there.`))(home.machine)}` : row.text;
+	const button = home ? `<div class="nbtns"><button class="chip" data-continue="${escapeHtml(row.agentId)}" data-to="${escapeHtml(home.id)}">${escapeHtml((s.continueOn ?? (m => `Continue on ${m}`))(home.machine))}</button></div>` : '';
+	return `<div class="notice error" role="alert"><div class="eh">${escapeHtml(agentLabel(row.name, row.agentId, s.local))}</div><div>${escapeHtml(text)}</div>${button}</div>`;
 }
 
 function foldHtml(items: readonly FoldItem[], s: ThreadStrings): string {
@@ -283,6 +307,24 @@ export const ICONS = {
 	folder: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3H6l1.5 1.5h5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/></svg>',
 };
 
+/**
+ * A composer menu's rows (the model, effort and mode popover above a chip, as in the Claude
+ * desktop app): headings, lines, and choices with the chosen one checked. Each choice carries
+ * its message to the extension.
+ */
+export function menuHtml(items: readonly MenuItem[]): string {
+	return items.map(i => {
+		if (i.kind === 'sep') {
+			return '<div class="msep" role="separator"></div>';
+		}
+		if (i.kind === 'header') {
+			return `<div class="mh">${escapeHtml(i.label ?? '')}</div>`;
+		}
+		const label = `<span class="ml"><span class="mt">${escapeHtml(i.label ?? '')}</span>${i.detail ? `<small>${escapeHtml(i.detail)}</small>` : ''}</span>`;
+		return `<button class="mi${i.checked ? ' on' : ''}" role="menuitemradio" aria-checked="${i.checked ? 'true' : 'false'}" data-action="${escapeHtml(JSON.stringify(i.action ?? {}))}">${label}<span class="mc">${i.checked ? ICONS.check : ''}</span></button>`;
+	}).join('');
+}
+
 /** Colours, spacing and type of the render, on the theme's variables. */
 const BASE_CSS = `
 :root {
@@ -309,12 +351,12 @@ svg { display: block; }
 `;
 
 /** The thread panel's page: rows, running turns, notices, and the composer or the new-chat cards. */
-export function threadPage(opts: { nonce: string; cspSource: string; mode: 'thread' | 'new'; roomId?: string; placeholder: string; heading: string; fonts?: PageFonts; close?: string }): string {
+export function threadPage(opts: { nonce: string; cspSource: string; mode: 'thread' | 'new'; roomId?: string; placeholder: string; heading: string; fonts?: PageFonts; close?: string; attach?: string }): string {
 	const { nonce } = opts;
 	return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${opts.cspSource} https: data:; style-src 'nonce-${nonce}';${fontSrc(opts.fonts)} script-src 'nonce-${nonce}';">
-<style nonce="${nonce}">${fontFaces(opts.fonts)}${BASE_CSS}
+<style nonce="${nonce}">${fontFaces(opts.fonts)}${BASE_CSS}${FORM_CSS}
 body { background: var(--vscode-editor-background); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 #conv { flex: 1; overflow-y: auto; padding: 26px 0 8px; }
 .col { max-width: 740px; margin: 0 auto; padding: 0 28px; display: flex; flex-direction: column; gap: 14px; }
@@ -380,9 +422,11 @@ body { background: var(--vscode-editor-background); height: 100vh; display: flex
 .md a { color: var(--vscode-textLink-foreground); text-decoration: none; }
 .md a:hover { text-decoration: underline; }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
-.md .tbl { overflow-x: auto; margin: 0 0 10px; }
+.md .tbl { overflow-x: auto; margin: 0 0 10px; position: relative; left: 50%; transform: translateX(-50%); width: fit-content; min-width: 100%; max-width: min(1180px, calc(100vw - 48px)); }
 .md table { border-collapse: collapse; font-size: 13px; }
-.md th, .md td { border: 1px solid var(--line); padding: 4px 9px; text-align: left; vertical-align: top; }
+.md th, .md td { border: 1px solid var(--line); padding: 4px 9px; text-align: left; vertical-align: top; overflow-wrap: normal; word-break: normal; min-width: 5em; }
+.md th { white-space: nowrap; }
+.md td code { white-space: nowrap; }
 .md th { font-weight: 600; }
 .md .al-center { text-align: center; }
 .md .al-right { text-align: right; }
@@ -400,6 +444,8 @@ body { background: var(--vscode-editor-background); height: 100vh; display: flex
 .err { color: var(--err); font-size: 12.5px; }
 .notice { color: var(--mute); font-size: 13px; line-height: 1.55; border-left: 2px solid var(--line2); padding-left: 12px; }
 .notice .md p:last-child { margin-bottom: 0; }
+.notice.error { color: var(--fg); border-left-color: var(--err); }
+.notice.error .eh { color: var(--err); font-size: 12px; font-weight: 600; margin-bottom: 2px; }
 .nbtns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .compose { padding: 12px 28px 18px; }
 .box { max-width: 740px; margin: 0 auto; border: 1px solid var(--line2); border-radius: 14px; background: var(--vscode-input-background); padding: 12px 14px 10px; display: flex; flex-direction: column; gap: 12px; }
@@ -414,6 +460,21 @@ button.chip:hover { background: var(--hover); }
 .chip .g.waiting, .chip .g.warn { background: var(--warn); }
 .chip.add { color: var(--mute); border-style: dashed; }
 .chip.ghost { border-color: transparent; color: var(--mute); }
+.chip.open { background: var(--hover); color: var(--fg); }
+.pop { position: fixed; z-index: 40; min-width: 232px; max-width: 320px; max-height: 62vh; overflow-y: auto; padding: 5px; border-radius: 12px; border: 1px solid var(--line2); background: var(--vscode-menu-background, var(--vscode-editorWidget-background, var(--vscode-editor-background))); color: var(--vscode-menu-foreground, var(--fg)); box-shadow: 0 12px 32px rgba(0,0,0,.38); display: flex; flex-direction: column; font-size: 13px; }
+.pop .mh { padding: 7px 10px 4px; color: var(--mute); font-size: 11.5px; font-weight: 500; }
+.pop .msep { height: 1px; background: var(--line); margin: 4px 2px; flex: none; }
+.pop .mi { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 30px; padding: 5px 10px; border-radius: 7px; text-align: left; flex: none; }
+.pop .mi:hover, .pop .mi:focus-visible { background: var(--sel); outline: none; }
+.pop .ml { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.pop .mt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pop .ml small { color: var(--mute); font-size: 11.5px; overflow-wrap: anywhere; }
+.pop .mc { width: 14px; height: 14px; color: var(--accent); flex: none; }
+.pop .mc svg { width: 14px; height: 14px; }
+.pop.wide { width: 380px; max-width: calc(100vw - 16px); padding: 2px; }
+.card.addc { border-style: dashed; color: var(--mute); justify-content: center; align-items: center; min-height: 92px; }
+.card.addc .top { justify-content: center; font-weight: 500; color: var(--fg); }
+.card.addc .sub2 { text-align: center; }
 .sp { flex: 1; }
 .round { width: 26px; height: 26px; display: grid; place-items: center; color: var(--mute); border-radius: 7px; }
 .round:hover { background: var(--hover); color: var(--fg); }
@@ -432,14 +493,16 @@ button.chip:hover { background: var(--hover); }
 .card .top { display: flex; align-items: center; gap: 8px; font-weight: 500; font-size: 13px; }
 .card .av { width: 20px; height: 20px; border-radius: 6px; font-size: 11px; }
 .card .sub2 { color: var(--mute); font-size: 12px; }
-.card .st { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--mute); }
-.card .st .g, .card .st .w { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; }
+.card .st { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--mute); line-height: 1.45; }
+.card .st > span:last-child { min-width: 0; }
+.card .st .g, .card .st .w { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; align-self: center; }
 .card .st .w { background: var(--warn); }
 .card .fix { color: var(--vscode-textLink-foreground); }
 .card.off { opacity: .85; }
 .chk { margin-left: auto; width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--line2); display: grid; place-items: center; flex: none; }
 .card.on .chk { background: var(--accent); border-color: var(--accent); color: var(--accentfg); }
-.chk svg { width: 11px; height: 11px; }
+.chk svg { width: 11px; height: 11px; visibility: hidden; }
+.card.on .chk svg { visibility: visible; }
 .hint { color: var(--mute); font-size: 12.5px; width: 100%; max-width: 740px; display: flex; gap: 16px; flex-wrap: wrap; }
 .hint b { color: var(--fg); font-weight: 500; }
 .empty { color: var(--mute); }
@@ -458,7 +521,7 @@ button.chip:hover { background: var(--hover); }
 	<div id="atts"></div>
 	<textarea id="input" rows="1" placeholder="${escapeHtml(opts.placeholder)}"></textarea>
 	<div class="brow">
-		<button class="round" id="attach">${ICONS.plus}</button>
+		<button class="round" id="attach" data-chip="attach" aria-haspopup="menu" title="${escapeHtml(opts.attach ?? 'Attach')}" aria-label="${escapeHtml(opts.attach ?? 'Attach')}">${ICONS.plus}</button>
 		<span id="chips"></span>
 		<span class="sp"></span>
 		<span id="right"></span>
@@ -473,6 +536,7 @@ button.chip:hover { background: var(--hover); }
 /** The page's script: keyed rows (an unchanged row keeps its node, so an open fold stays open), the composer, the cards. */
 const CLIENT = `
 const vscode = acquireVsCodeApi();
+${FORM_CLIENT}
 const $ = id => document.getElementById(id);
 const conv = $('conv'), rowsEl = $('rows'), liveEl = $('live'), noticeEl = $('notice'), input = $('input'), send = $('send');
 let mode = document.body.dataset.mode, busy = false, selected = null, cards = [], strings = {};
@@ -509,27 +573,98 @@ function setMode(m) {
 	else { $('compose').appendChild(box); $('compose').style.display = ''; }
 }
 function chip(c) {
-	const b = document.createElement(c.action ? 'button' : 'span');
-	b.className = 'chip' + (c.cls ? ' ' + c.cls : '');
+	const b = document.createElement(c.action || c.menu ? 'button' : 'span');
+	b.className = 'chip' + (c.cls ? ' ' + c.cls : '') + (c.key && popKey === c.key ? ' open' : '');
 	if (c.dot) { const d = document.createElement('span'); d.className = 'g ' + c.dot; b.appendChild(d); }
 	b.appendChild(document.createTextNode(c.label));
 	if (c.title) { b.title = c.title; }
-	if (c.action) { b.addEventListener('click', () => vscode.postMessage(c.action)); }
+	if (c.key) { b.dataset.chip = c.key; }
+	if (c.menu) {
+		b.setAttribute('aria-haspopup', 'menu');
+		b.addEventListener('click', () => openMenu(c.key, c.menu));
+	} else if (c.action) { b.addEventListener('click', () => vscode.postMessage(c.action)); }
 	return b;
 }
 function renderChips(left, right) {
 	$('chips').replaceChildren(...left.map(chip));
 	$('right').replaceChildren(...right.map(chip));
+	keepMenu();
 }
+// A popover stays on its anchor when the page redraws and closes when the anchor is gone; one the extension asked for opens once its anchor shows.
+let pendingOpen = null;
+function keepMenu() {
+	if (pop) { if (!document.querySelector('[data-chip="' + CSS.escape(popKey) + '"]')) { closeMenu(); } else { placeMenu(); } }
+	if (pendingOpen && document.querySelector('[data-chip="' + CSS.escape(pendingOpen.anchor) + '"]')) { const p = pendingOpen; pendingOpen = null; if (popKey !== p.anchor) { openMenu(p.anchor, p.req); } }
+}
+function openMenu(key, req) {
+	if (popKey === key) { closeMenu(); return; }
+	showMenu(key, '<div class="mh"></div>');
+	if (!pop) { return; }
+	pop.firstChild.textContent = strings.loading || '…';
+	vscode.postMessage({ type: 'menu', anchor: key, ...req });
+}
+// The composer's popover menus (model and effort, mode), anchored above their chip.
+let pop = null, popKey = null;
+function closeMenu() {
+	const form = pop && pop.querySelector('form.pf');
+	if (form && !form.dataset.done) { vscode.postMessage({ type: 'formCancel', form: form.dataset.form }); }
+	if (pop) { pop.remove(); }
+	const open = popKey && document.querySelector('[data-chip="' + CSS.escape(popKey) + '"]');
+	if (open) { open.classList.remove('open'); }
+	pop = null;
+	popKey = null;
+}
+function placeMenu() {
+	const anchor = pop && document.querySelector('[data-chip="' + CSS.escape(popKey) + '"]');
+	if (!anchor) { return; }
+	const r = anchor.getBoundingClientRect();
+	const w = pop.offsetWidth, h = pop.offsetHeight;
+	// The usable width: innerWidth counts the scrollbar, which would cover the popover's edge.
+	const vw = document.documentElement.clientWidth || window.innerWidth;
+	pop.style.left = Math.max(8, Math.min(r.left, vw - w - 8)) + 'px';
+	if (r.top - h - 6 >= 8 || r.top > window.innerHeight - r.bottom) { pop.style.top = ''; pop.style.bottom = (window.innerHeight - r.top + 6) + 'px'; }
+	else { pop.style.bottom = ''; pop.style.top = (r.bottom + 6) + 'px'; }
+}
+function showMenu(key, html) {
+	const anchor = document.querySelector('[data-chip="' + CSS.escape(key) + '"]');
+	if (!anchor) { return; }
+	if (popKey !== key) { closeMenu(); }
+	if (!pop) { pop = document.createElement('div'); pop.className = 'pop'; pop.setAttribute('role', 'menu'); document.body.appendChild(pop); }
+	popKey = key;
+	anchor.classList.add('open');
+	const old = pop.querySelector('form.pf');
+	if (old && !old.dataset.done) { vscode.postMessage({ type: 'formCancel', form: old.dataset.form }); }
+	pop.innerHTML = html;
+	const form = pop.querySelector('form.pf');
+	pop.classList.toggle('wide', !!form);
+	placeMenu();
+	if (form) { wireForm(form, m => vscode.postMessage(m)); placeMenu(); return; }
+	const first = pop.querySelector('.mi.on') || pop.querySelector('.mi');
+	if (first) { first.focus(); }
+}
+document.addEventListener('mousedown', e => { if (pop && !pop.contains(e.target) && !(e.target.closest && e.target.closest('[data-chip="' + CSS.escape(popKey) + '"]'))) { closeMenu(); } });
+window.addEventListener('resize', () => { if (pop) { placeMenu(); } });
+document.addEventListener('keydown', e => {
+	if (!pop) { return; }
+	if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); const key = popKey; closeMenu(); const a = document.querySelector('[data-chip="' + CSS.escape(key) + '"]'); if (a) { a.focus(); } return; }
+	if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !(e.target.closest && e.target.closest('.pf'))) {
+		e.preventDefault();
+		const items = [...pop.querySelectorAll('.mi')];
+		const i = items.indexOf(document.activeElement);
+		const next = items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length];
+		if (next) { next.focus(); }
+	}
+}, true);
+let addCard = null;
 function renderCards() {
 	const el = $('cards');
 	el.replaceChildren(...cards.map(c => {
 		const b = document.createElement('button');
 		b.className = 'card' + (selected.includes(c.id) ? ' on' : '') + (c.ready ? '' : ' off');
+		b.dataset.chip = 'card:' + c.id;
 		b.innerHTML = c.html;
 		b.addEventListener('click', e => {
-			if (e.target.closest('[data-fix]')) { vscode.postMessage({ type: 'fix', agentId: c.id }); return; }
-			if (!c.ready) { vscode.postMessage({ type: 'fix', agentId: c.id }); return; }
+			if (e.target.closest('[data-fix]') || !c.ready) { openMenu('card:' + c.id, { menu: 'fix', agentId: c.id }); return; }
 			selected = selected.includes(c.id) ? selected.filter(x => x !== c.id) : [...selected, c.id];
 			vscode.setState({ ...(vscode.getState() || {}), selected });
 			renderCards();
@@ -538,6 +673,18 @@ function renderCards() {
 		return b;
 	}));
 	if (!cards.length) { const p = document.createElement('p'); p.className = 'empty'; p.textContent = strings.noAgents || ''; el.replaceChildren(p); }
+	if (addCard) {
+		const b = document.createElement('button');
+		b.className = 'card addc';
+		b.dataset.chip = 'card:+add';
+		b.setAttribute('aria-haspopup', 'menu');
+		const t = document.createElement('div'); t.className = 'top'; t.textContent = addCard.label;
+		const s = document.createElement('div'); s.className = 'sub2'; s.textContent = addCard.detail || '';
+		b.append(t, s);
+		b.addEventListener('click', () => openMenu('card:+add', { menu: 'acp' }));
+		el.appendChild(b);
+	}
+	keepMenu();
 }
 let newRight = [];
 function renderNewChips() {
@@ -650,8 +797,19 @@ input.addEventListener('keydown', e => {
 });
 input.addEventListener('input', () => { grow(); vscode.setState({ ...(vscode.getState() || {}), draft: input.value }); });
 send.addEventListener('click', submit);
-$('attach').addEventListener('click', () => vscode.postMessage({ type: 'attach' }));
+$('attach').addEventListener('click', () => openMenu('attach', { menu: 'attach' }));
 document.addEventListener('click', e => {
+	const item = e.target.closest('.pop .mi[data-action]');
+	if (item) {
+		let action = {};
+		try { action = JSON.parse(item.dataset.action); } catch { /* not a choice */ }
+		if (action.type === 'menu') { const key = popKey; showMenu(key, '<div class="mh"></div>'); pop.firstChild.textContent = strings.loading || '…'; vscode.postMessage({ ...action, anchor: key }); return; }
+		closeMenu();
+		if (action.type) { vscode.postMessage(action); }
+		input.focus();
+		return;
+	}
+	if (e.target.closest('.pop')) { return; }
 	const thumb = e.target.closest('img.thumb');
 	if (thumb) { openImage(thumb.currentSrc || thumb.src, thumb.alt); return; }
 	const code = e.target.closest('[data-copycode]');
@@ -667,6 +825,8 @@ document.addEventListener('click', e => {
 	if (copy) { vscode.postMessage({ type: 'copy', id: copy.dataset.copy }); }
 	const btn = e.target.closest('[data-button]');
 	if (btn) { vscode.postMessage({ type: 'button', index: Number(btn.dataset.button) }); }
+	const cont = e.target.closest('[data-continue]');
+	if (cont) { cont.disabled = true; vscode.postMessage({ type: 'continueOn', agentId: cont.dataset.continue, to: cont.dataset.to }); }
 });
 window.addEventListener('message', e => {
 	const m = e.data;
@@ -687,8 +847,11 @@ window.addEventListener('message', e => {
 		if (mode !== 'new') { setMode('new'); }
 		strings = m.strings || strings;
 		cards = m.cards;
+		addCard = m.addCard || null;
 		const kept = (vscode.getState() || {}).selected;
 		if (selected === null || m.reset) { selected = (m.reset ? m.selected : kept || m.selected).filter(id => cards.some(c => c.id === id && c.ready)); }
+		// Nothing kept that can run: the first agent that is ready, so the page can be used at once.
+		if (!selected.length) { const first = cards.find(c => c.ready); if (first) { selected = [first.id]; } }
 		newRight = m.right || [];
 		$('hint').innerHTML = m.hint || '';
 		input.placeholder = m.placeholder || input.placeholder;
@@ -706,6 +869,18 @@ window.addEventListener('message', e => {
 		grow();
 	} else if (m.type === 'focus') {
 		input.focus();
+	} else if (m.type === 'menu') {
+		if (popKey === m.anchor) { showMenu(m.anchor, m.html || ''); }
+	} else if (m.type === 'openMenu') {
+		pendingOpen = { anchor: m.anchor, req: { menu: m.menu, ...(m.agentId ? { agentId: m.agentId } : {}) } };
+		if (popKey === m.anchor) { closeMenu(); }
+		keepMenu();
+	} else if (m.type === 'formError') {
+		const form = pop && pop.querySelector('form.pf[data-form="' + CSS.escape(m.form) + '"]');
+		if (form) { formError(form, m.field, m.message); }
+	} else if (m.type === 'formDone') {
+		const form = pop && pop.querySelector('form.pf[data-form="' + CSS.escape(m.form) + '"]');
+		if (form) { form.dataset.done = '1'; closeMenu(); input.focus(); }
 	} else if (m.type === 'attached') {
 		const a = atts.find(x => x.id === m.id);
 		if (a && m.path) { a.path = m.path; a.url = m.url || ''; a.name = m.name || a.name; if (a.url) { a.preview = undefined; } }
@@ -724,11 +899,36 @@ vscode.postMessage({ type: 'ready' });
 input.focus();
 `;
 
+/** The right panel's words for the project's shared rules and memory, already translated. */
+export interface SharedStrings {
+	readonly heading: string;
+	readonly projectRules: string;
+	readonly agentsMd: string;
+	readonly userRules: string;
+	readonly projectMemory: string;
+	readonly userMemory: string;
+	readonly remember: string;
+	/** The remember form (a textarea, Remember and Cancel). */
+	readonly form: FormSpec;
+}
+
+/** The shared rules and memory under the thread's sections: files to open, and a line every agent should know. Built once, so a half-written line survives the redraws. */
+function sharedHtml(s: SharedStrings): string {
+	const row = (key: string, label: string, project: boolean) => `<button class="rr" data-shared="${key}"${project ? ' data-project' : ''}>${ICONS.file}<span class="n">${escapeHtml(label)}</span></button>`;
+	return `<div id="shared"><div class="hr"></div><div class="rh">${escapeHtml(s.heading)}</div>`
+		+ row('projectRules', s.projectRules, true) + row('agentsMd', s.agentsMd, true) + row('userRules', s.userRules, false)
+		+ row('projectMemory', s.projectMemory, true) + row('userMemory', s.userMemory, false)
+		+ `<button class="rr" data-remember>${ICONS.plus}<span class="n">${escapeHtml(s.remember)}</span></button>`
+		+ `<div id="rememberBox" hidden>${formHtml(s.form)}</div><div id="sharedNote" class="empty" hidden></div></div>`;
+}
+
 /** The right panel's page: sections filled by messages, so its scroll stays. */
-export function detailsPage(nonce: string, fonts?: PageFonts): string {
+export function detailsPage(nonce: string, fonts?: PageFonts, shared?: SharedStrings): string {
 	return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}';${fontSrc(fonts)} script-src 'nonce-${nonce}';">
-<style nonce="${nonce}">${fontFaces(fonts)}${BASE_CSS}
+<style nonce="${nonce}">${fontFaces(fonts)}${BASE_CSS}${FORM_CSS}
+#rememberBox .pf { padding: 4px 4px 8px; min-width: 0; }
+[hidden] { display: none !important; }
 body { padding: 6px 10px 16px; }
 .rh { color: var(--mute); font-size: 12.5px; font-weight: 500; padding: 10px 4px 6px; }
 .rr { display: flex; align-items: center; gap: 10px; min-height: 30px; padding: 0 4px; font-size: 13px; white-space: nowrap; border-radius: 6px; }
@@ -751,16 +951,42 @@ button.rr:hover { background: var(--hover); }
 .st { font-size: 12px; font-weight: 600; width: 14px; text-align: center; flex: none; }
 .st.A { color: var(--ok); } .st.M { color: var(--warn); } .st.D { color: var(--err); }
 .empty { color: var(--mute); padding: 4px; font-size: 12.5px; }
-</style></head><body><div id="root"></div>
+</style></head><body><div id="root"></div>${shared ? sharedHtml(shared) : ''}
 <script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
+${FORM_CLIENT}
+const box = document.getElementById('rememberBox'), note = document.getElementById('sharedNote');
+const form = box && box.querySelector('form.pf');
+let wired = false;
+function openRemember() {
+	if (!box) { return; }
+	box.hidden = false;
+	note.hidden = true;
+	if (!wired) { wired = true; wireForm(form, m => { if (m.type === 'formCancel') { box.hidden = true; return; } vscode.postMessage(m); }); }
+	const t = form.querySelector('textarea'); if (t) { t.focus(); }
+}
 window.addEventListener('message', e => {
-	if (e.data.type === 'render') {
-		document.getElementById('root').innerHTML = e.data.html;
+	const m = e.data;
+	if (m.type === 'render') {
+		document.getElementById('root').innerHTML = m.html;
 		for (const b of document.querySelectorAll('[data-w]')) { b.style.width = b.dataset.w + '%'; }
+		for (const b of document.querySelectorAll('[data-project]')) { b.hidden = !m.project; }
+	} else if (m.type === 'rememberOpen') {
+		openRemember();
+	} else if (m.type === 'formError' && form) {
+		formError(form, m.field, m.message);
+	} else if (m.type === 'formDone' && form) {
+		form.reset();
+		form.dataset.busy = '';
+		box.hidden = true;
+		if (m.note) { note.textContent = m.note; note.hidden = false; }
 	}
 });
-document.addEventListener('click', e => { const b = e.target.closest('[data-change]'); if (b) { vscode.postMessage({ type: 'change', index: Number(b.dataset.change) }); } });
+document.addEventListener('click', e => {
+	const b = e.target.closest('[data-change]'); if (b) { vscode.postMessage({ type: 'change', index: Number(b.dataset.change) }); return; }
+	const s = e.target.closest('[data-shared]'); if (s) { vscode.postMessage({ type: 'shared', file: s.dataset.shared }); return; }
+	if (e.target.closest('[data-remember]')) { if (box.hidden) { openRemember(); } else { box.hidden = true; } }
+});
 vscode.postMessage({ type: 'ready' });
 </script></body></html>`;
 }

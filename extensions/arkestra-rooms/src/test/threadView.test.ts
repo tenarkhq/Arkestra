@@ -5,8 +5,9 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { LiveTurns, agentLabel, agentTitle, backgroundNoise, detailsModel, elapsed, folderLabel, foldLabel, machineOf, parseSlash, providerOf, threadRows, userWords } from '../threadModel';
-import { escapeHtml, liveHtml, renderMarkdown, rowHtml, type ThreadStrings } from '../threadHtml';
+import { LiveTurns, agentChip, agentLabel, agentTitle, backgroundNoise, composerRight, detailsModel, elapsed, folderLabel, foldLabel, machineOf, parseSlash, providerOf, threadRows, userWords } from '../threadModel';
+import { Script } from 'node:vm';
+import { detailsPage, escapeHtml, liveHtml, menuHtml, renderMarkdown, rowHtml, threadPage, type ThreadStrings } from '../threadHtml';
 import type { Message } from '../room';
 import type { AgentActivity } from '../activity';
 import { EMPTY_WORK } from '../work';
@@ -203,4 +204,88 @@ test('rows as HTML: the user bubble escaped, the answer with its agent and machi
 	assert.ok(live.includes('Codex · this machine'));
 	assert.ok(live.includes('<span class="pulse"></span>Bash: ls'));
 	assert.equal(escapeHtml('"\'&'), '&quot;&#39;&amp;');
+});
+
+test('composer: the agent chip with its machine, the model chip and the mode chip open popovers', () => {
+	assert.equal(agentChip('Claude', 'claude@tenark'), 'Claude · tenark');
+	assert.equal(agentChip('Claude · tenark-claude', 'claude@tenark'), 'Claude · tenark-claude');
+	assert.equal(agentChip('Claude Code · local', 'claude'), 'Claude Code');
+	const t = { models: 'Models', auto: 'Auto', plan: 'Plan', modelTitle: 'Model and effort', modeTitle: 'Permission mode' };
+	const one = composerRight({ roster: ['claude@tenark'], state: {} }, () => true, () => 'Opus 5.5 · High', t) as { key: string; label: string; menu: object }[];
+	assert.deepEqual(one.map(c => [c.key, c.label, c.menu]), [['model', 'Opus 5.5 · High', { menu: 'model', agentId: 'claude@tenark' }], ['mode', 'Auto', { menu: 'mode' }]]);
+	const two = composerRight({ roster: ['claude', 'codex'], state: { mode: 'plan' } }, () => true, () => '', t) as { label: string; menu: object }[];
+	assert.deepEqual(two.map(c => [c.label, c.menu]), [['Models', { menu: 'models' }], ['Plan', { menu: 'mode' }]]);
+	// No agent that can choose: no model chip; an empty room: no mode either.
+	assert.deepEqual(composerRight({ roster: ['acp'], state: {} }, () => false, () => '', t).map(c => (c as { key: string }).key), ['mode']);
+	assert.deepEqual(composerRight({ roster: [], state: {} }, () => true, () => '', t), []);
+});
+
+test('the popover: rows escaped, the chosen one checked, each choice carries its message; the page anchors it above the chip', () => {
+	const html = menuHtml([
+		{ kind: 'header', label: 'Model' },
+		{ label: 'Opus 5.5', detail: '<latest>', checked: true, action: { type: 'choose', agentId: 'claude', model: 'opus' } },
+		{ kind: 'sep' },
+		{ label: 'Low', action: { type: 'choose', agentId: 'claude', effort: 'low' } },
+	]);
+	assert.ok(html.startsWith('<div class="mh">Model</div>'));
+	assert.ok(html.includes('class="mi on" role="menuitemradio" aria-checked="true"'));
+	assert.ok(html.includes('&lt;latest&gt;'));
+	assert.ok(html.includes(`data-action="${escapeHtml(JSON.stringify({ type: 'choose', agentId: 'claude', model: 'opus' }))}"`));
+	assert.ok(html.includes('<div class="msep" role="separator"></div>'));
+	assert.ok(!html.split('</button>')[1].includes('<svg'), 'an unchosen row has no check');
+	const page = threadPage({ nonce: 'n', cspSource: 'c', mode: 'thread', roomId: 'r', placeholder: 'p', heading: 'h' });
+	assert.ok(page.includes('.pop {'));
+	assert.ok(page.includes('openMenu(c.key, c.menu)'));
+	assert.ok(page.includes("vscode.postMessage({ type: 'menu', anchor: key, ...req })"));
+	assert.ok(page.includes("m.type === 'menu'"));
+});
+
+test('the thread page: + agent, + and a not-ready agent open popovers where they are; a form in one answers in place', () => {
+	const page = threadPage({ nonce: 'n', cspSource: 'c', mode: 'thread', roomId: 'r', placeholder: 'p', heading: 'h', attach: 'Attach <x>' });
+	const script = /<script nonce="n">([\s\S]*?)<\/script>/.exec(page)![1];
+	assert.doesNotThrow(() => new Script(script));
+	// + is a labelled button whose popover lists what can be attached (no list at the top of the window).
+	assert.ok(page.includes('id="attach" data-chip="attach" aria-haspopup="menu" title="Attach &lt;x&gt;" aria-label="Attach &lt;x&gt;"'));
+	assert.ok(script.includes("openMenu('attach', { menu: 'attach' })"));
+	// A not-ready card opens what makes it ready, at the card; the ACP card opens its form.
+	assert.ok(script.includes("openMenu('card:' + c.id, { menu: 'fix', agentId: c.id })"));
+	assert.ok(script.includes("openMenu('card:+add', { menu: 'acp' })"));
+	// A command (the palette's Invite, an Agents tile) opens the popover once its chip shows.
+	assert.ok(script.includes("m.type === 'openMenu'") && script.includes('pendingOpen'));
+	// Forms in a popover: wired, their errors shown in place, closed when done; closing one cancels it.
+	assert.ok(script.includes('wireForm(form, m => vscode.postMessage(m))'));
+	assert.ok(script.includes("m.type === 'formError'") && script.includes("m.type === 'formDone'"));
+	assert.ok(script.includes("vscode.postMessage({ type: 'formCancel', form: form.dataset.form })"));
+	assert.ok(!script.includes("type: 'attach' }"), 'the + no longer asks the extension for a quick pick');
+});
+
+test('the right panel: the shared rules and memory open from their rows, and a line for every agent is typed in place', () => {
+	const form = { id: 'remember', fields: [{ kind: 'textarea' as const, id: 'text', label: 'What <every> agent should know' }], submit: 'Remember', cancel: 'Cancel' };
+	const page = detailsPage('n', undefined, { heading: 'Rules and memory', projectRules: 'Project rules', agentsMd: 'AGENTS.md', userRules: 'My rules', projectMemory: 'Project memory', userMemory: 'My memory', remember: 'Remember for every agent…', form });
+	assert.ok(page.includes('data-shared="projectRules" data-project') && page.includes('data-shared="userRules">'));
+	assert.ok(page.includes('data-remember') && page.includes('What &lt;every&gt; agent should know'));
+	assert.ok(page.includes('<div id="rememberBox" hidden><form class="pf" data-form="remember"'));
+	const script = /<script nonce="n">([\s\S]*?)<\/script>/.exec(page)![1];
+	assert.doesNotThrow(() => new Script(script));
+	assert.ok(script.includes("type: 'shared', file: s.dataset.shared") && script.includes("m.type === 'rememberOpen'"));
+	// Without the strings the panel is as before.
+	assert.ok(!detailsPage('n').includes('id="shared"'));
+});
+
+test('a table cell keeps the <br> line breaks agents write, and nothing else becomes HTML', () => {
+	const html = renderMarkdown('| Task / PR | Státusz |\n|---|---|\n| Task: T086<br>PR: –<br/>branch: t086 | fut<BR>~00:20 <b>x</b> |');
+	assert.match(html, /<td>Task: T086<br>PR: –<br>branch: t086<\/td>/);
+	assert.match(html, /<td>fut<br>~00:20 &lt;b&gt;x&lt;\/b&gt;<\/td>/);
+});
+
+test('table columns do not break inside words, and a wide table may grow past the text column', () => {
+	const page = threadPage({ nonce: 'n', cspSource: 'c', mode: 'thread', roomId: 'r', placeholder: 'p', heading: 'h' });
+	assert.match(page, /\.md th, \.md td \{[^}]*overflow-wrap: normal;[^}]*min-width: 5em;/);
+	assert.match(page, /\.md \.tbl \{[^}]*max-width: min\(1180px, calc\(100vw - 48px\)\);/);
+});
+
+test('new chat: only a chosen card shows its tick, and with nothing kept the first ready agent is chosen', () => {
+	const page = threadPage({ nonce: 'n', cspSource: 'c', mode: 'new', placeholder: 'p', heading: 'h' });
+	assert.ok(page.includes('.chk svg { width: 11px; height: 11px; visibility: hidden; }') && page.includes('.card.on .chk svg { visibility: visible; }'));
+	assert.ok(page.includes('if (!selected.length) { const first = cards.find(c => c.ready); if (first) { selected = [first.id]; } }'));
 });

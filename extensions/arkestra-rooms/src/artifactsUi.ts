@@ -8,11 +8,15 @@
 
 import * as vscode from 'vscode';
 import { createHash, randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { RoomState } from './room';
 import { ARTIFACT_KINDS, authorKey, authorLabels, extensionFor, filterArtifacts, roomArtifacts, type Artifact, type ArtifactVersion } from './artifacts';
 import { flowchartSvg, parseFlowchart } from './flowchart';
+import { fontFaces, fontSrc, TYPE_CSS, type PageFonts } from './fonts';
+import { FONT_ROOT, pageFonts } from './webviewFonts';
+import { machineOf } from './threadModel';
 
 const PINNED = 'arkestra.artifacts.pinned';
 /** Characters of one version sent to the gallery page (a preview, not an archive). */
@@ -21,6 +25,8 @@ const PREVIEW_LIMIT = 200_000;
 export class ArtifactGallery implements vscode.Disposable {
 	private panel: vscode.WebviewPanel | undefined;
 	private artifacts: Artifact[] = [];
+	/** Files the agents wrote, read on request (`machine\npath` → text or why not): the gallery shows and acts on them. */
+	private readonly files = new Map<string, { text?: string; error?: string }>();
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly pinsChanged = new vscode.EventEmitter<void>();
 	/** Fires when an artifact is pinned or unpinned (the left bar's Pinned list follows). */
@@ -89,7 +95,7 @@ export class ArtifactGallery implements vscode.Disposable {
 		this.panel = panel;
 		panel.iconPath = new vscode.ThemeIcon('layers');
 		const project = vscode.workspace.workspaceFolders?.[0]?.uri;
-		panel.webview.options = { enableScripts: true, localResourceRoots: project ? [project] : [] };
+		panel.webview.options = { enableScripts: true, localResourceRoots: project ? [project, FONT_ROOT] : [FONT_ROOT] };
 		panel.onDidDispose(() => { this.panel = undefined; });
 		panel.onDidChangeViewState(e => { if (e.webviewPanel.visible) { void this.render(); } });
 		panel.webview.onDidReceiveMessage(m => this.onMessage(m));
@@ -101,7 +107,20 @@ export class ArtifactGallery implements vscode.Disposable {
 		for (const room of await this.rooms()) {
 			all.push(...roomArtifacts(room, await this.reviewVersions(room)));
 		}
-		return all;
+		// A file known only by its path gets the text read for it.
+		return all.map(a => a.versions.some(v => !v.content && v.path && this.files.get(fileKey(a, v.path))?.text !== undefined)
+			? { ...a, versions: a.versions.map(v => !v.content && v.path && this.files.get(fileKey(a, v.path))?.text !== undefined ? { ...v, content: this.files.get(fileKey(a, v.path))!.text! } : v) }
+			: a);
+	}
+
+	/** Reads a file an agent wrote: here when the agent is local, over SSH when it runs on a machine. */
+	private async readWritten(a: Artifact, file: string): Promise<{ text?: string; error?: string }> {
+		const machine = machineOf(a.agentId);
+		const result: { text?: string; error?: string } = machine
+			? await Promise.resolve(vscode.commands.executeCommand<{ text?: string; error?: string } | undefined>('arkestra.connections.readFile', machine, file)).then(r => r ?? { error: vscode.l10n.t('The machine is not connected.') }, e => ({ error: e instanceof Error ? e.message : String(e) }))
+			: await readFile(file, 'utf8').then(text => ({ text }), e => ({ error: e instanceof Error ? e.message : String(e) }));
+		// Only text is shown: a picture or a binary file stays its path.
+		return result.text !== undefined && result.text.includes('\u0000') ? { error: vscode.l10n.t('It is not a text file.') } : result;
 	}
 
 	/** A brief check room's versions (v1.md, v2.md…) are one document with versions. */
@@ -135,14 +154,14 @@ export class ArtifactGallery implements vscode.Disposable {
 			items: await Promise.all(this.artifacts.map(async a => ({
 				key: a.key, kind: a.kind, title: a.title, roomId: a.roomId, roomTitle: a.roomTitle, project: a.project ?? '', agentName: a.agentName || labels.unknownAgent,
 				author: authorKey(a), authorLabel: authors.get(authorKey(a)) ?? labels.unknownAgent,
-				versions: await Promise.all(a.versions.map(async v => ({ n: v.n, at: v.at, language: v.language ?? '', content: v.content.slice(0, PREVIEW_LIMIT), src: a.kind === 'image' ? this.imageSrc(panel.webview, v) : undefined, svg: a.kind === 'diagram' ? diagramSvg(v.content) : undefined }))),
+				versions: await Promise.all(a.versions.map(async v => ({ n: v.n, at: v.at, language: v.language ?? '', content: v.content.slice(0, PREVIEW_LIMIT), url: v.url ?? '', path: v.path ?? '', readError: !v.content && v.path ? this.files.get(fileKey(a, v.path))?.error ?? '' : '', src: a.kind === 'image' ? this.imageSrc(panel.webview, v) : undefined, svg: a.kind === 'diagram' ? diagramSvg(v.content) : undefined }))),
 			}))),
 			labels,
 			select: this.selectNext,
 		};
 		this.selectNext = undefined;
 		if (full || !panel.webview.html) {
-			panel.webview.html = galleryHtml(panel.webview.cspSource);
+			panel.webview.html = galleryHtml(panel.webview.cspSource, pageFonts(panel.webview));
 		}
 		void panel.webview.postMessage({ type: 'data', data });
 	}
@@ -167,10 +186,11 @@ export class ArtifactGallery implements vscode.Disposable {
 		return {
 			title: vscode.l10n.t('Artifacts'), subtitle: vscode.l10n.t('Every agent\'s output of every thread in one place'), search: vscode.l10n.t('Search'),
 			project: vscode.l10n.t('Project'), all: vscode.l10n.t('All'), noProject: vscode.l10n.t('No project'), kind: vscode.l10n.t('Kind'), agent: vscode.l10n.t('Agent'),
-			pinnedFirst: vscode.l10n.t('Pinned ones on top'), pinnedGroup: vscode.l10n.t('Pinned'), unknownAgent: vscode.l10n.t('Unknown'), thisMachine: vscode.l10n.t('this machine'), empty: vscode.l10n.t('No artifacts yet. Diagrams, documents, pages, code and images the agents write in any thread show up here.'),
+			pinnedFirst: vscode.l10n.t('Pinned ones on top'), pinnedGroup: vscode.l10n.t('Pinned'), unknownAgent: vscode.l10n.t('Unknown'), thisMachine: vscode.l10n.t('this machine'), empty: vscode.l10n.t('No artifacts yet. The pages, documents and pictures the agents write, the artifacts they publish, their diagrams and long code show up here; commands and short snippets stay in the thread.'),
 			noMatch: vscode.l10n.t('Nothing matches the filters.'), pin: vscode.l10n.t('Pin'), unpin: vscode.l10n.t('Unpin'), openTab: vscode.l10n.t('Open in a tab'), thread: vscode.l10n.t('Go to the thread'),
 			send: vscode.l10n.t('Send to the room as an @-reference'), copy: vscode.l10n.t('Copy'), versions: vscode.l10n.t('Versions'), version: vscode.l10n.t('version {0}'), pick: vscode.l10n.t('Pick an artifact on the left.'),
 			mermaid: vscode.l10n.t('This diagram kind is shown as its mermaid source; flowcharts are drawn.'), source: vscode.l10n.t('Source'), kinds, kindOrder: ARTIFACT_KINDS,
+			openUrl: vscode.l10n.t('Open on claude.ai'), published: vscode.l10n.t('Published on claude.ai'), onlyPath: vscode.l10n.t('The agent wrote this file on its machine; its text is not known here.'), reading: vscode.l10n.t('Reading the file from the agent\'s machine…'), readFailed: vscode.l10n.t('The file could not be read: {0}'),
 		};
 	}
 
@@ -199,6 +219,15 @@ export class ArtifactGallery implements vscode.Disposable {
 		if (m.type === 'thread' && m.roomId) {
 			return this.openThread(m.roomId);
 		}
+		if (m.type === 'fetch' && m.key) {
+			const a = this.artifacts.find(x => x.key === m.key);
+			const v = a && (a.versions.find(x => x.n === m.n) ?? a.versions.at(-1));
+			if (a && v?.path && !v.content && !this.files.has(fileKey(a, v.path))) {
+				this.files.set(fileKey(a, v.path), await this.readWritten(a, v.path));
+				return this.render();
+			}
+			return;
+		}
 		const found = m.key ? this.find(m.key, m.n) : undefined;
 		if (!found) {
 			return;
@@ -220,7 +249,23 @@ export class ArtifactGallery implements vscode.Disposable {
 				await vscode.env.clipboard.writeText(v.content);
 				void vscode.window.setStatusBarMessage(vscode.l10n.t('Copied: {0}', a.title), 2000);
 				return;
+			case 'openUrl':
+				if (v.url && /^https:\/\/claude\.ai\//.test(v.url)) {
+					await vscode.env.openExternal(vscode.Uri.parse(v.url));
+				}
+				return;
 			case 'openTab': {
+				if (!v.content) {
+					// Only its path is known: the file itself when it is on this machine, else its address.
+					if (v.path && existsSync(v.path)) {
+						await vscode.window.showTextDocument(vscode.Uri.file(v.path), { preview: false });
+					} else if (v.url) {
+						await vscode.env.openExternal(vscode.Uri.parse(v.url));
+					} else {
+						void vscode.window.showInformationMessage(vscode.l10n.t('{0} is on the agent\'s machine: {1}', a.title, v.path ?? ''));
+					}
+					return;
+				}
 				const uri = await this.save(a, v);
 				if (a.kind === 'document') {
 					await vscode.commands.executeCommand('markdown.showPreview', uri);
@@ -245,40 +290,67 @@ export class ArtifactGallery implements vscode.Disposable {
 	}
 }
 
-function galleryHtml(cspSource: string): string {
+export function galleryHtml(cspSource: string, fonts?: PageFonts): string {
 	const nonce = randomBytes(16).toString('base64');
 	return `<!DOCTYPE html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource} data: https:; style-src ${cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}'; frame-src 'self' data:;">
-<style nonce="${nonce}">
-	body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); margin: 0; }
-	.wrap { display: grid; grid-template-columns: minmax(260px, 380px) 1fr; height: 100vh; }
-	.left { border-right: 1px solid var(--vscode-panel-border); overflow: auto; padding: 12px; display: grid; gap: 12px; align-content: start; }
-	.right { overflow: auto; padding: 16px 20px; min-width: 0; }
-	h1 { font-size: 1.3em; margin: 0; } .mut { color: var(--vscode-descriptionForeground); }
-	input[type=search] { width: 100%; box-sizing: border-box; padding: 4px 8px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, transparent); }
-	.chips { display: flex; flex-wrap: wrap; gap: 4px; } .chips b { width: 100%; font-weight: 600; font-size: .9em; }
-	.chip { border: 1px solid var(--vscode-panel-border); border-radius: 10px; padding: 1px 8px; cursor: pointer; background: none; color: inherit; font: inherit; }
-	.chip.on { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: transparent; }
-	.group { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; color: color-mix(in srgb, var(--vscode-descriptionForeground) 70%, transparent); font-size: 12px; padding: 10px 2px 0; }
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource} data: https:; style-src ${cspSource} 'nonce-${nonce}';${fontSrc(fonts)} script-src 'nonce-${nonce}'; frame-src 'self' data:;">
+<style nonce="${nonce}">${fontFaces(fonts)}
+	/* The approved render's look, as the Machines and Boards pages have it. */
+	:root {
+		--fg: var(--vscode-editor-foreground, var(--vscode-foreground));
+		--mute: var(--vscode-descriptionForeground);
+		--dim: color-mix(in srgb, var(--vscode-descriptionForeground) 70%, transparent);
+		--line: var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+		--hover: var(--vscode-list-hoverBackground);
+		--sel: var(--vscode-list-inactiveSelectionBackground);
+	}
+	html, body { margin: 0; padding: 0; background: var(--vscode-editor-background); color: var(--fg); }
+	body { ${TYPE_CSS} font-size: 13px; }
+	.wrap { display: grid; grid-template-columns: minmax(280px, 400px) 1fr; height: 100vh; }
+	.left { border-right: 1px solid var(--line); overflow: auto; padding: 28px 20px 32px 28px; display: flex; flex-direction: column; gap: 12px; }
+	/* A long list scrolls; the header, search and chips above it keep their height. */
+	.left > * { flex: none; }
+	.right { overflow: auto; padding: 28px 32px 40px; min-width: 0; }
+	h1 { font-size: 22px; font-weight: 600; letter-spacing: -.01em; margin: 0 0 4px; }
+	.right h1 { font-size: 18px; }
+	.mut { color: var(--mute); } .sub { color: var(--mute); line-height: 1.5; }
+	button { font: inherit; color: inherit; }
+	.search { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 11px; border-radius: 9px; background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--line)); }
+	.search:focus-within { border-color: var(--vscode-focusBorder); }
+	.search svg { width: 15px; height: 15px; color: var(--mute); flex: none; }
+	.search input { flex: 1; min-width: 0; border: 0; padding: 0; background: transparent; color: var(--vscode-input-foreground, var(--fg)); font: inherit; font-size: 13.5px; outline: none; }
+	.search input::placeholder { color: var(--dim); }
+	.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+	.chips b { font-weight: 500; font-size: 12px; color: var(--mute); margin-right: 4px; }
+	.chip { height: 26px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--line); background: transparent; cursor: pointer; font-size: 12.5px; color: var(--fg); }
+	.chip:hover { background: var(--hover); }
+	.chip.on { background: var(--sel); border-color: var(--vscode-focusBorder); }
+	.chip:focus-visible, .btn:focus-visible, .card:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+	.group { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; color: var(--dim); font-size: 12px; font-weight: 500; padding: 10px 2px 0; }
 	.group span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.card { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 8px 10px; cursor: pointer; display: grid; gap: 2px; }
-	.card.sel { outline: 1px solid var(--vscode-focusBorder); }
-	.card pre { margin: 4px 0 0; max-height: 4.5em; overflow: hidden; font-size: .85em; opacity: .8; }
-	.kind { font-size: .8em; text-transform: uppercase; letter-spacing: .04em; }
-	.bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 12px; }
-	button.act { font: inherit; padding: 3px 10px; border: 0; border-radius: 4px; cursor: pointer; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
-	button.act:hover { background: var(--vscode-button-secondaryHoverBackground); }
-	.versions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
-	.preview pre { white-space: pre-wrap; background: var(--vscode-textCodeBlock-background); padding: 10px; border-radius: 4px; overflow: auto; }
-	.preview iframe { width: 100%; height: 70vh; border: 1px solid var(--vscode-panel-border); background: white; }
-	.preview img { max-width: 100%; }
+	.card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; display: grid; gap: 3px; min-width: 0; }
+	.card:hover { background: var(--hover); }
+	.card.sel { background: var(--sel); border-color: var(--vscode-focusBorder); }
+	.card b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.card .mut { font-size: 12px; }
+	.card pre { margin: 4px 0 0; max-height: 4.5em; overflow: hidden; font-size: 11.5px; color: var(--mute); font-family: var(--vscode-editor-font-family); }
+	.kind { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
+	.bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 16px; }
+	.btn { display: inline-flex; align-items: center; height: 28px; padding: 0 11px; border-radius: 7px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; white-space: nowrap; font-size: 12.5px; }
+	.btn:hover { background: var(--hover); }
+	.versions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+	.versions b { font-weight: 500; font-size: 12px; color: var(--mute); margin-right: 4px; }
+	.preview { line-height: 1.6; }
+	.preview pre { white-space: pre-wrap; background: var(--vscode-textCodeBlock-background); padding: 12px 14px; border-radius: 9px; overflow: auto; font-family: var(--vscode-editor-font-family); font-size: 12.5px; line-height: 1.5; }
+	.preview iframe { width: 100%; height: 70vh; border: 1px solid var(--line); border-radius: 9px; background: white; }
+	.preview img { max-width: 100%; border-radius: 9px; }
 	.diagram { overflow: auto; padding: 8px 0; }
 	.flowchart .node { fill: var(--vscode-editorWidget-background); stroke: var(--vscode-focusBorder); stroke-width: 1.2; }
-	.flowchart .nlabel { fill: var(--vscode-foreground); font-size: 12px; }
-	.flowchart .edge { stroke: var(--vscode-descriptionForeground); stroke-width: 1.4; }
+	.flowchart .nlabel { fill: var(--fg); font-size: 12px; }
+	.flowchart .edge { stroke: var(--mute); stroke-width: 1.4; }
 	.flowchart .edge.dashed { stroke-dasharray: 4 3; }
-	.flowchart .arrow { fill: var(--vscode-descriptionForeground); }
-	.flowchart .elabel { fill: var(--vscode-descriptionForeground); font-size: 11px; }
+	.flowchart .arrow { fill: var(--mute); }
+	.flowchart .elabel { fill: var(--mute); font-size: 11px; }
 	a { color: var(--vscode-textLink-foreground); cursor: pointer; }
 </style></head><body><div class="wrap"><div class="left" id="left"></div><div class="right" id="right"></div></div>
 <script nonce="${nonce}">
@@ -286,6 +358,8 @@ function galleryHtml(cspSource: string): string {
 	const st = Object.assign({ query: '', project: '', kinds: [], agents: [], pinnedFirst: true, sel: undefined, ver: undefined }, vscode.getState() || {});
 	let data = { items: [], pinned: [], labels: {} };
 	const rendered = new Map();
+	// Written files asked for once (key#n): the extension reads them from the agent's machine.
+	const asked = new Set();
 	const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 	const latest = a => a.versions[a.versions.length - 1];
 	const save = () => vscode.setState(st);
@@ -310,19 +384,19 @@ function galleryHtml(cspSource: string): string {
 		const agents = [...new Set(data.items.map(a => a.agentName.replace(/ ·.*$/, '').replace(/ #\\d+$/, '')))];
 		const items = list();
 		// Under its author's header a card needs no author; among the pinned it does.
-		const card = (a, withAuthor) => { const v = latest(a); return '<div class="card' + (a.key === st.sel ? ' sel' : '') + '" data-key="' + esc(a.key) + '"><span class="kind mut">' + esc(L.kinds[a.kind]) + '</span><b>' + esc(a.title) + '</b><span class="mut">' + (withAuthor ? esc(a.authorLabel) + ' · ' : '') + esc(a.roomTitle) + ' · ' + esc(time(v.at)) + (a.versions.length > 1 ? ' · v' + a.versions.length : '') + '</span>' + (a.kind === 'code' || a.kind === 'diagram' ? '<pre>' + esc(v.content.split('\\n').slice(0, 4).join('\\n')) + '</pre>' : '') + '</div>'; };
+		const card = (a, withAuthor) => { const v = latest(a); return '<div class="card' + (a.key === st.sel ? ' sel' : '') + '" tabindex="0" role="button" data-key="' + esc(a.key) + '"><span class="kind mut">' + esc(L.kinds[a.kind]) + '</span><b>' + esc(a.title) + '</b><span class="mut">' + (withAuthor ? esc(a.authorLabel) + ' · ' : '') + esc(a.roomTitle) + ' · ' + esc(time(v.at)) + (a.versions.length > 1 ? ' · v' + a.versions.length : '') + '</span>' + (a.kind === 'code' || a.kind === 'diagram' ? '<pre>' + esc(v.content.split('\\n').slice(0, 4).join('\\n')) + '</pre>' : '') + '</div>'; };
 		const header = (label, n) => '<div class="group"><span>' + esc(label) + '</span><span>' + n + '</span></div>';
 		const top = st.pinnedFirst ? items.filter(a => pinned.has(a.key)) : [];
 		const rest = st.pinnedFirst ? items.filter(a => !pinned.has(a.key)) : items;
 		// By author, the one with the newest artifact first (the list is newest first).
 		const byAuthor = new Map();
 		for (const a of rest) { if (!byAuthor.has(a.author)) byAuthor.set(a.author, { label: a.authorLabel, items: [] }); byAuthor.get(a.author).items.push(a); }
-		document.getElementById('left').innerHTML = '<div><h1>' + esc(L.title) + '</h1><div class="mut">' + esc(L.subtitle) + '</div></div>'
-			+ '<input type="search" id="q" placeholder="' + esc(L.search) + '" value="' + esc(st.query) + '">'
+		document.getElementById('left').innerHTML = '<div><h1>' + esc(L.title) + '</h1><div class="sub">' + esc(L.subtitle) + '</div></div>'
+			+ '<label class="search"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3" stroke-linecap="round"/></svg><input type="search" id="q" placeholder="' + esc(L.search) + '" value="' + esc(st.query) + '"></label>'
 			+ (projects.length > 1 || projects[0] ? chips(L.project, [{ value: '', label: L.all }, ...projects.filter(Boolean).map(p => ({ value: p, label: p.split(/[\\\\/]/).pop() }))], st.project, false, 'project') : '')
 			+ chips(L.kind, L.kindOrder.map(k => ({ value: k, label: L.kinds[k] })), st.kinds, true, 'kinds')
 			+ (agents.length ? chips(L.agent, agents.map(a => ({ value: a, label: a })), st.agents, true, 'agents') : '')
-			+ '<label><input type="checkbox" id="pf"' + (st.pinnedFirst ? ' checked' : '') + '> ' + esc(L.pinnedFirst) + '</label>'
+			+ '<div class="chips"><button class="chip' + (st.pinnedFirst ? ' on' : '') + '" id="pf" aria-pressed="' + st.pinnedFirst + '">' + esc(L.pinnedFirst) + '</button></div>'
 			+ (!data.items.length ? '<p class="mut">' + esc(L.empty) + '</p>' : !items.length ? '<p class="mut">' + esc(L.noMatch) + '</p>' : '')
 			+ (top.length ? header(L.pinnedGroup, top.length) + top.map(a => card(a, true)).join('') : '')
 			+ [...byAuthor.values()].map(g => header(g.label, g.items.length) + g.items.map(a => card(a, false)).join('')).join('');
@@ -336,18 +410,22 @@ function galleryHtml(cspSource: string): string {
 		const v = a.versions.find(x => x.n === st.ver) || latest(a);
 		const isPinned = data.pinned.includes(a.key);
 		let preview = '';
-		if (a.kind === 'page') preview = '<iframe sandbox="" srcdoc="' + esc(v.content) + '"></iframe>';
+		if (!v.content && v.path && !v.url && !v.readError && !asked.has(a.key + '#' + v.n)) { asked.add(a.key + '#' + v.n); vscode.postMessage({ type: 'fetch', key: a.key, n: v.n }); }
+		if (!v.content && (v.url || v.path)) preview = (v.url ? '<p><a data-act="openUrl">' + esc(v.url) + '</a></p>' : '') + (v.path ? '<p class="mut">' + esc(v.path) + (v.url ? '' : ' · ' + esc(v.readError ? L.readFailed.replace('{0}', v.readError) : asked.has(a.key + '#' + v.n) ? L.reading : L.onlyPath)) + '</p>' : '');
+		else if (a.kind === 'page') preview = '<iframe sandbox="" srcdoc="' + esc(v.content) + '"></iframe>';
 		else if (a.kind === 'image') preview = v.src ? '<img src="' + esc(v.src) + '" alt="' + esc(a.title) + '">' : '<pre>' + esc(v.content) + '</pre>';
 		else if (a.kind === 'document') { const r = rendered.get(a.key + '#' + v.n); if (r === undefined) { vscode.postMessage({ type: 'render', key: a.key, n: v.n }); preview = '<pre>' + esc(v.content) + '</pre>'; } else preview = r || '<pre>' + esc(v.content) + '</pre>'; }
 		else if (a.kind === 'diagram' && v.svg) preview = '<div class="diagram">' + v.svg + '</div><details><summary class="mut">' + esc(L.source) + '</summary><pre>' + esc(v.content) + '</pre></details>';
 		else preview = (a.kind === 'diagram' ? '<p class="mut">' + esc(L.mermaid) + '</p>' : '') + '<pre>' + esc(v.content) + '</pre>';
 		right.innerHTML = '<h1>' + esc(a.title) + (isPinned ? ' <span class="mut">· ' + esc(L.pinnedGroup) + '</span>' : '') + '</h1>'
 			+ '<div class="mut">' + esc(a.authorLabel) + ' · ' + esc(a.roomTitle) + ' · ' + esc(L.version.replace('{0}', v.n)) + ' · ' + esc(time(v.at)) + ' · <a data-act="thread">' + esc(L.thread) + '</a></div>'
-			+ '<div class="bar"><button class="act" data-act="pin">' + esc(isPinned ? L.unpin : L.pin) + '</button><button class="act" data-act="openTab">' + esc(L.openTab) + '</button><button class="act" data-act="send">' + esc(L.send) + '</button><button class="act" data-act="copy">' + esc(L.copy) + '</button></div>'
+			+ (v.path && v.content ? '<div class="mut">' + esc(v.path) + '</div>' : '')
+			+ '<div class="bar">' + (v.url ? '<button class="btn" data-act="openUrl" title="' + esc(L.published) + '">' + esc(L.openUrl) + '</button>' : '') + '<button class="btn" data-act="pin">' + esc(isPinned ? L.unpin : L.pin) + '</button><button class="btn" data-act="openTab">' + esc(L.openTab) + '</button><button class="btn" data-act="send">' + esc(L.send) + '</button><button class="btn" data-act="copy">' + esc(L.copy) + '</button></div>'
 			+ '<div class="preview">' + preview + '</div>'
 			+ (a.versions.length > 1 ? '<div class="versions"><b>' + esc(L.versions) + '</b>' + a.versions.map(x => '<button class="chip' + (x.n === v.n ? ' on' : '') + '" data-ver="' + x.n + '">v' + x.n + ' · ' + esc(time(x.at)) + '</button>').join('') + '</div>' : '');
 	}
 	document.addEventListener('click', e => {
+		if (e.target.closest('#pf')) { st.pinnedFirst = !st.pinnedFirst; save(); draw(); return; }
 		const t = e.target.closest('[data-f],[data-key],[data-act],[data-ver]');
 		if (!t) return;
 		if (t.dataset.f) { const f = t.dataset.f, v = t.dataset.v; if (f === 'project') st.project = v; else { const arr = st[f]; const i = arr.indexOf(v); i >= 0 ? arr.splice(i, 1) : arr.push(v); } save(); draw(); return; }
@@ -360,7 +438,7 @@ function galleryHtml(cspSource: string): string {
 		else vscode.postMessage({ type: t.dataset.act, key: a.key, n: v.n });
 	});
 	document.addEventListener('input', e => { if (e.target.id === 'q') { st.query = e.target.value; save(); const pos = e.target.selectionStart; draw(); const q = document.getElementById('q'); q.focus(); q.setSelectionRange(pos, pos); } });
-	document.addEventListener('change', e => { if (e.target.id === 'pf') { st.pinnedFirst = e.target.checked; save(); draw(); } });
+	document.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && e.target.classList.contains('card')) { e.preventDefault(); e.target.click(); } });
 	window.addEventListener('message', e => {
 		const m = e.data;
 		if (m.type === 'data') {
@@ -371,6 +449,11 @@ function galleryHtml(cspSource: string): string {
 		if (m.type === 'rendered') { rendered.set(m.key + '#' + m.n, m.html); drawDetail(); }
 	});
 </script></body></html>`;
+}
+
+/** A written file's key in the read cache: the agent's machine and the path. */
+function fileKey(a: Artifact, file: string): string {
+	return `${machineOf(a.agentId) ?? ''}\n${file}`;
 }
 
 /** A flowchart drawn as SVG; other mermaid kinds stay source. */

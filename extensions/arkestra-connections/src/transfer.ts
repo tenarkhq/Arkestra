@@ -71,6 +71,14 @@ export function joinRemote(dir: string, name: string): string {
 	return dir === '~' ? `~/${name}` : `${dir.replace(/\/+$/, '')}/${name}`;
 }
 
+/** The folder one up from a remote folder (`~` and `~/…` through `..`, as the shell resolves them); none above `/`. */
+export function remoteParent(dir: string): string | undefined {
+	if (dir === '/') {
+		return undefined;
+	}
+	return dir === '~' || dir.startsWith('~/') ? joinRemote(dir, '..') : path.posix.dirname(dir.replace(/\/+$/, '') || '/');
+}
+
 /** The remote side of an upload: the folder is created, the tar stream unpacked into it. */
 export function untarScript(remoteDir: string): string {
 	const dir = remotePath(remoteDir);
@@ -123,6 +131,21 @@ export function runRemote(machine: Machine, script: string, options: TransferOpt
 		child.on('error', e => { clearTimeout(timer); resolve({ ok: false, out, err: e.message }); });
 		child.on('close', code => { clearTimeout(timer); resolve({ ok: code === 0, out, err }); });
 	});
+}
+
+/** The remote read of a text file: at most `max` bytes; exit 3 when it is not a file. */
+export function readScript(remoteFile: string, max: number): string {
+	const file = remotePath(remoteFile);
+	return `[ -f ${file} ] || { echo 'No such file.' >&2; exit 3; }; head -c ${Math.max(1, Math.floor(max))} -- ${file}`;
+}
+
+/** A remote file's text (its first `max` bytes); throws with the remote error when it cannot be read. */
+export async function readRemote(machine: Machine, remoteFile: string, options: TransferOptions, max = 512 * 1024): Promise<string> {
+	const r = await runRemote(machine, readScript(remoteFile, max), options);
+	if (!r.ok) {
+		throw new Error(r.err.trim().split('\n').at(-1) || 'cat failed');
+	}
+	return r.out;
 }
 
 /** A remote folder's entries; throws with the remote error when it cannot be read. */
