@@ -513,6 +513,7 @@ button.chip:hover { background: var(--hover); }
 .empty { color: var(--mute); }
 .compose { position: relative; }
 .down { position: absolute; top: -42px; left: 50%; transform: translateX(-50%); width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: var(--fg); background: var(--vscode-editor-background); border: 1px solid var(--line2); box-shadow: 0 2px 8px rgba(0,0,0,.18); z-index: 5; }
+.down[hidden] { display: none; }
 .down:hover { background: var(--hover); }
 .down svg { width: 15px; height: 15px; }
 @media (max-width: 520px) { .col, .compose { padding-left: 16px; padding-right: 16px; } .um { max-width: 94%; } }

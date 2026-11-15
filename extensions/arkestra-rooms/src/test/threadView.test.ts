@@ -298,3 +298,9 @@ test('a bold bare link stays a working link: the ** around it is bold, not part 
 	assert.ok(html.includes('<strong><a href="https://claude.ai/artifact/5UxaAw2bVtbp54yDBeeXjQ">https://claude.ai/artifact/5UxaAw2bVtbp54yDBeeXjQ</a></strong>'), html);
 	assert.ok(renderMarkdown('see https://x.io/a_b.').includes('href="https://x.io/a_b"'));
 });
+
+test('the jump-to-end button really hides: its own display does not win over [hidden]', () => {
+	const page = threadPage({ nonce: 'n', cspSource: 'c', mode: 'thread', roomId: 'r', placeholder: 'p', heading: 'h', down: 'Jump to the end' });
+	assert.ok(page.includes('<button class="down" id="down" hidden title="Jump to the end"'));
+	assert.ok(page.includes('.down[hidden] { display: none; }'));
+});
