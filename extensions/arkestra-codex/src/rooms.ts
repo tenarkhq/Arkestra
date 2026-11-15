@@ -107,6 +107,8 @@ export interface Agent {
 	watchSession?(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string, meta?: SessionMeta, lines?: readonly string[]) => void, cursor?: string): { dispose(): void };
 	/** The account's quota windows now (the share used of a week, of five hours), as its vendor's app shows them; none: not known. */
 	quota?(): Promise<readonly { readonly label: string; readonly usedPercent: number; readonly resetsAt?: string }[]>;
+	/** What a session's folder on the agent's machine has changed in git (files, added and removed lines; `?`: new), as the apps count it. */
+	worktreeChanges?(cwd: string): Promise<readonly { readonly path: string; readonly added?: number; readonly removed?: number; readonly status: 'M' | '?' }[]>;
 	/** Each session's turn on the agent's machine as it changes, live (whoever drives it); `at`: epoch seconds of its last write. */
 	watchStates?(onState: (s: { readonly id: string; readonly state: 'run' | 'idle'; readonly at: number; readonly doing?: string; readonly bg?: readonly { readonly id: string; readonly name: string; readonly since: string }[]; readonly done?: number }) => void): { dispose(): void };
 }

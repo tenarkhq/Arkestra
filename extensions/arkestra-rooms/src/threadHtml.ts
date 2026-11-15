@@ -970,6 +970,8 @@ button.rr:hover { background: var(--hover); }
 .rr .n { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .rr .k { color: var(--dim); font-size: 12px; }
 .rr.mut { color: var(--mute); }
+.rr .add { color: var(--vscode-gitDecoration-addedResourceForeground, #2f9e5b); }
+.rr .del { color: var(--vscode-gitDecoration-deletedResourceForeground, #d64545); }
 /* The agents' dots, the same as the left bar's: runs (pulses), waits for you, stuck; idle and done are quiet. */
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; position: relative; opacity: .55; }
 .dot.working, .dot.waiting, .dot.error, .dot.queued { opacity: 1; }

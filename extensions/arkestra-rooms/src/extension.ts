@@ -925,6 +925,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}
 		return known?.limits;
 	};
+	/** The adopted sessions' folders' git changes as last read, per set of folders. */
+	const worktrees = new Map<string, { at: number; changes: readonly { path: string; added?: number; removed?: number; status: 'M' | '?' }[] }>();
 	// The right panel shows the context fill the account reports as soon as the list is read.
 	context.subscriptions.push(cloudReadDone.event(() => {
 		const roomId = threads.activeRoomId();
@@ -945,6 +947,22 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		liveRunning: (room, agentId) => {
 			const link = room.state.adopted?.[agentId];
 			return !!link && liveSessions.get(link.session)?.state === 'run';
+		},
+		worktreeChanges: async room => {
+			const links = Object.entries(room.state.adopted ?? {}).filter(([id, l]) => l.cwd && registry.get(id)?.worktreeChanges);
+			if (!links.length) {
+				return undefined;
+			}
+			const key = links.map(([id, l]) => `${id}:${l.cwd}`).join('|');
+			const known = worktrees.get(key);
+			if (known && Date.now() - known.at < 15_000) {
+				return known.changes;
+			}
+			const read = await Promise.all(links.map(([id, l]) => registry.get(id)!.worktreeChanges!(l.cwd!).catch(() => [])));
+			const seen = new Set<string>();
+			const changes = read.flat().filter(c => !seen.has(c.path) && seen.add(c.path));
+			worktrees.set(key, { at: Date.now(), changes });
+			return changes;
 		},
 		liveBackground: (room, agentId) => {
 			const link = room.state.adopted?.[agentId];

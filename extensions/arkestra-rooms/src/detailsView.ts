@@ -42,6 +42,8 @@ export interface DetailsHost {
 	cloudContext(room: Room, agentId: string): { readonly used: number; readonly max: number } | undefined;
 	/** The agent's session in this room works on a turn now, as its file shows live (driven from its own app too). */
 	liveRunning?(room: Room, agentId: string): boolean;
+	/** What the folders of the room's adopted sessions changed in git (read again at most every 15 s); undefined: none to read. */
+	worktreeChanges?(room: Room): Promise<readonly { readonly path: string; readonly added?: number; readonly removed?: number; readonly status: 'M' | '?' }[] | undefined>;
 	/** The background tasks of the agent's session in this room as its file shows them (started from its own app too), and how many finished. */
 	liveBackground?(room: Room, agentId: string): { readonly tasks: readonly { readonly id: string; readonly name: string; readonly since: string }[]; readonly done: number } | undefined;
 }
@@ -214,12 +216,25 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 		parts.push(tasks.length ? tasks.join('') : empty(vscode.l10n.t('Nothing in the background.')));
 
 		parts.push('<div class="hr"></div>', head(vscode.l10n.t('Changes')));
-		parts.push(changes.length
-			? changes.map((c, i) => {
+		// No checkpoint of its own: an adopted session's folder as its app counts it (git against the last commit).
+		const tree = changes.length ? undefined : await this.host.worktreeChanges?.(room).catch(() => undefined);
+		if (tree?.length) {
+			const added = tree.reduce((n, c) => n + (c.added ?? 0), 0);
+			const removed = tree.reduce((n, c) => n + (c.removed ?? 0), 0);
+			parts.push(`<div class="rr mut"><span class="n">${escapeHtml(vscode.l10n.t(tree.length === 1 ? '{0} file changed' : '{0} files changed', tree.length))}</span><span class="k"><span class="add">+${added}</span> <span class="del">−${removed}</span></span></div>`);
+			parts.push(tree.slice(0, 60).map(c => {
 				const dir = path.posix.dirname(c.path);
-				return `<button class="rr" data-change="${i}" title="${escapeHtml(c.path)}">${ICONS.file}<span class="n">${escapeHtml(path.posix.basename(c.path))}</span>${dir !== '.' ? `<span class="k">${escapeHtml(dir)}</span>` : ''}<span class="st ${c.status}">${c.status}</span></button>`;
-			}).join('')
-			: empty(vscode.l10n.t('No changes since the last accepted state.')));
+				const counts = c.status === '?' ? '<span class="st A">new</span>' : `<span class="k"><span class="add">+${c.added ?? '·'}</span> <span class="del">−${c.removed ?? '·'}</span></span>`;
+				return `<div class="rr" title="${escapeHtml(c.path)}">${ICONS.file}<span class="n">${escapeHtml(path.posix.basename(c.path))}</span>${dir !== '.' ? `<span class="k">${escapeHtml(dir)}</span>` : ''}${counts}</div>`;
+			}).join(''));
+		} else {
+			parts.push(changes.length
+				? changes.map((c, i) => {
+					const dir = path.posix.dirname(c.path);
+					return `<button class="rr" data-change="${i}" title="${escapeHtml(c.path)}">${ICONS.file}<span class="n">${escapeHtml(path.posix.basename(c.path))}</span>${dir !== '.' ? `<span class="k">${escapeHtml(dir)}</span>` : ''}<span class="st ${c.status}">${c.status}</span></button>`;
+				}).join('')
+				: empty(vscode.l10n.t('No changes since the last accepted state.')));
+		}
 
 		parts.push('<div class="hr"></div>', head(vscode.l10n.t('Environment')));
 		const machines = new Map<string, string>();

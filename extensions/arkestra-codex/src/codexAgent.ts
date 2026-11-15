@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 import * as path from 'node:path';
 import type { Agent, AgentChoices, AgentEvent, ExistingSession, Message, PermissionRequest, Readiness, SessionEntry, SessionHistory, SessionMeta, TurnInput, Usage, WorkUpdate } from './rooms';
 import { RpcClient, type Notification } from './rpc';
+import { parseWorktree, worktreeScript, type WorktreeChange } from './worktree';
 import { watchLocal as watchLocalStates, watchRemote as watchRemoteStates, type LiveState } from './liveStates';
 import { LineSplitter, followLocal, followRemote } from './follow';
 import { RolloutHistory, checkThreadId, codexImages, codexMeta, codexPiece, codexToolLine, codexUserText, latestTokenCountScript, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript, rolloutLimits, type RolloutRead } from './codexFollow';
@@ -307,6 +308,12 @@ export class CodexAgent implements Agent {
 		const script = latestTokenCountScript(['~/.codex', this.options.apiKeyHome]);
 		const out = this.options.spawn ? await this.shell(script, 20_000) : await localShell(script, 20_000);
 		return rolloutLimits(out.trim(), windowLabel);
+	}
+
+	/** What a session's folder on this agent's machine has changed (git), as the Codex app counts it. */
+	async worktreeChanges(cwd: string): Promise<readonly WorktreeChange[]> {
+		const script = worktreeScript(cwd);
+		return parseWorktree(this.options.spawn ? await this.shell(script, 20_000) : await localShell(script, 20_000));
 	}
 
 	/** Each thread's turn on this agent's machine, live, from its rollout file (the left bar's dots). */

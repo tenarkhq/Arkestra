@@ -10,6 +10,7 @@ import { ClaudeHistory, LIST_SCRIPT, claudeMeta, claudePiece, claudeToolLine, lo
 import { followLocal, followRemote } from './follow';
 import { CloudClient, CREDENTIALS_SCRIPT } from './cloud';
 import { watchLocal, watchRemote, type LiveState } from './liveStates';
+import { parseWorktree, worktreeScript, type WorktreeChange } from './worktree';
 import { readFile as readFileAsync } from 'node:fs/promises';
 import * as nodePath from 'node:path';
 
@@ -290,6 +291,21 @@ export class ClaudeCodeAgent implements Agent {
 
 	/** The sessions Claude Code has on this agent's machine (AR39). */
 	/** Each session on this agent's machine as it starts and ends a turn, live. */
+	/** What a session's folder on this agent's machine has changed (git), as the Claude app counts it. */
+	async worktreeChanges(cwd: string): Promise<readonly WorktreeChange[]> {
+		const script = worktreeScript(cwd);
+		const out = this.options.spawn ? await this.shell(script, 20_000) : await new Promise<string>(resolve => {
+			const child = nodeSpawn('sh', ['-c', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+			let text = '';
+			const timer = setTimeout(() => child.kill('SIGKILL'), 20_000);
+			child.stdout?.setEncoding('utf8');
+			child.stdout?.on('data', (c: string) => { text += c; });
+			child.on('error', () => { clearTimeout(timer); resolve(''); });
+			child.on('close', () => { clearTimeout(timer); resolve(text); });
+		});
+		return parseWorktree(out);
+	}
+
 	watchStates(onState: (s: LiveState) => void): { dispose(): void } {
 		return this.options.spawn ? watchRemote(this.options.spawn, onState) : watchLocal(homedir(), onState);
 	}
