@@ -8,6 +8,7 @@ import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import * as path from 'node:path';
 import type { ExistingSession } from './agent';
+import type { ListedSession } from './sessionHome';
 import { addSection, deleteSection, keepThreads, layoutThreads, matches, moveSection, moveThread, parseSections, renameSection, sectionOf, sectionsFromCategories, shiftSection, type Section } from './sections';
 import { sidebarHtml, type SidebarMessage, type SidebarModel, type SidebarRow, type SidebarStrings } from './sidebarHtml';
 import { FONT_ROOT, pageFonts } from './webviewFonts';
@@ -23,7 +24,8 @@ export interface SidebarBoard { readonly key: string; readonly title: string; re
 export interface MachineSessions {
 	readonly id: string;
 	readonly name: string;
-	sessions(): Promise<readonly ExistingSession[]>;
+	/** Newest first; this machine's list leaves out the copies an SSH machine has and marks the others. */
+	sessions(): Promise<readonly ListedSession[]>;
 }
 
 /** What the page shows, fed by the extension. */
@@ -322,7 +324,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			try {
 				const sessions = await agent.sessions();
 				qp.items = sessions.length
-					? sessions.map(session => ({ label: session.title, description: [session.cwd ? path.posix.basename(session.cwd) : '', when(session.updatedAt)].filter(Boolean).join(' · '), session }))
+					? sessions.map(({ elsewhere, ...session }) => ({ label: session.title, description: [session.cwd ? path.posix.basename(session.cwd) : '', when(session.updatedAt), elsewhere ? vscode.l10n.t('copy from another machine') : ''].filter(Boolean).join(' · '), session }))
 					: [{ label: vscode.l10n.t('No sessions on this machine') }];
 			} catch (error) {
 				qp.items = [{ label: vscode.l10n.t('Could not read the sessions: {0}', error instanceof Error ? error.message : String(error)) }];

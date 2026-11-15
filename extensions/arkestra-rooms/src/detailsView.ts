@@ -14,7 +14,8 @@ import type { Change } from './checkpoints';
 import type { Room } from './room';
 import { ICONS, detailsPage, escapeHtml } from './threadHtml';
 import { detailsModel, folderLabel, machineOf } from './threadModel';
-import { tone } from './usage';
+import { formatTokens, tone } from './usage';
+import { sessionContext } from './sessionHome';
 import { FONT_ROOT, pageFonts } from './webviewFonts';
 import { TURN_TEXT } from './work';
 
@@ -155,9 +156,13 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 			...(folder ? [`<div class="rr" title="${escapeHtml(folder)}">${ICONS.folder}<span class="n">${escapeHtml(folder)}</span></div>`] : []),
 		];
 		parts.push(env.length ? env.join('') : empty(vscode.l10n.t('No machine or folder yet.')));
+		// A followed session's file tells how many tokens its context holds, not its window: the count, not a percentage.
+		const sessionTokens = model.context === undefined ? sessionContext(room.state, room.roster) : undefined;
 		parts.push(model.context !== undefined
 			? `<div class="rr"><span class="n">${escapeHtml(vscode.l10n.t('Context'))}</span><span class="k">${model.context}%</span><span class="bar ${tone(model.context)}"><b data-w="${model.context}"></b></span></div>`
-			: `<div class="rr mut"><span class="n">${escapeHtml(vscode.l10n.t('Context'))}</span><span class="k">${escapeHtml(vscode.l10n.t('not reported yet'))}</span></div>`);
+			: sessionTokens !== undefined
+				? `<div class="rr"><span class="n">${escapeHtml(vscode.l10n.t('Context'))}</span><span class="k">${escapeHtml(vscode.l10n.t('{0} tokens', formatTokens(sessionTokens)))}</span></div>`
+				: `<div class="rr mut"><span class="n">${escapeHtml(vscode.l10n.t('Context'))}</span><span class="k">${escapeHtml(vscode.l10n.t('not reported yet'))}</span></div>`);
 		void view.webview.postMessage({ type: 'render', html: parts.join('') });
 	}
 }

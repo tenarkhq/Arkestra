@@ -4,7 +4,7 @@
 
 import type { TemplateState } from './templates/types';
 import type { BestRun } from './best';
-import type { Agent, AgentEvent, AgentRegistry, ExistingSession, Readiness, SessionEntry, SessionHistory } from './agent';
+import type { Agent, AgentEvent, AgentRegistry, ExistingSession, Readiness, SessionEntry, SessionHistory, SessionMeta } from './agent';
 
 export type AuthorKind = 'user' | 'agent' | 'system';
 
@@ -52,7 +52,24 @@ export interface RoomState {
 	 * last message imported from it (everything up to there the session already holds), and
 	 * where the live follow goes on (the agent's own cursor).
 	 */
-	adopted?: Record<string, { readonly session: string; readonly cwd?: string; readonly upTo: string; readonly cursor?: string }>;
+	adopted?: Record<string, AdoptedSession>;
+}
+
+/** An existing CLI session a thread continues (AR39). */
+export interface AdoptedSession {
+	readonly session: string;
+	readonly cwd?: string;
+	readonly upTo: string;
+	readonly cursor?: string;
+	/**
+	 * The model the session's latest answer came from (`claude-opus-5-5`): the thread's model for
+	 * that agent while the user has chosen none (the composer shows it, the next turn runs on it).
+	 */
+	readonly model?: string;
+	/** Tokens in the session's context at its latest answer, as its file tells it. */
+	readonly context?: number;
+	/** The agent's history reader the thread was last read with (`Agent.historyVersion`). */
+	readonly version?: number;
 }
 
 export class AgentNotReadyError extends Error {
@@ -162,7 +179,7 @@ export class Room {
 	 * entries are appended, an answer that grew is updated in place, an entry the thread already
 	 * has is not added again (by its id). The cursor is kept for the next follow.
 	 */
-	followed(agentId: string, entries: readonly SessionEntry[], cursor?: string): void {
+	followed(agentId: string, entries: readonly SessionEntry[], cursor?: string, meta?: SessionMeta): void {
 		const adopted = this.state.adopted?.[agentId];
 		if (!adopted) {
 			return;
@@ -188,8 +205,9 @@ export class Room {
 			}
 			changed = true;
 		}
-		if (cursor !== undefined && cursor !== adopted.cursor) {
-			this.state.adopted = { ...this.state.adopted, [agentId]: { ...adopted, cursor } };
+		const next = withMeta(cursor !== undefined && cursor !== adopted.cursor ? { ...adopted, cursor } : adopted, meta);
+		if (next !== adopted) {
+			this.state.adopted = { ...this.state.adopted, [agentId]: next };
 			changed = true;
 		}
 		if (changed) {
@@ -214,7 +232,9 @@ export class Room {
 				agent.adoptSession(this.id, { id: adopted.session, ...(adopted.cwd ? { cwd: adopted.cwd } : {}) }, seenBy(this.state.messages, agent.id, adopted.upTo));
 			}
 			const choice = this.state.choices?.[agent.id];
-			await agent.turn({ roomId: this.id, transcript: [...this.state.messages], ...(this.state.mode === 'plan' ? { mode: 'plan' as const } : {}), ...(shared ? { shared } : {}), ...(choice?.model ? { model: choice.model } : {}), ...(choice?.effort ? { effort: choice.effort } : {}) }, event => {
+			// No model chosen here: an adopted session goes on with the model it has been running.
+			const model = choice?.model ?? adopted?.model;
+			await agent.turn({ roomId: this.id, transcript: [...this.state.messages], ...(this.state.mode === 'plan' ? { mode: 'plan' as const } : {}), ...(shared ? { shared } : {}), ...(model ? { model } : {}), ...(choice?.effort ? { effort: choice.effort } : {}) }, event => {
 				if (event.kind === 'text') {
 					reply += reply ? `\n\n${event.text}` : event.text;
 				}
@@ -263,9 +283,52 @@ function sessionMessage(agent: { id: string; name: string }, e: SessionEntry, no
 	return { id: newId(), at, author, text: e.text, ...(e.id ? { source: { agent: agent.id, entry: e.id } } : {}) };
 }
 
+/** The adopted session with what its file says now; the same object when nothing changed. */
+export function withMeta(adopted: AdoptedSession, meta: SessionMeta | undefined): AdoptedSession {
+	const model = meta?.model && meta.model !== adopted.model ? meta.model : undefined;
+	const context = meta?.context && meta.context !== adopted.context ? meta.context : undefined;
+	return model || context ? { ...adopted, ...(model ? { model } : {}), ...(context ? { context } : {}) } : adopted;
+}
+
+/**
+ * A session read again (a newer reader, or the machine that really has it) into a thread that
+ * already holds part of it: entries it has are brought up to date (an answer split by a message
+ * sent mid-turn, a line now read as a notice), those it lacks go in after the entry before them
+ * in the session; the thread's own messages stay where they are. True when something changed.
+ */
+export function mergeHistory(state: RoomState, agent: { readonly id: string; readonly name: string }, entries: readonly SessionEntry[], now: () => Date = () => new Date()): boolean {
+	const messages = state.messages;
+	const indexOf = (entry: string) => messages.findIndex(m => m.source?.agent === agent.id && m.source.entry === entry);
+	const first = messages.findIndex(m => m.source?.agent === agent.id);
+	// The first entries the thread lacks go before the session's first message in it (after the note that it was continued here).
+	let at = first >= 0 ? first - 1 : messages.length - 1;
+	let changed = false;
+	for (const e of entries) {
+		if (!e.id) {
+			continue;
+		}
+		const fresh = sessionMessage(agent, e, now);
+		const i = indexOf(e.id);
+		if (i < 0) {
+			messages.splice(at + 1, 0, fresh);
+			at++;
+			changed = true;
+			continue;
+		}
+		const old = messages[i];
+		if (old.text !== e.text || old.author.kind !== fresh.author.kind) {
+			messages[i] = { ...old, text: e.text, author: fresh.author };
+			changed = true;
+		}
+		at = i;
+	}
+	return changed;
+}
+
 /** What an agent's sessionHistory gave: its entries, and the follow cursor when it has one (an older agent gives a list). */
 export function sessionHistoryOf(read: readonly SessionEntry[] | SessionHistory | undefined): SessionHistory {
-	return Array.isArray(read) ? { entries: read } : { entries: (read as SessionHistory | undefined)?.entries ?? [], ...(typeof (read as SessionHistory | undefined)?.cursor === 'string' ? { cursor: (read as SessionHistory).cursor } : {}) };
+	const history = Array.isArray(read) ? undefined : read as SessionHistory | undefined;
+	return Array.isArray(read) ? { entries: read } : { entries: history?.entries ?? [], ...(typeof history?.cursor === 'string' ? { cursor: history.cursor } : {}), ...(history?.meta ? { meta: history.meta } : {}) };
 }
 
 /**
@@ -273,8 +336,8 @@ export function sessionHistoryOf(read: readonly SessionEntry[] | SessionHistory 
  * in it. The history's cursor is kept for the live follow, which then starts exactly after what
  * was imported; without one it starts at the session's end when the thread is first followed.
  */
-export function importedRoomState(agent: { id: string; name: string }, session: ExistingSession, history: readonly SessionEntry[] | SessionHistory, project?: string, now: () => Date = () => new Date()): RoomState {
-	const { entries, cursor } = sessionHistoryOf(history);
+export function importedRoomState(agent: { id: string; name: string; historyVersion?: number }, session: ExistingSession, history: readonly SessionEntry[] | SessionHistory, project?: string, now: () => Date = () => new Date()): RoomState {
+	const { entries, cursor, meta } = sessionHistoryOf(history);
 	const state = newRoomState(session.title, project);
 	const at = (e: SessionEntry) => e.at && !Number.isNaN(Date.parse(e.at)) ? new Date(e.at).toISOString() : now().toISOString();
 	state.roster.push(agent.id);
@@ -282,6 +345,7 @@ export function importedRoomState(agent: { id: string; name: string }, session: 
 	for (const e of entries) {
 		state.messages.push(sessionMessage(agent, e, now));
 	}
-	state.adopted = { [agent.id]: { session: session.id, ...(session.cwd ? { cwd: session.cwd } : {}), upTo: state.messages.at(-1)!.id, ...(cursor !== undefined ? { cursor } : {}) } };
+	const link: AdoptedSession = { session: session.id, ...(session.cwd ? { cwd: session.cwd } : {}), upTo: state.messages.at(-1)!.id, ...(cursor !== undefined ? { cursor } : {}), ...(agent.historyVersion !== undefined ? { version: agent.historyVersion } : {}) };
+	state.adopted = { [agent.id]: withMeta(link, meta) };
 	return state;
 }
