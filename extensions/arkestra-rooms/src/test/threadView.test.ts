@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { LiveTurns, agentLabel, agentTitle, backgroundNoise, detailsModel, elapsed, folderLabel, foldLabel, machineOf, parseSlash, providerOf, threadRows, userWords } from '../threadModel';
-import { escapeHtml, liveHtml, renderMarkdown, rowHtml, type ThreadStrings } from '../threadHtml';
+import { escapeHtml, liveHtml, renderMarkdown, rowHtml, threadPage, type ThreadStrings } from '../threadHtml';
 import type { Message } from '../room';
 import type { AgentActivity } from '../activity';
 import { EMPTY_WORK } from '../work';
@@ -203,4 +203,16 @@ test('rows as HTML: the user bubble escaped, the answer with its agent and machi
 	assert.ok(live.includes('Codex · this machine'));
 	assert.ok(live.includes('<span class="pulse"></span>Bash: ls'));
 	assert.equal(escapeHtml('"\'&'), '&quot;&#39;&amp;');
+});
+
+test('a table cell keeps the <br> line breaks agents write, and nothing else becomes HTML', () => {
+	const html = renderMarkdown('| Task / PR | Státusz |\n|---|---|\n| Task: T086<br>PR: –<br/>branch: t086 | fut<BR>~00:20 <b>x</b> |');
+	assert.match(html, /<td>Task: T086<br>PR: –<br>branch: t086<\/td>/);
+	assert.match(html, /<td>fut<br>~00:20 &lt;b&gt;x&lt;\/b&gt;<\/td>/);
+});
+
+test('table columns do not break inside words, and a wide table may grow past the text column', () => {
+	const page = threadPage({ nonce: 'n', cspSource: 'c', mode: 'thread', roomId: 'r', placeholder: 'p', heading: 'h' });
+	assert.match(page, /\.md th, \.md td \{[^}]*overflow-wrap: normal;[^}]*min-width: 5em;/);
+	assert.match(page, /\.md \.tbl \{[^}]*max-width: min\(1180px, calc\(100vw - 48px\)\);/);
 });
