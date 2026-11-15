@@ -281,7 +281,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 				return;
 			}
 			case 'boards':
-				await vscode.commands.executeCommand('arkestra.github.openBoard', '');
+				await vscode.commands.executeCommand('arkestra.github.openBoards');
 				return;
 			case 'artifacts':
 				await vscode.commands.executeCommand('arkestra.artifacts.open');

@@ -13,18 +13,14 @@ import { graphqlClient } from './graphql';
 import { PROJECT_LIST_QUERY, parseProjectList, parseProjectRef, type FieldInput, type ProjectChoice, type ProjectSnapshot } from './project';
 import { ProjectSync, type JournalEntry, type SyncStatus } from './sync';
 import { ProjectBoards, type BoardLease, type BoardSource } from './boardView';
+import { boardKey, cacheKey as boardCacheKey, seedBoards, type BoardEntry } from './boards';
+import { BoardsPage } from './boardsPage';
 import { RemoteControl } from './remoteUi';
 
 const TOKEN = 'arkestra.github.relayToken';
 const SCOPES = ['repo', 'read:org', 'project'];
 
-export interface BoardEntry {
-	/** "owner/number" in lower case. */
-	readonly key: string;
-	readonly title: string;
-	readonly workspace: boolean;
-	readonly pinned: boolean;
-}
+export type { BoardEntry } from './boards';
 
 export interface ArkestraGitHubApi {
 	readonly onEvent: vscode.Event<RelayEvent>;
@@ -36,7 +32,7 @@ export interface ArkestraGitHubApi {
 	/** The workspace's GitHub Project, as last read (with changes on their way applied). */
 	project(): ProjectSnapshot | undefined;
 	readonly onDidChangeProject: vscode.Event<ProjectSnapshot>;
-	/** The boards to list: the workspace's project first, then the pinned ones. */
+	/** Every board added: the workspace's project first, then the others (pinned or not). */
 	boards(): readonly BoardEntry[];
 	readonly onDidChangeBoards: vscode.Event<void>;
 	syncStatus(): SyncStatus;
@@ -358,6 +354,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 		if (!x) {
 			const ref = parseProjectRef(key)!;
 			const changed = new vscode.EventEmitter<void>();
+			changed.event(() => tilesChanged.fire());
 			const entry = { status: { kind: 'idle' } as SyncStatus, users: 0, changed, sync: undefined as unknown as ProjectSync };
 			const cache = cacheKey(ref.owner, ref.number);
 			let timer: ReturnType<typeof setTimeout> | undefined;
@@ -423,67 +420,102 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 	};
 	const PINS = 'arkestra.github.pinnedProjects';
 	const pins = () => context.globalState.get<string[]>(PINS) ?? [];
+	/** Every board added on the Boards page besides the workspace's own, by "owner/number" (lower case). */
+	const ADDED = 'arkestra.github.boards';
+	const added = () => context.globalState.get<string[]>(ADDED) ?? seedBoards(pins(), context.globalState.keys());
 	const boardsChanged = new vscode.EventEmitter<void>();
+	/** Anything a tile of the Boards page shows changed. */
+	const tilesChanged = new vscode.EventEmitter<void>();
+	const snapshotOf = (key: string): ProjectSnapshot | undefined => key === workspaceRef() ? sync?.snapshot : extra.get(key)?.sync.snapshot ?? context.globalState.get<ProjectSnapshot>(boardCacheKey(key));
 	const boardList = (): BoardEntry[] => {
 		const own = workspaceRef();
-		const titleOf = (key: string) => {
-			const ref = parseProjectRef(key);
-			const snap = key === own ? sync?.snapshot : extra.get(key)?.sync.snapshot ?? (ref ? context.globalState.get<ProjectSnapshot>(cacheKey(ref.owner, ref.number)) : undefined);
-			return snap?.title ?? key;
-		};
+		const titleOf = (key: string) => snapshotOf(key)?.title ?? key;
 		return [
 			...(own ? [{ key: own, title: titleOf(own), workspace: true, pinned: pins().includes(own) }] : []),
-			...pins().filter(k => k !== own).map(k => ({ key: k, title: titleOf(k), workspace: false, pinned: true })),
+			...added().filter(k => k !== own).map(k => ({ key: k, title: titleOf(k), workspace: false, pinned: pins().includes(k) })),
 		];
+	};
+	const setPinned = async (ref: string, pinned: boolean) => {
+		const key = ref.toLowerCase();
+		if (pinned && key !== workspaceRef() && !added().includes(key)) {
+			await context.globalState.update(ADDED, [...added(), key]);
+		}
+		await context.globalState.update(PINS, pinned ? [...new Set([...pins(), key])] : pins().filter(p => p !== key));
+		boardsChanged.fire();
+	};
+	/** Boards read once for their tile (not open anywhere): released when the read ends. */
+	const reading = new Set<string>();
+	const readOnce = (key: string) => {
+		if (reading.has(key) || extra.has(key) || key === workspaceRef() || !parseProjectRef(key)) {
+			return;
+		}
+		reading.add(key);
+		const lease = otherProject(key);
+		const done = async () => {
+			if (!reading.delete(key)) {
+				return;
+			}
+			sub.dispose();
+			clearTimeout(limit);
+			const snap = lease.source.snapshot();
+			if (snap && added().includes(key)) {
+				await context.globalState.update(boardCacheKey(key), snap);
+			}
+			lease.release();
+			tilesChanged.fire();
+		};
+		const sub = lease.source.onDidChange(() => { const st = lease.source.status(); if (st.kind === 'synced' || st.kind === 'error') { void done(); } });
+		const limit = setTimeout(() => void done(), 60_000);
+		tilesChanged.fire();
 	};
 	const boards = new ProjectBoards({
 		acquire: ref => !ref || ref === workspaceRef() ? { source: workspaceSource, release: () => undefined } : otherProject(ref),
 		isPinned: ref => pins().includes(ref),
 		isWorkspace: ref => ref.toLowerCase() === workspaceRef(),
-		setPinned: async (ref, pinned) => { await context.globalState.update(PINS, pinned ? [...new Set([...pins(), ref])] : pins().filter(p => p !== ref)); boardsChanged.fire(); },
+		setPinned,
+		// "+ Board" on a board: the Boards page with its add form open, no quick pick.
 		pick: async () => {
-			type Pick = vscode.QuickPickItem & { ref?: string; workspace?: true; manual?: true };
-			const own = workspaceRef();
-			let projects: ProjectChoice[] = [];
-			let listError: string | undefined;
-			try {
-				token ??= await githubToken(true);
-				projects = parseProjectList(await graphqlClient(async () => token)(PROJECT_LIST_QUERY, {}));
-			} catch (error) {
-				listError = error instanceof Error ? error.message : String(error);
-			}
-			const keyOf = (p: ProjectChoice) => `${p.owner.toLowerCase()}/${p.number}`;
-			const titleOf = (key: string) => projects.find(p => keyOf(p) === key)?.title ?? key;
-			const pinned = pins().filter(k => k !== own);
-			const items: Pick[] = [
-				...(own ? [{ label: `$(home) ${titleOf(own)}`, description: `${own} · ${vscode.l10n.t('this workspace')}${pins().includes(own) ? ` · ${vscode.l10n.t('pinned')}` : ''}`, workspace: true as const }] : []),
-				...pinned.map(k => ({ label: `$(pinned) ${titleOf(k)}`, description: `${k} · ${vscode.l10n.t('pinned')}`, ref: k })),
-				{ label: '', kind: vscode.QuickPickItemKind.Separator },
-				...projects.filter(p => keyOf(p) !== own && !pinned.includes(keyOf(p))).map(p => ({ label: p.title, description: `${keyOf(p)}${p.closed ? ` · ${vscode.l10n.t('closed')}` : ''}`, ref: keyOf(p) })),
-				{ label: `$(edit) ${vscode.l10n.t('Enter owner/number or a project URL…')}`, ...(listError ? { detail: vscode.l10n.t('The list could not be read: {0}', listError) } : {}), manual: true },
-			];
-			const pick = await vscode.window.showQuickPick(items, { title: vscode.l10n.t('Open a board'), placeHolder: vscode.l10n.t('Pinned boards first; several can be open at once'), matchOnDescription: true });
-			if (!pick) {
-				return undefined;
-			}
-			if (pick.workspace) {
-				return { ref: undefined };
-			}
-			if (pick.ref) {
-				return { ref: pick.ref };
-			}
-			const text = await vscode.window.showInputBox({
-				title: vscode.l10n.t('Open a board'),
-				prompt: vscode.l10n.t('owner/number or the project\'s URL'),
-				placeHolder: 'tenarkhq/3',
-				validateInput: v => parseProjectRef(v) ? undefined : vscode.l10n.t('owner/number, e.g. tenarkhq/3, or https://github.com/orgs/<org>/projects/<n>'),
-			});
-			const ref = text ? parseProjectRef(text) : undefined;
-			return ref ? { ref: `${ref.owner.toLowerCase()}/${ref.number}` } : undefined;
+			await vscode.commands.executeCommand('arkestra.github.openBoards', { add: true });
+			return undefined;
 		},
 	}, context.workspaceState);
+	const boardsPage = new BoardsPage({
+		list: boardList,
+		snapshot: snapshotOf,
+		status: key => key === workspaceRef() ? syncStatus : extra.get(key)?.status,
+		read: readOnce,
+		onDidChange: tilesChanged.event,
+		add: async text => {
+			const key = boardKey(text);
+			if (!key) {
+				throw new Error(vscode.l10n.t('owner/number, e.g. tenarkhq/3, or https://github.com/orgs/<org>/projects/<n>'));
+			}
+			if (key !== workspaceRef() && !added().includes(key)) {
+				await context.globalState.update(ADDED, [...added(), key]);
+			}
+			boardsChanged.fire();
+			readOnce(key);
+		},
+		remove: async key => {
+			await context.globalState.update(ADDED, added().filter(k => k !== key));
+			await context.globalState.update(PINS, pins().filter(k => k !== key));
+			await context.globalState.update(boardCacheKey(key), undefined);
+			boardsChanged.fire();
+		},
+		setPinned,
+		projects: async () => {
+			token ??= await githubToken(false);
+			if (!token) {
+				throw new Error(vscode.l10n.t('not signed in to GitHub'));
+			}
+			return parseProjectList(await graphqlClient(async () => token)(PROJECT_LIST_QUERY, {}));
+		},
+	});
 	context.subscriptions.push(
-		boardChanged, boards, boardsChanged,
+		boardChanged, boards, boardsChanged, tilesChanged, boardsPage,
+		boardsChanged.event(() => tilesChanged.fire()),
+		syncChanged.event(() => tilesChanged.fire()),
+		projectChanged.event(() => tilesChanged.fire()),
 		projectChanged.event(() => boardsChanged.fire()),
 		projectChanged.event(() => boardChanged.fire()),
 		syncChanged.event(() => boardChanged.fire()),
