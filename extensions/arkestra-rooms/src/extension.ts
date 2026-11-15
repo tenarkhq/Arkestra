@@ -278,10 +278,11 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			room.touch();
 		}
 	};
-	// An SSH machine's agent comes after the thread opened: a copy's thread can move to it now.
+	// An SSH machine's agent comes after the thread opened: a copy's thread can move to it now, and
+	// a thread an older reader imported reads its session again with the agent's newer reader.
 	context.subscriptions.push(registry.onDidChange(() => {
 		for (const room of loaded.values()) {
-			if (Object.entries(room.state.adopted ?? {}).some(([id, link]) => isForeign(id, link.cwd, localFolder))) {
+			if (Object.entries(room.state.adopted ?? {}).some(([id, link]) => isForeign(id, link.cwd, localFolder) || (registry.get(id)?.historyVersion ?? 1) > (link.version ?? 1))) {
 				const next = (healing.get(room.id) ?? Promise.resolve()).then(() => heal(room)).catch(() => undefined).finally(() => follow.refresh(room));
 				healing.set(room.id, next);
 			}
