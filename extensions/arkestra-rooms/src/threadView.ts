@@ -650,8 +650,8 @@ export class ThreadViews implements vscode.Disposable {
 		const where = machine ? `${agent.name.split(' · ')[1] ?? machine} · SSH` : vscode.l10n.t('this machine');
 		const fix = readiness.actions?.[0]?.title;
 		const state = readiness.ready
-			? `<span class="g"></span>${escapeHtml(vscode.l10n.t('ready'))}`
-			: `<span class="w"></span>${escapeHtml(readiness.reason ?? vscode.l10n.t('not ready'))}${fix ? ` · <span class="fix" data-fix="1">${escapeHtml(fix)}</span>` : ''}`;
+			? `<span class="g"></span><span>${escapeHtml(vscode.l10n.t('ready'))}</span>`
+			: `<span class="w"></span><span>${escapeHtml(readiness.reason ?? vscode.l10n.t('not ready'))}${fix ? ` · <span class="fix" data-fix="1">${escapeHtml(fix)}</span>` : ''}</span>`;
 		const title = agentTitle(agent.name);
 		return `<div class="top"><i class="av ${providerOf(agent.id)}">${escapeHtml((title[0] ?? '?').toUpperCase())}</i>${escapeHtml(title)}<span class="chk">${ICONS.check}</span></div>`
 			+ `<div class="sub2">${escapeHtml(where)}</div><div class="st">${state}</div>`;

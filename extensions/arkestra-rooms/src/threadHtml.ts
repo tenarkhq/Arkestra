@@ -493,14 +493,16 @@ button.chip:hover { background: var(--hover); }
 .card .top { display: flex; align-items: center; gap: 8px; font-weight: 500; font-size: 13px; }
 .card .av { width: 20px; height: 20px; border-radius: 6px; font-size: 11px; }
 .card .sub2 { color: var(--mute); font-size: 12px; }
-.card .st { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--mute); }
-.card .st .g, .card .st .w { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; }
+.card .st { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--mute); line-height: 1.45; }
+.card .st > span:last-child { min-width: 0; }
+.card .st .g, .card .st .w { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; align-self: center; }
 .card .st .w { background: var(--warn); }
 .card .fix { color: var(--vscode-textLink-foreground); }
 .card.off { opacity: .85; }
 .chk { margin-left: auto; width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--line2); display: grid; place-items: center; flex: none; }
 .card.on .chk { background: var(--accent); border-color: var(--accent); color: var(--accentfg); }
-.chk svg { width: 11px; height: 11px; }
+.chk svg { width: 11px; height: 11px; visibility: hidden; }
+.card.on .chk svg { visibility: visible; }
 .hint { color: var(--mute); font-size: 12.5px; width: 100%; max-width: 740px; display: flex; gap: 16px; flex-wrap: wrap; }
 .hint b { color: var(--fg); font-weight: 500; }
 .empty { color: var(--mute); }
@@ -846,6 +848,8 @@ window.addEventListener('message', e => {
 		addCard = m.addCard || null;
 		const kept = (vscode.getState() || {}).selected;
 		if (selected === null || m.reset) { selected = (m.reset ? m.selected : kept || m.selected).filter(id => cards.some(c => c.id === id && c.ready)); }
+		// Nothing kept that can run: the first agent that is ready, so the page can be used at once.
+		if (!selected.length) { const first = cards.find(c => c.ready); if (first) { selected = [first.id]; } }
 		newRight = m.right || [];
 		$('hint').innerHTML = m.hint || '';
 		input.placeholder = m.placeholder || input.placeholder;

@@ -283,3 +283,9 @@ test('table columns do not break inside words, and a wide table may grow past th
 	assert.match(page, /\.md th, \.md td \{[^}]*overflow-wrap: normal;[^}]*min-width: 5em;/);
 	assert.match(page, /\.md \.tbl \{[^}]*max-width: min\(1180px, calc\(100vw - 48px\)\);/);
 });
+
+test('new chat: only a chosen card shows its tick, and with nothing kept the first ready agent is chosen', () => {
+	const page = threadPage({ nonce: 'n', cspSource: 'c', mode: 'new', placeholder: 'p', heading: 'h' });
+	assert.ok(page.includes('.chk svg { width: 11px; height: 11px; visibility: hidden; }') && page.includes('.card.on .chk svg { visibility: visible; }'));
+	assert.ok(page.includes('if (!selected.length) { const first = cards.find(c => c.ready); if (first) { selected = [first.id]; } }'));
+});
