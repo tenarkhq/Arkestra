@@ -16,7 +16,7 @@ import { FormRequests, formHtml, type FormSpec } from './pageForm';
 import type { Room } from './room';
 import { ICONS, escapeHtml, liveHtml, menuHtml, renderMarkdown, rowHtml, threadPage, type ThreadStrings } from './threadHtml';
 import { FONT_ROOT, pageFonts } from './webviewFonts';
-import { LabelCache, agentChip, agentTitle, composerRight, machineOf, parseSlash, providerOf, threadRows, userWords, type LiveTurns, type Row } from './threadModel';
+import { LabelCache, agentChip, agentTitle, composerRight, machineOf, parseSlash, providerOf, threadRows, userWords, withoutSteps, type LiveTurns, type Row } from './threadModel';
 import { projectName, titleFrom } from './threads';
 import { surfaceOf, type Surface } from './surface';
 import { turnState } from './work';
@@ -55,6 +55,8 @@ export interface ThreadHost {
 	sessionElsewhere?(room: Room, agentId: string): Promise<{ readonly id: string; readonly machine: string } | undefined>;
 	/** Moves the thread from this computer's agent to that SSH agent and reads the session there. */
 	continueOn?(room: Room, from: string, to: string): Promise<void>;
+	/** The room's adopted sessions whose turn runs now, driven from their own app too, and what each does (the live line). */
+	sessionLive?(room: Room): readonly { readonly agentId: string; readonly doing?: string }[];
 	/** Invites a ready agent into the room (it receives the thread from the beginning). */
 	invite(room: Room, agentId: string): Promise<unknown>;
 }
@@ -479,7 +481,10 @@ export class ThreadViews implements vscode.Disposable {
 			rows.push({ key: 'pending', html: rowHtml({ type: 'user', id: 'pending', at: '', text: view.pending.text, attached: 0 }, s, renderMarkdown, '', image) });
 		}
 		const parts = this.host.live.parts(room.id);
-		const live = parts.map(p => ({ key: `live:${p.agentId}`, html: liveHtml(p, this.host.registry.get(p.agentId)?.name ?? p.agentId, s, image) }));
+		// A turn of the session that runs in its own app (the Claude app, the Codex app, a terminal): its live line too.
+		const outside = (this.host.sessionLive?.(room) ?? []).filter(o => !parts.some(p => p.agentId === o.agentId) && this.host.activity.get(room.id, o.agentId).state === 'idle')
+			.map(o => ({ agentId: o.agentId, text: '', ...(o.doing ? { tool: o.doing } : {}), since: '' }));
+		const live = [...parts, ...outside].map(p => ({ key: `live:${p.agentId}`, html: liveHtml(p, this.host.registry.get(p.agentId)?.name ?? p.agentId, s, image) }));
 		const turns = room.roster.map(id => { const a = this.host.activity.get(room.id, id); return turnState(a.state, a.work, a.error, !!a.ran); });
 		const busy = !!view.sending || parts.length > 0 || turns.some(t => t === 'working' || t === 'waiting' || t === 'queued');
 		const chips: object[] = room.roster.map((id, i) => {
@@ -789,7 +794,7 @@ export class ThreadViews implements vscode.Disposable {
 				if (view.roomId && typeof message.id === 'string') {
 					const found = (await this.host.open(view.roomId))?.messages.find(m => m.id === message.id);
 					// The user's own words as the bubble shows them, without what an app put beside them.
-					const text = found && (found.author.kind === 'user' ? userWords(found.text) : found.text);
+					const text = found && (found.author.kind === 'user' ? userWords(found.text) : withoutSteps(found.text));
 					if (text !== undefined) {
 						await vscode.env.clipboard.writeText(text);
 					}

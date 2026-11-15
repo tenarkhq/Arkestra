@@ -131,7 +131,7 @@ export interface Agent {
 	/** The account's quota windows now (the share used of a week, of five hours), as its vendor's app shows them; none: not known. */
 	quota?(): Promise<readonly { readonly label: string; readonly usedPercent: number; readonly resetsAt?: string }[]>;
 	/** Live: each session on its machine as it starts and ends a turn (its file's writes); none: not known live. */
-	watchStates?(onState: (s: { readonly id: string; readonly state: 'run' | 'idle'; readonly at: number }) => void): { dispose(): void };
+	watchStates?(onState: (s: { readonly id: string; readonly state: 'run' | 'idle'; readonly at: number; readonly doing?: string; readonly bg?: readonly { readonly id: string; readonly name: string; readonly since: string }[]; readonly done?: number }) => void): { dispose(): void };
 }
 
 /** A session the agent's own CLI already has on its machine (AR39): started in a terminal, an IDE, or earlier. */

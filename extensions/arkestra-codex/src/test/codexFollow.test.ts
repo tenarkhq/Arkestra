@@ -17,15 +17,19 @@ const FIXTURE = path.join(__dirname, '..', '..', 'src', 'test', 'fixtures', 'rol
 const ID = '01a15d40-ab71-74c1-877b-793c24b8fba4';
 const event = (payload: object) => JSON.stringify({ timestamp: '2026-11-14T10:00:00Z', type: 'event_msg', payload });
 
-test('rollout lines: finished user and agent items with their ids, older message events without, the rest left out', () => {
+test('rollout lines: finished user and agent items with their ids, older message events without, tool items as steps, the rest left out', () => {
 	assert.deepEqual(codexPiece(event({ type: 'item_completed', item: { type: 'UserMessage', id: 'u1', content: [{ type: 'text', text: 'fix it', text_elements: [] }] } })),
 		{ kind: 'user', text: 'fix it', id: 'u1', at: '2026-11-14T10:00:00Z' });
 	assert.deepEqual(codexPiece(event({ type: 'item_completed', item: { type: 'AgentMessage', id: 'msg_1', phase: 'commentary', content: [{ type: 'Text', text: 'Looking.' }] } })),
 		{ kind: 'agent', text: 'Looking.', id: 'msg_1', at: '2026-11-14T10:00:00Z' });
 	assert.deepEqual(codexPiece(event({ type: 'user_message', message: 'older codex ' })), { kind: 'user', text: 'older codex', at: '2026-11-14T10:00:00Z' });
 	assert.deepEqual(codexPiece(event({ type: 'agent_message', message: 'Done.' })), { kind: 'agent', text: 'Done.', at: '2026-11-14T10:00:00Z' });
+	assert.deepEqual(codexPiece(event({ type: 'item_completed', item: { type: 'CommandExecution', id: 'c', command: ['/bin/bash', '-lc', 'git status --short'] } })),
+		{ kind: 'step', text: '<arkestra-step kind="command">Ran git status --short</arkestra-step>', id: 'c', at: '2026-11-14T10:00:00Z' });
+	assert.deepEqual(codexPiece(event({ type: 'item_completed', item: { type: 'FileChange', id: 'f', changes: { '/w/a.py': {}, '/w/b.py': {} } } }))?.text, '<arkestra-step kind="edit">Edited a.py, b.py</arkestra-step>');
+	assert.deepEqual(codexPiece(event({ type: 'item_completed', item: { type: 'ImageView', id: 'i', path: 'file:///srv/x/links%20hu.png' } }))?.text, '<arkestra-step kind="read">Viewed links hu.png</arkestra-step>');
 	for (const line of [
-		event({ type: 'item_completed', item: { type: 'CommandExecution', id: 'c', command: 'ls' } }),
+		event({ type: 'item_completed', item: { type: 'Reasoning', id: 'r' } }),
 		event({ type: 'token_count' }),
 		JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<environment_context>' }] } }),
 		'{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMe',
@@ -77,7 +81,7 @@ test('history from a 0.163 rollout: what the user wrote and the answers, preambl
 	const history = rolloutHistory(content);
 	assert.deepEqual(history.entries.map(e => [e.id, e.role, e.text, e.at]), [
 		['01a1e000-0002-7000-8000-0000000000a1', 'user', 'Add a health check endpoint.', '2026-11-14T10:00:00.030Z'],
-		['msg_a1', 'agent', 'I will look at the server first.\n\nAdded GET /health to src/server.ts.', '2026-11-14T10:00:03.000Z'],
+		['msg_a1', 'agent', 'I will look at the server first.\n\n<arkestra-step kind="command">Ran ls src</arkestra-step>\n\nAdded GET /health to src/server.ts.', '2026-11-14T10:00:03.000Z'],
 		['01a1e000-0002-7000-8000-0000000000b2', 'user', 'Thanks. A test for it too.', '2026-11-14T10:05:00.010Z'],
 		['msg_a3', 'agent', 'Added test/health.test.ts; it passes.', '2026-11-14T10:05:20.000Z'],
 	]);

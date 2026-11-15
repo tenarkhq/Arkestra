@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { ClaudeCodeAgent, ROOM_PREAMBLE } from '../claudeCode';
-import { LIST_SCRIPT, localListing, localSessionFile, parseHistory, parseListing, readScript } from '../sessions';
+import { LIST_SCRIPT, claudeStep, localListing, localSessionFile, parseHistory, parseListing, readScript } from '../sessions';
 import type { Message } from '../rooms';
 
 const ID = (n: number) => `0000000${n}-aaaa-bbbb-cccc-dddddddddddd`;
@@ -48,7 +48,7 @@ test('listing: the latest name wins (Claude Code writes it again near the end); 
 	assert.deepEqual(parseListing(out).map(s => s.bridge ?? ''), ['', 'cse_019UZiid5kkFdWcwMSXfYYca', '']);
 });
 
-test('history: what the user wrote and Claude\'s answers, one answer per request; tool steps and side chains left out', () => {
+test('history: what the user wrote and Claude\'s answers, one answer per request with its tool steps as lines; side chains left out', () => {
 	const lines = [
 		user('fix the stop', { timestamp: '2026-11-14T10:00:00Z' }),
 		JSON.stringify({ type: 'assistant', timestamp: '2026-11-14T10:00:05Z', message: { content: [{ type: 'text', text: 'Looking.' }, { type: 'tool_use', name: 'Read', input: {} }] } }),
@@ -63,7 +63,7 @@ test('history: what the user wrote and Claude\'s answers, one answer per request
 	].join('\n');
 	assert.deepEqual(parseHistory(lines), [
 		{ role: 'user', text: 'fix the stop', at: '2026-11-14T10:00:00Z' },
-		{ role: 'agent', text: 'Looking.\n\nFixed in state.py.', at: '2026-11-14T10:00:05Z' },
+		{ role: 'agent', text: 'Looking.\n\n<arkestra-step kind="read">Read a file</arkestra-step>\n\n<arkestra-step kind="edit">Edited a file</arkestra-step>\n\nFixed in state.py.', at: '2026-11-14T10:00:05Z' },
 		{ role: 'user', text: 'and the test?' },
 		{ role: 'agent', text: 'Added.' },
 	]);
@@ -126,4 +126,16 @@ test('the listing skips scripts\' and pipelines\' sessions (claude -p, the Agent
 	// The folders are named after paths (-home-...): the shell listing must not read them as options.
 	const shell = parseListing(execFileSync('sh', ['-c', LIST_SCRIPT], { env: { ...process.env, HOME: home } }).toString());
 	assert.deepEqual(shell, here);
+});
+
+test('tool steps as the Claude app names them: a command by its description in the past, files by name, own bookkeeping left out', () => {
+	const t = (name: string, input: object) => claudeStep({ name, input });
+	assert.equal(t('Bash', { description: 'Check the hand-started VM test progress' }), '<arkestra-step kind="command">Checked the hand-started VM test progress</arkestra-step>');
+	assert.equal(t('Bash', { description: 'Run the tests' }), '<arkestra-step kind="command">Ran the tests</arkestra-step>');
+	assert.equal(t('Bash', { description: 'Copy <x> files' }), '<arkestra-step kind="command">Copied ‹x› files</arkestra-step>');
+	assert.equal(t('Edit', { file_path: '/a/b/state.py' }), '<arkestra-step kind="edit">Edited state.py</arkestra-step>');
+	assert.equal(t('WebFetch', { url: 'https://docs.example.com/x' }), '<arkestra-step kind="web">Fetched docs.example.com</arkestra-step>');
+	assert.equal(t('mcp__github__get_file_contents', {}), '<arkestra-step kind="other">Used get file contents</arkestra-step>');
+	assert.equal(t('TodoWrite', {}), undefined);
+	assert.equal(t('mcp__ccd_turn__update_plan', {}), undefined);
 });

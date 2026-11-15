@@ -400,3 +400,5 @@ export function composerRight(room: { readonly roster: readonly string[]; readon
 	}
 	return right;
 }
+
+export { stepParts, stepsLabel, withoutSteps, type Step } from './steps';

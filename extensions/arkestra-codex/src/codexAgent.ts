@@ -249,7 +249,7 @@ export class CodexAgent implements Agent {
 	 * 2: the rollout's model and context fill, and its patch lines for what Codex produced (AR26):
 	 * threads read before read their rollout once more.
 	 */
-	readonly historyVersion = 2;
+	readonly historyVersion = 3;
 
 	constructor(private readonly options: CodexOptions) {
 		({ id: this.id, name: this.name, where: this.where } = options.identity ?? { id: 'codex', name: 'Codex', where: 'local' });

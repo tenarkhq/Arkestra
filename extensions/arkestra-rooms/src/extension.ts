@@ -860,6 +860,12 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	// Threads open in Arkestra's own panel; the right panel follows the one used last.
 	const threads = new ThreadViews(context, {
 		registry, activity, live, onDidChangeThread: threadChanged.event, open, use,
+		sessionLive: room => Object.entries(room.state.adopted ?? {}).flatMap(([agentId, link]) => {
+			const l = liveSessions.get(link.session);
+			// A turn that runs, or one that ended with background tasks still going (the Claude app's spinner).
+			return l?.state === 'run' ? [{ agentId, ...(l.doing ? { doing: l.doing } : {}) }]
+				: l?.bg?.length ? [{ agentId, doing: vscode.l10n.t(l.bg.length === 1 ? '{0} background task running' : '{0} background tasks running', l.bg.length) }] : [];
+		}),
 		createRoom: async (agentIds, title, project) => {
 			const room = await createRoom(title, project);
 			for (const id of agentIds) {
@@ -940,6 +946,11 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			const link = room.state.adopted?.[agentId];
 			return !!link && liveSessions.get(link.session)?.state === 'run';
 		},
+		liveBackground: (room, agentId) => {
+			const link = room.state.adopted?.[agentId];
+			const l = link ? liveSessions.get(link.session) : undefined;
+			return l && (l.bg?.length || l.done) ? { tasks: l.bg ?? [], done: l.done ?? 0 } : undefined;
+		},
 	}));
 
 	// ---- Threads as native chat sessions: history, session list, the left column ----------
@@ -995,7 +1006,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}
 	}));
 	// Live: each Claude session's and Codex thread's turn as its file is written, on every machine (the left bar's dots).
-	const liveSessions = new Map<string, { state: 'run' | 'idle'; at: number }>();
+	const liveSessions = new Map<string, { state: 'run' | 'idle'; at: number; doing?: string; bg?: readonly { id: string; name: string; since: string }[]; done?: number }>();
 	const liveWatches = new Map<string, { dispose(): void }>();
 	const syncLiveWatches = () => {
 		const agents = registry.all().filter(a => a.watchStates);
@@ -1009,12 +1020,17 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			if (!liveWatches.has(agent.id)) {
 				liveWatches.set(agent.id, agent.watchStates!(s => {
 					const was = liveSessions.get(s.id);
-					liveSessions.set(s.id, { state: s.state, at: s.at });
+					liveSessions.set(s.id, { state: s.state, at: s.at, ...(s.doing ? { doing: s.doing } : {}), ...(s.bg?.length ? { bg: s.bg } : {}), ...(s.done ? { done: s.done } : {}) });
 					if (was?.state !== s.state) {
 						refreshThreadsLater();
-						const roomId = threads.activeRoomId();
-						if (roomId) {
-							threadChanged.fire(roomId); // the right panel's agent line
+					}
+					const tasks = (l?: { bg?: readonly { id: string }[]; done?: number }) => `${(l?.bg ?? []).map(b => b.id).join(',')}/${l?.done ?? 0}`;
+					if (was?.state !== s.state || was?.doing !== s.doing || tasks(was) !== tasks(s)) {
+						// The open threads' live line and the right panel's agent line.
+						for (const room of loaded.values()) {
+							if (Object.values(room.state.adopted ?? {}).some(a => a.session === s.id)) {
+								threadChanged.fire(room.id);
+							}
 						}
 					}
 				}));

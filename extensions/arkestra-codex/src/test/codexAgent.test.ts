@@ -354,7 +354,7 @@ test('a paginated thread\'s history (Codex 0.163: thread/read gives no turns) co
 			const history = await agent.sessionHistory('01a1e000-0000-7000-8000-00000000c0de');
 			assert.deepEqual(history.entries.map(e => [e.role, e.text]), [
 				['user', 'Add a health check endpoint.'],
-				['agent', 'I will look at the server first.\n\nAdded GET /health to src/server.ts.'],
+				['agent', 'I will look at the server first.\n\n<arkestra-step kind="command">Ran ls src</arkestra-step>\n\nAdded GET /health to src/server.ts.'],
 				['user', 'Thanks. A test for it too.'],
 				['agent', 'Added test/health.test.ts; it passes.'],
 			], remote ? 'over SSH' : 'here');
@@ -429,7 +429,7 @@ test('a turn hands over the rollout lines it wrote that add files (what Codex pr
 
 test('history and follow: the rollout\'s model and context fill, and its patch lines; older imports read once more', async () => {
 	const { agent, dir } = await setup();
-	assert.equal(agent.historyVersion, 2);
+	assert.equal(agent.historyVersion, 3);
 	const file = path.join(dir, path.basename(FIXTURE));
 	await copyFile(FIXTURE, file);
 	await appendFile(file, patchLine('c1', 'docs/a.md') + '\n' + JSON.stringify({ timestamp: '2026-11-14T10:20:00Z', type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { total_tokens: 99999 }, last_token_usage: { input_tokens: 40000, output_tokens: 1200, total_tokens: 41200 }, model_context_window: 258400 } } }) + '\n');

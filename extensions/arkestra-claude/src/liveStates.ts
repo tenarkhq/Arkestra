@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { watch, promises as fs } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 
@@ -16,11 +17,85 @@ export interface LiveState {
 	readonly state: 'run' | 'idle';
 	/** Epoch seconds of the file's last write. */
 	readonly at: number;
+	/** While it runs: what it does now (the running command's description, the tool), as the Claude app's status line. */
+	readonly doing?: string;
+	/** Its background tasks that still run (commands, agents, watches), oldest first; `since`: when each started (ISO). */
+	readonly bg?: readonly BackgroundTask[];
+	/** How many of its background tasks finished (in the part of the file read). */
+	readonly done?: number;
+}
+
+export interface BackgroundTask { readonly id: string; readonly name: string; readonly since: string }
+
+const STARTED = /^\s*Command (?:running in background with ID: |did not complete within its \d+s timeout and was moved to the background \(ID: )([A-Za-z0-9_-]{5,})/;
+const STOPPED = /^\s*\{?"?(?:message"?:\s*")?Successfully stopped task: ([A-Za-z0-9_-]{5,})/;
+const NOTIFIED = /<task-id>([^<]+)<\/task-id>[\s\S]*?<status>(\w+)<\/status>/g;
+
+/** A session's background tasks, followed line by line from the file (the same rules as the machine watch). */
+export class BackgroundTracker {
+	private readonly uses = new Map<string, string>();
+	private readonly running = new Map<string, BackgroundTask>();
+	done = 0;
+
+	line(raw: string): void {
+		if (!/run_in_background|background|task-notification|stopped task/.test(raw)) {
+			return;
+		}
+		let d: any;
+		try {
+			d = JSON.parse(raw);
+		} catch {
+			return;
+		}
+		if (d?.isSidechain) {
+			return;
+		}
+		const since = typeof d.timestamp === 'string' ? d.timestamp : '';
+		const c = d.message?.content;
+		const texts: string[] = [];
+		if (typeof c === 'string') {
+			texts.push(c);
+		}
+		if (typeof d.attachment?.prompt === 'string') {
+			texts.push(d.attachment.prompt);
+		}
+		for (const x of Array.isArray(c) ? c : []) {
+			if (x?.type === 'tool_use') {
+				const i = x.input && typeof x.input === 'object' ? x.input : {};
+				this.uses.set(x.id, String(i.description || i.command || x.name || 'Task').slice(0, 120));
+			} else if (x?.type === 'tool_result') {
+				const r = typeof x.content === 'string' ? x.content : JSON.stringify(x.content);
+				const started = STARTED.exec(r);
+				if (started && this.uses.has(x.tool_use_id)) {
+					this.running.set(started[1], { id: started[1], name: this.uses.get(x.tool_use_id)!, since });
+				}
+				const stopped = STOPPED.exec(r);
+				if (stopped && this.running.delete(stopped[1])) {
+					this.done++;
+				}
+			} else if (x?.type === 'text' && typeof x.text === 'string') {
+				texts.push(x.text);
+			}
+		}
+		for (const t of texts) {
+			for (const m of t.matchAll(NOTIFIED)) {
+				if (m[2] !== 'running' && this.running.delete(m[1].trim())) {
+					this.done++;
+				}
+			}
+		}
+	}
+
+	get tasks(): BackgroundTask[] {
+		return [...this.running.values()].sort((a, b) => a.since.localeCompare(b.since));
+	}
 }
 
 /** A turn that wrote nothing for this long is taken for ended (stopped, the app closed). */
 export const STALE_S = 600;
 const TAIL = 65536;
+/** How much of a session file the background tasks are first read from. */
+const SCAN = 16 << 20;
 
 /** The state the end of a session file tells: the latest user or assistant line decides. */
 export function stateOfTail(text: string): 'run' | 'idle' | undefined {
@@ -43,6 +118,44 @@ export function stateOfTail(text: string): 'run' | 'idle' | undefined {
 	return undefined;
 }
 
+/** What a running turn does now: its latest tool use (a command by its description); undefined: thinking or writing. */
+export function doingOfTail(text: string): string | undefined {
+	const lines = text.split('\n');
+	for (let i = lines.length - 1; i >= 0; i--) {
+		let d: any;
+		try {
+			d = JSON.parse(lines[i]);
+		} catch {
+			continue;
+		}
+		if (d?.type === 'user' && !d.isMeta && !d.isSidechain && !(Array.isArray(d.message?.content) && d.message.content.some((b: any) => b?.type === 'tool_result'))) {
+			return undefined; // the user's message: nothing done yet in this turn
+		}
+		if (d?.type === 'assistant' && !d.isSidechain && Array.isArray(d.message?.content)) {
+			const use = [...d.message.content].reverse().find((b: any) => b?.type === 'tool_use');
+			if (use) {
+				return toolDoing(use);
+			}
+		}
+	}
+	return undefined;
+}
+
+function toolDoing(use: { name?: unknown; input?: any }): string {
+	const input = use.input && typeof use.input === 'object' ? use.input : {};
+	const desc = typeof input.description === 'string' ? input.description.trim() : '';
+	const file = typeof input.file_path === 'string' ? input.file_path.split('/').pop() : '';
+	switch (use.name) {
+		case 'Bash': case 'Monitor': return desc || 'Running a command';
+		case 'Read': return file ? `Reading ${file}` : 'Reading';
+		case 'Edit': case 'MultiEdit': case 'Write': return file ? `Editing ${file}` : 'Editing';
+		case 'Grep': case 'Glob': return 'Searching';
+		case 'WebSearch': case 'WebFetch': return 'Looking it up';
+		case 'Agent': case 'Task': return desc ? `Agent: ${desc}` : 'Running an agent';
+		default: return 'Working';
+	}
+}
+
 /** The state as shown: a run that wrote nothing for a long time ended. */
 export function shownState(state: 'run' | 'idle', at: number, now: number): 'run' | 'idle' {
 	return state === 'run' && now - at > STALE_S ? 'idle' : state;
@@ -54,37 +167,111 @@ export function shownState(state: 'run' | 'idle', at: number, now: number): 'run
  * every 2 s. Without Python it ends at once and the account's list stays the source.
  */
 const PYTHON = String.raw`
-import os,sys,json,time,glob,struct,select
+import os,sys,json,time,glob,struct,select,re
 root=os.path.expanduser('~/.claude/projects')
 STALE=${STALE_S}
 shown={}
+def doing_of(use):
+  i=use.get('input') or {}
+  n=use.get('name');desc=(i.get('description') or '').strip() if isinstance(i.get('description'),str) else ''
+  f=(i.get('file_path') or '').split('/')[-1] if isinstance(i.get('file_path'),str) else ''
+  if n in ('Bash','Monitor'):return desc or 'Running a command'
+  if n=='Read':return 'Reading '+f if f else 'Reading'
+  if n in ('Edit','MultiEdit','Write'):return 'Editing '+f if f else 'Editing'
+  if n in ('Grep','Glob'):return 'Searching'
+  if n in ('WebSearch','WebFetch'):return 'Looking it up'
+  if n in ('Agent','Task'):return 'Agent: '+desc if desc else 'Running an agent'
+  return 'Working'
 def state(p):
   try:
     with open(p,'rb') as f:
       f.seek(0,2);n=f.tell();f.seek(max(0,n-${TAIL}));lines=f.read().splitlines()
   except Exception:
-    return None
+    return None,None
+  s=None
   for raw in reversed(lines):
     try:d=json.loads(raw)
     except Exception:continue
     t=d.get('type')
-    if t=='assistant':
-      return 'idle' if (d.get('message') or {}).get('stop_reason') in ('end_turn','stop_sequence','max_tokens','refusal') else 'run'
-    if t=='user' and not d.get('isMeta') and not d.get('isCompactSummary') and not d.get('isSidechain'):
-      return 'run'
-  return None
+    if s is None:
+      if t=='assistant':
+        s='idle' if (d.get('message') or {}).get('stop_reason') in ('end_turn','stop_sequence','max_tokens','refusal') else 'run'
+        if s=='idle':return s,None
+      elif t=='user' and not d.get('isMeta') and not d.get('isCompactSummary') and not d.get('isSidechain'):
+        s='run'
+      else:continue
+    c=(d.get('message') or {}).get('content')
+    if t=='user' and not d.get('isMeta') and not d.get('isSidechain') and not (isinstance(c,list) and any(isinstance(b,dict) and b.get('type')=='tool_result' for b in c)):
+      return s,None
+    if t=='assistant' and not d.get('isSidechain') and isinstance(c,list):
+      uses=[b for b in c if isinstance(b,dict) and b.get('type')=='tool_use']
+      if uses:return s,doing_of(uses[-1])
+  return s,None
+SCAN=16777216
+bgs={}
+def bg_lines(p,b,data):
+  for raw in data.splitlines():
+    if b'run_in_background' not in raw and b'background' not in raw and b'task-notification' not in raw and b'stopped task' not in raw:continue
+    try:d=json.loads(raw)
+    except Exception:continue
+    if d.get('isSidechain'):continue
+    ts=d.get('timestamp') or ''
+    c=(d.get('message') or {}).get('content')
+    texts=[]
+    if isinstance(c,str):texts.append(c)
+    a=d.get('attachment') or {}
+    if isinstance(a.get('prompt'),str):texts.append(a['prompt'])
+    if isinstance(c,list):
+      for x in c:
+        if not isinstance(x,dict):continue
+        if x.get('type')=='tool_use':
+          i=x.get('input') or {}
+          b['uses'][x.get('id')]=(i.get('description') or i.get('command') or x.get('name') or 'Task')[:120] if isinstance(i,dict) else 'Task'
+        elif x.get('type')=='tool_result':
+          r=x.get('content');r=r if isinstance(r,str) else json.dumps(r)
+          m=re.match(r'\s*Command (?:running in background with ID: |did not complete within its \d+s timeout and was moved to the background \(ID: )([A-Za-z0-9_-]{5,})',r)
+          if m and x.get('tool_use_id') in b['uses']:
+            b['run'][m.group(1)]={'id':m.group(1),'name':b['uses'][x.get('tool_use_id')],'since':ts}
+          m=re.match(r'\s*\{?"?(?:message"?:\s*")?Successfully stopped task: ([A-Za-z0-9_-]{5,})',r)
+          if m and b['run'].pop(m.group(1),None) is not None:b['done']+=1
+        elif x.get('type')=='text' and isinstance(x.get('text'),str):texts.append(x['text'])
+    for t in texts:
+      for m in re.finditer(r'<task-id>([^<]+)</task-id>[\s\S]*?<status>(\w+)</status>',t):
+        if m.group(2)!='running' and b['run'].pop(m.group(1).strip(),None) is not None:b['done']+=1
+def background(p):
+  b=bgs.get(p)
+  try:n=os.path.getsize(p)
+  except Exception:return [],0
+  if b is None or n<b['off']:
+    b={'off':max(0,n-SCAN),'uses':{},'run':{},'done':0,'cut':n>SCAN};bgs[p]=b
+  if n>b['off']:
+    with open(p,'rb') as f:
+      f.seek(b['off']);data=f.read(n-b['off'])
+    if b.pop('cut',False):
+      i=data.find(b'\n');data=data[i+1:] if i>=0 else b'';b['off']=n-len(data)
+    j=data.rfind(b'\n')
+    if j>=0:
+      bg_lines(p,b,data[:j]);b['off']+=j+1
+  return sorted(b['run'].values(),key=lambda x:x['since']),b['done']
 def tell(p,first=False):
   if not p.endswith('.jsonl'):return
   try:m=os.stat(p).st_mtime
   except Exception:return
   now=time.time()
   if first and now-m>86400:return
-  s=state(p)
+  s,doing=state(p)
   if s is None:return
   if s=='run' and now-m>STALE:s='idle'
-  if shown.get(p)!=s:
-    shown[p]=s
-    print(json.dumps({'id':os.path.basename(p)[:-6],'state':s,'at':m}),flush=True)
+  if s!='run':doing=None
+  bg,done=background(p)
+  key=(s,doing,tuple(x['id'] for x in bg),done)
+  if shown.get(p)!=key:
+    shown[p]=key
+    o={'id':os.path.basename(p)[:-6],'state':s,'at':m}
+    if doing:o['doing']=doing
+    if bg:o['bg']=bg
+    if done:o['done']=done
+    print(json.dumps(o),flush=True)
 def sweep(first=False):
   for p in glob.glob(root+'/*/*.jsonl'):tell(p,first)
 sweep(True)
@@ -116,7 +303,7 @@ try:
     if time.time()-last>30:
       last=time.time()
       for p,s in list(shown.items()):
-        if s=='run':tell(p)
+        if s[0]=='run' or s[2]:tell(p)
 except Exception:
   while True:
     time.sleep(2)
@@ -132,7 +319,11 @@ export function liveLine(line: string): LiveState | 'ready' | undefined {
 		if (d?.ready === true) {
 			return 'ready';
 		}
-		return typeof d?.id === 'string' && (d.state === 'run' || d.state === 'idle') && typeof d.at === 'number' ? { id: d.id, state: d.state, at: d.at } : undefined;
+		if (typeof d?.id !== 'string' || (d.state !== 'run' && d.state !== 'idle') || typeof d.at !== 'number') {
+			return undefined;
+		}
+		const bg = Array.isArray(d.bg) ? d.bg.filter((b: any) => typeof b?.id === 'string' && typeof b.name === 'string').map((b: any) => ({ id: b.id, name: b.name, since: typeof b.since === 'string' ? b.since : '' })) : [];
+		return { id: d.id, state: d.state, at: d.at, ...(typeof d.doing === 'string' && d.doing ? { doing: d.doing } : {}), ...(bg.length ? { bg } : {}), ...(typeof d.done === 'number' && d.done > 0 ? { done: d.done } : {}) };
 	} catch {
 		return undefined;
 	}
@@ -181,7 +372,35 @@ export function watchRemote(spawn: Spawn, onState: (s: LiveState) => void): { di
 /** The watch on this computer, with the system's own file watch. */
 export function watchLocal(home: string, onState: (s: LiveState) => void, now: () => number = () => Date.now() / 1000): { dispose(): void } {
 	const root = path.join(home, '.claude', 'projects');
-	const shown = new Map<string, 'run' | 'idle'>();
+	const shown = new Map<string, string>();
+	const tracked = new Map<string, { tracker: BackgroundTracker; offset: number }>();
+	/** The file's lines since the last look into its tracker (from its last 16 MB the first time). */
+	const background = async (file: string, size: number, handle: FileHandle): Promise<BackgroundTracker> => {
+		let t = tracked.get(file);
+		if (!t || size < t.offset) {
+			t = { tracker: new BackgroundTracker(), offset: Math.max(0, size - SCAN) };
+			tracked.set(file, t);
+			if (t.offset > 0) {
+				const probe = Buffer.alloc(Math.min(65536, size - t.offset));
+				await handle.read(probe, 0, probe.length, t.offset);
+				const nl = probe.indexOf(10);
+				t.offset += nl >= 0 ? nl + 1 : probe.length;
+			}
+		}
+		while (t.offset < size) {
+			const buf = Buffer.alloc(Math.min(4 << 20, size - t.offset));
+			await handle.read(buf, 0, buf.length, t.offset);
+			const last = buf.lastIndexOf(10);
+			if (last < 0) {
+				break;
+			}
+			for (const line of buf.subarray(0, last).toString('utf8').split('\n')) {
+				t.tracker.line(line);
+			}
+			t.offset += last + 1;
+		}
+		return t.tracker;
+	};
 	const tell = async (file: string, first = false) => {
 		if (!file.endsWith('.jsonl')) {
 			return;
@@ -202,9 +421,13 @@ export function watchLocal(home: string, onState: (s: LiveState) => void, now: (
 					return;
 				}
 				const s = shownState(state, at, now());
-				if (shown.get(file) !== s) {
-					shown.set(file, s);
-					onState({ id: path.basename(file, '.jsonl'), state: s, at });
+				const doing = s === 'run' ? doingOfTail(buf.toString('utf8')) : undefined;
+				const tracker = await background(file, stat.size, handle);
+				const bg = tracker.tasks;
+				const key = `${s}\n${doing ?? ''}\n${bg.map(b => b.id).join(',')}\n${tracker.done}`;
+				if (shown.get(file) !== key) {
+					shown.set(file, key);
+					onState({ id: path.basename(file, '.jsonl'), state: s, at, ...(doing ? { doing } : {}), ...(bg.length ? { bg } : {}), ...(tracker.done ? { done: tracker.done } : {}) });
 				}
 			} finally {
 				await handle.close();
@@ -228,6 +451,6 @@ export function watchLocal(home: string, onState: (s: LiveState) => void, now: (
 		}
 	})();
 	// A run that stopped writing ends after a while.
-	const sweep = setInterval(() => { for (const [file, s] of shown) { if (s === 'run') { void tell(file); } } }, 30_000);
+	const sweep = setInterval(() => { for (const [file, s] of shown) { if (s.startsWith('run') || s.split('\n')[2]) { void tell(file); } } }, 30_000);
 	return { dispose: () => { clearInterval(sweep); watcher?.close(); } };
 }

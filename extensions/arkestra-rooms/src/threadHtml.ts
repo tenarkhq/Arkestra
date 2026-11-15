@@ -6,7 +6,7 @@
 
 import { fontFaces, fontSrc, TYPE_CSS, type PageFonts } from './fonts';
 import { imageName, imageRefs, imageSource, userImages, type ImageResolver } from './images';
-import { agentLabel, foldLabel, providerOf, type FoldItem, type LivePart, type Row } from './threadModel';
+import { agentLabel, foldLabel, providerOf, stepParts, stepsLabel, withoutSteps, type FoldItem, type LivePart, type Row, type Step } from './threadModel';
 import type { MenuItem } from './choice';
 import { FORM_CLIENT, FORM_CSS, formHtml, type FormSpec } from './pageForm';
 
@@ -257,7 +257,7 @@ export function rowHtml(row: Row, s: ThreadStrings, md: (text: string, opts?: Ma
 			return `<div class="um">${bubble}${acts}</div>`;
 		}
 		case 'agent':
-			return `<div class="msg"><div class="who">${letter(row.agentId, row.name)}${escapeHtml(agentLabel(row.name, row.agentId, s.local))}</div><div class="md">${md(row.text, { image })}${imagesHtml(imageRefs(row.text), image)}</div>`
+			return `<div class="msg"><div class="who">${letter(row.agentId, row.name)}${escapeHtml(agentLabel(row.name, row.agentId, s.local))}</div><div class="md">${answerHtml(row.text, md, image)}${imagesHtml(imageRefs(withoutSteps(row.text)), image)}</div>`
 				+ `<div class="acts"><button class="act" data-copy="${escapeHtml(row.id)}" title="${escapeHtml(s.copy)}" aria-label="${escapeHtml(s.copy)}">${COPY_ICON}</button>${time ? `<span>${escapeHtml(time)}</span>` : ''}</div></div>`;
 		case 'fold':
 			return foldHtml(row.items, s);
@@ -278,6 +278,18 @@ function errorHtml(row: Extract<Row, { type: 'error' }>, s: ThreadStrings): stri
 	return `<div class="notice error" role="alert"><div class="eh">${escapeHtml(agentLabel(row.name, row.agentId, s.local))}</div><div>${escapeHtml(text)}</div>${button}</div>`;
 }
 
+/** An answer's texts, with what the agent did between them as folded lines (the apps' "Checked …", "Ran 3 commands"). */
+function answerHtml(text: string, md: (text: string, opts?: MarkdownOptions) => string, image: ImageResolver): string {
+	return stepParts(text).map(p => 'md' in p ? (p.md ? md(p.md, { image }) : '') : stepsHtml(p.steps)).join('');
+}
+
+function stepsHtml(steps: readonly Step[]): string {
+	const items = steps.length > 1 ? `<div class="items">${steps.map(st => `<div class="fi">${escapeHtml(st.label)}</div>`).join('')}</div>` : '';
+	return steps.length > 1
+		? `<details class="fold steps"><summary>${escapeHtml(stepsLabel(steps))}${CHEVRON}</summary>${items}</details>`
+		: `<div class="fold steps one">${escapeHtml(steps[0].label)}</div>`;
+}
+
 function foldHtml(items: readonly FoldItem[], s: ThreadStrings): string {
 	const label = foldLabel(items, s);
 	return `<details class="fold"><summary>${escapeHtml(label)}${CHEVRON}</summary><div class="items">${items.map(i => `<div class="fi ${i.kind}">${escapeHtml(i.summary)}</div>`).join('')}</div></details>`;
@@ -286,7 +298,7 @@ function foldHtml(items: readonly FoldItem[], s: ThreadStrings): string {
 /** A running turn: what the agent wrote so far, and its last tool line under it. */
 export function liveHtml(part: LivePart, name: string, s: ThreadStrings, image: ImageResolver = webImages): string {
 	return `<div class="msg live"><div class="who">${letter(part.agentId, name)}${escapeHtml(agentLabel(name, part.agentId, s.local))}</div>`
-		+ (part.text ? `<div class="md">${renderMarkdown(part.text, { image })}</div>` : '')
+		+ (part.text ? `<div class="md">${answerHtml(part.text, renderMarkdown, image)}</div>` : '')
 		+ `<div class="status"><span class="pulse"></span>${escapeHtml(part.tool ?? s.working)}</div>`
 		+ (part.error ? `<div class="err">${escapeHtml(part.error)}</div>` : '')
 		+ '</div>';
@@ -372,6 +384,8 @@ body { background: var(--vscode-editor-background); height: 100vh; display: flex
 .fold[open] .chev { transform: rotate(90deg); }
 .fold .items { margin: 6px 0 0 2px; padding-left: 12px; border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
 .fi { overflow-wrap: anywhere; }
+.md .steps { margin: 10px 0; }
+.md .steps.one { overflow-wrap: anywhere; }
 .msg { line-height: 1.6; font-size: 14px; }
 .who { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--mute); margin-bottom: 2px; }
 .av { width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font-style: normal; font-size: 10px; font-weight: 700; color: var(--vscode-editor-background); background: var(--vscode-charts-purple, #b392f0); flex: none; }

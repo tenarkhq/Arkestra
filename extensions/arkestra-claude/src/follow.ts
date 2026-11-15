@@ -10,7 +10,8 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import type { SessionEntry, SessionMeta } from './rooms';
 
 /** What one line of a session file means for the thread, if anything. */
-export type Piece = { readonly kind: 'user' | 'agent' | 'notice'; readonly text: string; readonly id?: string; readonly at?: string } | undefined;
+/** `step`: what the agent did with its tools (`stepToken` lines), shown in its answer as the apps show it. */
+export type Piece = { readonly kind: 'user' | 'agent' | 'notice' | 'step'; readonly text: string; readonly id?: string; readonly at?: string } | undefined;
 
 export type LiveEntry = SessionEntry & { readonly id: string };
 
@@ -54,6 +55,8 @@ export class LineSplitter {
  */
 export class EntryAssembler {
 	private open: { entry: { id?: string; role: 'agent'; text: string; at?: string }; start: number } | undefined;
+	/** Steps before the answer's first text: they go in front of it (the answer keeps the text's id). */
+	private pending: { text: string; start: number } | undefined;
 
 	constructor(private readonly options: { readonly mute?: boolean; readonly positional?: boolean } = {}, public muted = false) { }
 
@@ -64,8 +67,20 @@ export class EntryAssembler {
 		}
 		const id = piece.id ?? (this.options.positional ? `@${start}` : undefined);
 		const base = { ...(id ? { id } : {}), ...(piece.at ? { at: piece.at } : {}) };
+		if (piece.kind === 'step') {
+			if (this.muted) {
+				return undefined;
+			}
+			if (!this.open) {
+				this.pending = { text: this.pending ? `${this.pending.text}\n\n${piece.text}` : piece.text, start: this.pending?.start ?? start };
+				return undefined;
+			}
+			this.open.entry.text += `\n\n${piece.text}`;
+			return { ...this.open.entry };
+		}
 		if (piece.kind !== 'agent') {
 			this.open = undefined;
+			this.pending = undefined;
 			if (piece.kind === 'user' && this.options.mute) {
 				this.muted = ARKESTRA_PROMPT.test(piece.text);
 			}
@@ -77,14 +92,15 @@ export class EntryAssembler {
 		if (this.open) {
 			this.open.entry.text += `\n\n${piece.text}`;
 		} else {
-			this.open = { entry: { role: 'agent', text: piece.text, ...base }, start };
+			this.open = { entry: { role: 'agent', text: this.pending ? `${this.pending.text}\n\n${piece.text}` : piece.text, ...base }, start: this.pending?.start ?? start };
+			this.pending = undefined;
 		}
 		return { ...this.open.entry };
 	}
 
 	/** Where to read again from so that an answer still being written comes whole. */
 	cursor(position: number): string {
-		return `${this.open ? this.open.start : position}${this.muted ? 'm' : ''}`;
+		return `${this.open ? this.open.start : this.pending ? this.pending.start : position}${this.muted ? 'm' : ''}`;
 	}
 }
 

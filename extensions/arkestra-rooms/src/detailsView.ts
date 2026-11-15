@@ -15,7 +15,7 @@ import type { Change } from './checkpoints';
 import type { Room } from './room';
 import { ICONS, detailsPage, escapeHtml, type SharedStrings } from './threadHtml';
 import { readForm } from './pageForm';
-import { detailsModel, folderLabel, machineOf } from './threadModel';
+import { detailsModel, elapsed, folderLabel, machineOf, type DetailsTask } from './threadModel';
 import { DetailsFollow, type Surface } from './surface';
 import { agentMeter, formatTokens, quotaTone, tone } from './usage';
 import { FONT_ROOT, pageFonts } from './webviewFonts';
@@ -42,6 +42,8 @@ export interface DetailsHost {
 	cloudContext(room: Room, agentId: string): { readonly used: number; readonly max: number } | undefined;
 	/** The agent's session in this room works on a turn now, as its file shows live (driven from its own app too). */
 	liveRunning?(room: Room, agentId: string): boolean;
+	/** The background tasks of the agent's session in this room as its file shows them (started from its own app too), and how many finished. */
+	liveBackground?(room: Room, agentId: string): { readonly tasks: readonly { readonly id: string; readonly name: string; readonly since: string }[]; readonly done: number } | undefined;
 }
 
 export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -191,9 +193,23 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 			: empty(vscode.l10n.t('Nobody in this thread yet.')));
 
 		parts.push('<div class="hr"></div>', head(vscode.l10n.t('Background tasks')));
-		const tasks = model.running.map(t => `<div class="rr" title="${escapeHtml(t.detail ?? t.name)}">${t.kind === 'subagent' ? ICONS.agent : ICONS.terminal}<span class="n">${escapeHtml(t.detail ? `${t.name} · ${t.detail}` : t.name)}</span><span class="k">${escapeHtml(t.elapsed)}</span></div>`);
-		if (model.finished) {
-			tasks.push(`<div class="rr mut">${ICONS.done}<span class="n">${escapeHtml(vscode.l10n.t('{0} finished', model.finished))}</span></div>`);
+		// The adopted sessions' own background tasks (a command its app started) beside this room's.
+		let finished = model.finished;
+		const running: DetailsTask[] = [...model.running];
+		for (const id of room.roster) {
+			const own = this.host.liveBackground?.(room, id);
+			if (!own) {
+				continue;
+			}
+			finished += own.done;
+			for (const t of own.tasks) {
+				running.push({ name: t.name, kind: 'background', since: t.since, elapsed: t.since ? elapsed(Date.now() - Date.parse(t.since)) : '' });
+			}
+		}
+		running.sort((a, b) => a.since.localeCompare(b.since));
+		const tasks = running.map(t => `<div class="rr" title="${escapeHtml(t.detail ?? t.name)}">${t.kind === 'subagent' ? ICONS.agent : ICONS.terminal}<span class="n">${escapeHtml(t.detail ? `${t.name} · ${t.detail}` : t.name)}</span><span class="k">${escapeHtml(t.elapsed)}</span></div>`);
+		if (finished) {
+			tasks.push(`<div class="rr mut">${ICONS.done}<span class="n">${escapeHtml(vscode.l10n.t('{0} finished', finished))}</span></div>`);
 		}
 		parts.push(tasks.length ? tasks.join('') : empty(vscode.l10n.t('Nothing in the background.')));
 

@@ -7,6 +7,7 @@ import type { BestRun } from './best';
 import type { Agent, AgentEvent, AgentRegistry, ExistingSession, Readiness, SessionEntry, SessionHistory, SessionMeta } from './agent';
 import { readableAgentError } from './agentErrors';
 import { artifactsFromSessionLines, mergeProduced, type ProducedArtifact } from './produced';
+import { withoutSteps } from './steps';
 
 export type AuthorKind = 'user' | 'agent' | 'system';
 
@@ -297,7 +298,9 @@ export class Room {
 			const choice = this.state.choices?.[agent.id];
 			// No model chosen here: an adopted session goes on with the model it has been running.
 			const model = choice?.model ?? adopted?.model;
-			const transcript = this.forAgent ? [...await this.forAgent(agent, this.state.messages)] : [...this.state.messages];
+			// The step lines of adopted sessions are for the eye: the agents get the answers' words.
+			const messages = this.state.messages.map(m => m.text.includes('<arkestra-step') ? { ...m, text: withoutSteps(m.text) } : m);
+			const transcript = this.forAgent ? [...await this.forAgent(agent, messages)] : [...messages];
 			await agent.turn({ roomId: this.id, transcript, ...(this.state.mode === 'plan' ? { mode: 'plan' as const } : {}), ...(shared ? { shared } : {}), ...(model ? { model } : {}), ...(choice?.effort ? { effort: choice.effort } : {}) }, event => {
 				if (event.kind === 'line') {
 					lines.push(event.line);

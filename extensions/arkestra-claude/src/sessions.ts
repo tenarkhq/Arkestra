@@ -9,6 +9,7 @@ import { homedir } from 'node:os';
 import * as path from 'node:path';
 import type { ExistingSession, SessionEntry, SessionHistory, SessionMeta } from './rooms';
 import { EntryAssembler, LineSplitter, type Piece } from './follow';
+import { pastTense, stepToken } from './steps';
 import { folderStore, withImages, type ImageStore, type SessionImage } from './sessionImages';
 import { arkestraWords } from './cloud';
 
@@ -339,8 +340,21 @@ function pieceOf(data: any): Piece {
 		return userPiece(data.message?.content, base);
 	}
 	if (data.type === 'assistant' && Array.isArray(data.message?.content)) {
-		const text = data.message.content.filter((b: any) => b?.type === 'text' && typeof b.text === 'string' && b.text.trim()).map((b: any) => b.text.trim()).join('\n\n');
-		return text ? { kind: 'agent', text, ...base } : undefined;
+		// Its texts, and what it did with its tools between them, in order.
+		const parts: string[] = [];
+		let said = false;
+		for (const b of data.message.content) {
+			if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+				parts.push(b.text.trim());
+				said = true;
+			} else if (b?.type === 'tool_use') {
+				const step = claudeStep(b);
+				if (step) {
+					parts.push(step);
+				}
+			}
+		}
+		return parts.length ? { kind: said ? 'agent' : 'step', text: parts.join('\n\n'), ...base } : undefined;
 	}
 	if (data.type === 'system' && data.subtype === 'compact_boundary') {
 		return { kind: 'notice', text: COMPACTED, ...base };
@@ -356,6 +370,49 @@ function pieceOf(data: any): Piece {
 		return a.commandMode === undefined || a.commandMode === 'prompt' ? userPiece(a.prompt, base) : undefined;
 	}
 	return undefined;
+}
+
+/** Tools that are the agent's own bookkeeping, not work the apps show. */
+const QUIET_TOOLS = /^(ToolSearch|TodoWrite|TaskCreate|TaskUpdate|TaskList|TaskGet|mcp__ccd_turn__.*|mcp__ccd_session__mark_chapter)$/;
+
+const fileName = (file: unknown) => typeof file === 'string' && file ? file.split(/[\\/]/).filter(Boolean).pop() ?? file : undefined;
+
+/** One tool use of Claude as the Claude app names it in the thread; undefined: not shown. */
+export function claudeStep(block: { name?: unknown; input?: any }): string | undefined {
+	const name = typeof block.name === 'string' ? block.name : '';
+	const input = block.input && typeof block.input === 'object' ? block.input : {};
+	if (!name || QUIET_TOOLS.test(name)) {
+		return undefined;
+	}
+	switch (name) {
+		case 'Bash':
+			return stepToken('command', typeof input.description === 'string' && input.description.trim() ? pastTense(input.description.trim()) : 'Ran a command');
+		case 'Read':
+			return stepToken('read', `Read ${fileName(input.file_path) ?? 'a file'}`);
+		case 'Edit': case 'MultiEdit': case 'NotebookEdit':
+			return stepToken('edit', `Edited ${fileName(input.file_path ?? input.notebook_path) ?? 'a file'}`);
+		case 'Write':
+			return stepToken('edit', `Wrote ${fileName(input.file_path) ?? 'a file'}`);
+		case 'Grep': case 'Glob':
+			return stepToken('search', typeof input.pattern === 'string' ? `Searched for ${input.pattern}` : 'Searched the files');
+		case 'WebSearch':
+			return stepToken('web', typeof input.query === 'string' ? `Searched the web for ${input.query}` : 'Searched the web');
+		case 'WebFetch': {
+			let host = '';
+			try { host = new URL(String(input.url)).host; } catch { /* not a URL */ }
+			return stepToken('web', host ? `Fetched ${host}` : 'Fetched a page');
+		}
+		case 'Agent': case 'Task':
+			return stepToken('agent', typeof input.description === 'string' && input.description.trim() ? `Ran an agent: ${input.description.trim()}` : 'Ran an agent');
+		case 'Monitor':
+			return stepToken('command', typeof input.description === 'string' && input.description.trim() ? `Watched: ${input.description.trim()}` : 'Watched a command');
+		case 'Artifact':
+			return stepToken('other', 'Published a page');
+		default: {
+			const tool = name.startsWith('mcp__') ? name.split('__').slice(2).join(' ').replace(/_/g, ' ') : name;
+			return stepToken('other', `Used ${tool || name}`);
+		}
+	}
 }
 
 /** What a parsed line says about the session: the model and context fill of a main-chain answer. */

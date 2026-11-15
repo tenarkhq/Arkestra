@@ -115,7 +115,7 @@ test('history here and over a shell: the same entries, model and fill, and a cur
 	const remote = new ClaudeCodeAgent({ command: 'claude', permissionMode: 'acceptEdits', cwd: () => undefined, apiKey: async () => undefined, spawn: fakeSpawn, identity: { id: 'claude@prd', name: 'Claude · prd', where: 'prd' } });
 	assert.deepEqual(await remote.sessionHistory(SESSION), here);
 	await assert.rejects(remote.sessionHistory('00000009-aaaa-bbbb-cccc-dddddddddddd'), /gone/);
-	assert.equal(remote.historyVersion, 4);
+	assert.equal(remote.historyVersion, 5);
 });
 
 test('the live follow hands over the model and context fill when they change', async () => {

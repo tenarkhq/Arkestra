@@ -75,8 +75,10 @@ test('claude lines: ids from the line uuid; task reports as short lines; compact
 		{ kind: 'notice', text: 'Background command "npm test" completed (exit code 0)', id: 'u2', at: '2026-11-14T10:00:00Z' });
 	assert.equal(claudePiece(user('u3', 'This session is being continued…', { isCompactSummary: true })), undefined);
 	assert.equal(claudePiece(user('u4', [{ type: 'tool_result', content: 'ok' }])), undefined);
-	assert.equal(claudePiece(tool('a0')), undefined);
-	assert.deepEqual(parseHistory([user('u1', 'go'), said('a1', 'One.'), tool('a2'), said('a3', 'Two.'), user('u5', 'next')].join('\n')).map(e => [e.id, e.text]), [['u1', 'go'], ['a1', 'One.\n\nTwo.'], ['u5', 'next']]);
+	assert.deepEqual(claudePiece(tool('a0')), { kind: 'step', text: '<arkestra-step kind="command">Ran a command</arkestra-step>', id: 'a0' });
+	assert.deepEqual(parseHistory([user('u1', 'go'), said('a1', 'One.'), tool('a2'), said('a3', 'Two.'), user('u5', 'next')].join('\n')).map(e => [e.id, e.text]), [['u1', 'go'], ['a1', 'One.\n\n<arkestra-step kind="command">Ran a command</arkestra-step>\n\nTwo.'], ['u5', 'next']]);
+	// Steps before the answer's first text go in front of it, under the text's id.
+	assert.deepEqual(parseHistory([user('u1', 'go'), tool('a2'), said('a3', 'Two.')].join('\n')).map(e => [e.id, e.text]), [['u1', 'go'], ['a3', '<arkestra-step kind="command">Ran a command</arkestra-step>\n\nTwo.']]);
 	assert.equal(locateScript('00000001-aaaa-bbbb-cccc-dddddddddddd'), 'f=$(ls "$HOME"/.claude/projects/*/00000001-aaaa-bbbb-cccc-dddddddddddd.jsonl 2>/dev/null | head -n 1)');
 	assert.throws(() => locateScript('x; rm -rf ~'), /not a Claude session id/);
 	assert.match(tailScript('f=/x', 12), /n=12\n[\s\S]*exec tail -c \+\$\(\(n \+ 1\)\) -F "\$f"$/);
@@ -97,9 +99,9 @@ test('this machine: from the end of the file, only what is appended; partial lin
 		await until(() => calls.some(c => c.entries.length));
 		assert.deepEqual(calls.flatMap(c => c.entries).map(e => [e.id, e.role, e.text]), [['u1', 'user', 'from the terminal']]);
 		await appendFile(file, `${said('a1', 'On it.').slice(20)}\n${tool('t1')}\n${said('a2', 'Done.')}\n`);
-		await until(() => calls.flatMap(c => c.entries).some(e => e.text === 'On it.\n\nDone.'));
+		await until(() => calls.flatMap(c => c.entries).some(e => e.text === 'On it.\n\n<arkestra-step kind="command">Ran a command</arkestra-step>\n\nDone.'));
 		const last = calls.flatMap(c => c.entries).filter(e => e.id === 'a1').at(-1)!;
-		assert.equal(last.text, 'On it.\n\nDone.');
+		assert.equal(last.text, 'On it.\n\n<arkestra-step kind="command">Ran a command</arkestra-step>\n\nDone.');
 		// The open answer is where a later follow starts again, so it comes whole.
 		assert.equal(calls.at(-1)!.cursor, String(start + Buffer.byteLength(line1)));
 	} finally {
@@ -112,7 +114,7 @@ test('this machine: from the end of the file, only what is appended; partial lin
 	const resumed = followLocal(async () => file, { classify: claudePiece, cursor: calls.at(-1)!.cursor, onEntries: (entries, cursor) => { again.push(...entries); cursors.push(cursor); }, pollMs: 30, cursorDelayMs: 30 });
 	try {
 		await until(() => cursors.length === 1);
-		assert.deepEqual(again.map(e => [e.id, e.text]), [['a1', 'On it.\n\nDone.']]);
+		assert.deepEqual(again.map(e => [e.id, e.text]), [['a1', 'On it.\n\n<arkestra-step kind="command">Ran a command</arkestra-step>\n\nDone.']]);
 		await writeFile(`${file}.new`, `${user('u9', 'fresh')}\n`);
 		await rename(`${file}.new`, file);
 		await until(() => again.some(e => e.id === 'u9'));
