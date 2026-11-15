@@ -9,13 +9,15 @@ import { existsSync, promises as fs, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 import type { ActivityBoard } from './activity';
-import type { AgentRegistry, InviteEntry } from './agent';
+import type { AgentChoices, AgentRegistry, InviteEntry } from './agent';
+import { chipLabel, modelMenu, type Choice, type MenuItem } from './choice';
 import { allowedImage, attachmentName, fileReference, imageSource, type ImageResolver } from './images';
 import type { Room } from './room';
-import { ICONS, escapeHtml, liveHtml, renderMarkdown, rowHtml, threadPage, type ThreadStrings } from './threadHtml';
+import { ICONS, escapeHtml, liveHtml, menuHtml, renderMarkdown, rowHtml, threadPage, type ThreadStrings } from './threadHtml';
 import { FONT_ROOT, pageFonts } from './webviewFonts';
-import { agentTitle, machineOf, parseSlash, providerOf, threadRows, type LiveTurns, type Row } from './threadModel';
+import { agentChip, agentTitle, composerRight, machineOf, parseSlash, providerOf, threadRows, type LiveTurns, type Row } from './threadModel';
 import { projectName, titleFrom } from './threads';
+import { surfaceOf, type Surface } from './surface';
 import { turnState } from './work';
 
 export const THREAD_VIEW_TYPE = 'arkestra.thread';
@@ -40,8 +42,14 @@ export interface ThreadHost {
 	send(room: Room, request: { readonly prompt: string; readonly command?: string }, stream: vscode.ChatResponseStream, token: vscode.CancellationToken): Promise<void>;
 	/** Stops what runs in the room (a round started elsewhere, a template room). */
 	stop(roomId: string): Promise<void>;
-	/** The agent's model and effort in this thread, as a label; empty: its default. */
+	/** The agent's model and effort in this thread, as the composer's chip shows it (`Opus 5.5 · High`, `Default`). */
 	modelLabel(room: Room, agentId: string): Promise<string>;
+	/** The models and efforts the agent offers (cached; reading them can be slow over SSH). */
+	agentChoices(agentId: string): Promise<AgentChoices | undefined>;
+	/** Sets the agent's model and effort in this thread; empty: its own default. */
+	setChoice(room: Room, agentId: string, choice: Choice): Promise<void>;
+	/** Plan mode on or off for the thread (the mode menu; /plan and /execute do the same). */
+	setMode(room: Room, mode: 'plan' | undefined): Promise<void>;
 }
 
 interface View {
@@ -107,10 +115,17 @@ export class ThreadViews implements vscode.Disposable {
 	private readonly activeChanged = new vscode.EventEmitter<string | undefined>();
 	/** The thread of the panel used last; the right panel follows it. */
 	readonly onDidChangeActive = this.activeChanged.event;
+	private surface: Surface = 'editor';
+	private readonly surfaceChanged = new vscode.EventEmitter<Surface>();
+	/** The middle shows a thread, another page (a board, the artifacts, the new chat) or an editor. */
+	readonly onDidChangeSurface = this.surfaceChanged.event;
 
 	constructor(private readonly context: vscode.ExtensionContext, private readonly host: ThreadHost) {
 		this.disposables.push(
 			this.activeChanged,
+			this.surfaceChanged,
+			vscode.window.tabGroups.onDidChangeTabs(() => this.updateSurface()),
+			vscode.window.tabGroups.onDidChangeTabGroups(() => this.updateSurface()),
 			vscode.window.registerWebviewPanelSerializer(THREAD_VIEW_TYPE, {
 				deserializeWebviewPanel: async (panel, state: { roomId?: unknown } | undefined) => {
 					this.adopt(panel, typeof state?.roomId === 'string' ? state.roomId : undefined);
@@ -160,6 +175,22 @@ export class ThreadViews implements vscode.Disposable {
 			view.panel.dispose();
 		}
 		this.disposables.forEach(d => d.dispose());
+	}
+
+	/** What the active tab in the middle shows. */
+	currentSurface(): Surface {
+		return this.surface;
+	}
+
+	private updateSurface(): void {
+		const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+		const webview = input instanceof vscode.TabInputWebview ? input.viewType : undefined;
+		const shown = [...this.views].find(v => v.panel.active);
+		const surface = surfaceOf(webview !== undefined ? { webview } : undefined, THREAD_VIEW_TYPE, shown?.roomId);
+		if (surface !== this.surface) {
+			this.surface = surface;
+			this.surfaceChanged.fire(surface);
+		}
 	}
 
 	/** The thread of the active (or last active) thread panel. */
@@ -286,8 +317,9 @@ export class ThreadViews implements vscode.Disposable {
 				this.active = undefined;
 				this.activeChanged.fire(undefined);
 			}
+			this.updateSurface();
 		});
-		panel.onDidChangeViewState(e => { if (e.webviewPanel.active) { this.activate(view); } });
+		panel.onDidChangeViewState(e => { if (e.webviewPanel.active) { this.activate(view); } else { this.updateSurface(); } });
 		panel.webview.onDidReceiveMessage(message => this.receive(view, message));
 		if (panel.active) {
 			this.activate(view);
@@ -304,6 +336,7 @@ export class ThreadViews implements vscode.Disposable {
 		if (changed) {
 			this.activeChanged.fire(view.roomId);
 		}
+		this.updateSurface();
 	}
 
 	private refreshRoom(roomId: string): void {
@@ -346,7 +379,7 @@ export class ThreadViews implements vscode.Disposable {
 	}
 
 	private clientStrings() {
-		return { send: vscode.l10n.t('Send'), stop: vscode.l10n.t('Stop'), copy: vscode.l10n.t('Copy'), remove: vscode.l10n.t('Remove'), noAgents:vscode.l10n.t('No agent is known yet. Add a machine or sign in to an agent first.') };
+		return { send: vscode.l10n.t('Send'), stop: vscode.l10n.t('Stop'), copy: vscode.l10n.t('Copy'), remove: vscode.l10n.t('Remove'), loading: vscode.l10n.t('Loading…'), noAgents: vscode.l10n.t('No agent is known yet. Add a machine or sign in to an agent first.') };
 	}
 
 	private async push(view: View): Promise<void> {
@@ -397,25 +430,18 @@ export class ThreadViews implements vscode.Disposable {
 			const agent = this.host.registry.get(id);
 			const turn = turns[i];
 			return {
-				label: agent?.name ?? id,
+				key: `agent:${id}`,
+				label: agentChip(agent?.name ?? id, id),
 				dot: turn === 'working' || turn === 'queued' ? 'working' : turn === 'waiting' ? 'waiting' : agent ? '' : 'warn',
 				title: agent ? `${agent.detail}` : vscode.l10n.t('not available now'),
-				action: { type: 'model', agentId: id },
+				...(agent?.choices ? { menu: { menu: 'model', agentId: id } } : {}),
 			};
 		});
 		chips.push({ label: vscode.l10n.t('+ agent'), cls: 'add', action: { type: 'invite' } });
-		const right: object[] = [];
-		if (room.state.mode === 'plan') {
-			right.push({ label: vscode.l10n.t('Plan mode'), cls: 'ghost' });
-		}
-		if (room.roster.length === 1) {
-			const id = room.roster[0];
-			if (this.host.registry.get(id)?.choices) {
-				right.push({ label: this.modelLabel(view, room, id) || vscode.l10n.t('Default model'), cls: 'ghost', action: { type: 'model', agentId: id } });
-			}
-		} else if (room.roster.some(id => this.host.registry.get(id)?.choices)) {
-			right.push({ label: vscode.l10n.t('Models'), cls: 'ghost', action: { type: 'model' } });
-		}
+		const right = composerRight(room, id => !!this.host.registry.get(id)?.choices, id => this.modelLabel(view, room, id), {
+			models: vscode.l10n.t('Models'), auto: vscode.l10n.t('Auto'), plan: vscode.l10n.t('Plan'),
+			modelTitle: vscode.l10n.t('Model and effort'), modeTitle: vscode.l10n.t('Permission mode'),
+		});
 		const buttons = view.buttons.map((b, i) => `<button class="chip" data-button="${i}">${escapeHtml(b.title)}</button>`).join('');
 		const notice = view.notice.trim() || buttons ? `<div class="notice">${view.notice.trim() ? `<div class="md">${renderMarkdown(view.notice.trim())}</div>` : ''}${buttons ? `<div class="nbtns">${buttons}</div>` : ''}</div>` : '';
 		const scroll = view.scroll;
@@ -427,17 +453,50 @@ export class ThreadViews implements vscode.Disposable {
 		});
 	}
 
-	/** The cached label; a missing one is read in the background and the panel updated when it arrives. */
+	/** The cached label; a missing one is read in the background (the plain one shows meanwhile) and the panel updated when it arrives. */
 	private modelLabel(view: View, room: Room, agentId: string): string {
-		const key = `${room.id}:${agentId}:${JSON.stringify(room.state.choices?.[agentId] ?? {})}`;
+		const choice = room.state.choices?.[agentId];
+		const plain = chipLabel(choice, undefined, vscode.l10n.t('Default'));
+		const key = `${room.id}:${agentId}:${JSON.stringify(choice ?? {})}`;
 		const known = this.labels.get(key);
 		if (typeof known === 'string') {
-			return known;
+			return known || plain;
 		}
 		if (!known) {
 			this.labels.set(key, this.host.modelLabel(room, agentId).then(label => { this.labels.set(key, label); }, () => { this.labels.set(key, ''); }).finally(() => this.schedule(view)));
 		}
-		return '';
+		return plain;
+	}
+
+	/** A chip's popover: the agent's models and efforts, whose model to set, or the thread's mode. */
+	private async menu(view: View, anchor: string, kind: string, agentId: string | undefined): Promise<void> {
+		const room = view.roomId ? await this.host.open(view.roomId) : undefined;
+		if (!room) {
+			return;
+		}
+		let items: MenuItem[] = [];
+		const name = (id: string) => agentChip(this.host.registry.get(id)?.name ?? id, id);
+		if (kind === 'model' && agentId && room.roster.includes(agentId)) {
+			const choices = await this.host.agentChoices(agentId);
+			items = choices?.models.length
+				? modelMenu(agentId, room.state.choices?.[agentId], choices, {
+					model: vscode.l10n.t('Model'), effort: vscode.l10n.t('Effort'), default: vscode.l10n.t('Default'),
+					agentDefault: vscode.l10n.t('the agent\'s own setting'), modelDefault: vscode.l10n.t('the model\'s own'),
+				})
+				: [{ kind: 'header', label: vscode.l10n.t('{0} offers no model choice.', name(agentId)) }];
+		} else if (kind === 'models') {
+			items = [
+				{ kind: 'header', label: vscode.l10n.t('Whose model and effort?') },
+				...room.roster.filter(id => this.host.registry.get(id)?.choices).map(id => ({ label: name(id), detail: this.modelLabel(view, room, id), action: { type: 'menu', menu: 'model', agentId: id } })),
+			];
+		} else if (kind === 'mode') {
+			items = [
+				{ kind: 'header', label: vscode.l10n.t('Permission mode') },
+				{ label: vscode.l10n.t('Auto'), detail: vscode.l10n.t('The agents\' own permission settings'), checked: room.state.mode !== 'plan', action: { type: 'mode', mode: 'auto' } },
+				{ label: vscode.l10n.t('Plan'), detail: vscode.l10n.t('Read and plan, change nothing'), checked: room.state.mode === 'plan', action: { type: 'mode', mode: 'plan' } },
+			];
+		}
+		this.post(view, { type: 'menu', anchor, html: menuHtml(items) });
 	}
 
 	private cardHtml(entry: InviteEntry): string {
@@ -478,8 +537,29 @@ export class ThreadViews implements vscode.Disposable {
 		});
 	}
 
-	private async receive(view: View, message: { type?: string; text?: unknown; agents?: unknown; agentId?: unknown; id?: unknown; index?: unknown; name?: unknown; mime?: unknown; data?: unknown; path?: unknown; uris?: unknown }): Promise<void> {
+	private async receive(view: View, message: { type?: string; text?: unknown; agents?: unknown; agentId?: unknown; id?: unknown; index?: unknown; name?: unknown; mime?: unknown; data?: unknown; path?: unknown; uris?: unknown; anchor?: unknown; menu?: unknown; model?: unknown; effort?: unknown; mode?: unknown }): Promise<void> {
 		switch (message.type) {
+			case 'menu':
+				if (typeof message.anchor === 'string' && typeof message.menu === 'string') {
+					await this.menu(view, message.anchor, message.menu, typeof message.agentId === 'string' ? message.agentId : undefined);
+				}
+				break;
+			case 'choose': {
+				const room = view.roomId ? await this.host.open(view.roomId) : undefined;
+				if (room && typeof message.agentId === 'string' && room.roster.includes(message.agentId)) {
+					await this.host.setChoice(room, message.agentId, { ...(typeof message.model === 'string' ? { model: message.model } : {}), ...(typeof message.effort === 'string' ? { effort: message.effort } : {}) });
+					this.schedule(view);
+				}
+				break;
+			}
+			case 'mode': {
+				const room = view.roomId ? await this.host.open(view.roomId) : undefined;
+				if (room && (message.mode === 'plan' || message.mode === 'auto')) {
+					await this.host.setMode(room, message.mode === 'plan' ? 'plan' : undefined);
+					this.schedule(view);
+				}
+				break;
+			}
 			case 'attachFile':
 				if (typeof message.id === 'string' && typeof message.data === 'string') {
 					await this.keepFile(view, message.id, typeof message.name === 'string' ? message.name : '', typeof message.mime === 'string' ? message.mime : '', message.data);

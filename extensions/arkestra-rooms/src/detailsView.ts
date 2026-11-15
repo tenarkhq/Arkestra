@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Arkestra. The right panel of a thread: its agents and their state, the background tasks,
  *  the files the turns changed, where it works, and how full the context is. It follows the
- *  thread panel used last.
+ *  thread panel used last, and the surface in the middle: on a board, the artifacts, the new
+ *  chat or another page it shows nothing of a thread and the right bar closes (surface.ts).
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
@@ -14,6 +15,7 @@ import type { Change } from './checkpoints';
 import type { Room } from './room';
 import { ICONS, detailsPage, escapeHtml } from './threadHtml';
 import { detailsModel, folderLabel, machineOf } from './threadModel';
+import { DetailsFollow, type Surface } from './surface';
 import { formatTokens, tone } from './usage';
 import { sessionContext } from './sessionHome';
 import { FONT_ROOT, pageFonts } from './webviewFonts';
@@ -25,7 +27,12 @@ export interface DetailsHost {
 	readonly registry: AgentRegistry;
 	readonly activity: ActivityBoard;
 	readonly onDidChangeThread: vscode.Event<string>;
-	readonly threads: { activeRoomId(): string | undefined; readonly onDidChangeActive: vscode.Event<string | undefined> };
+	readonly threads: {
+		activeRoomId(): string | undefined;
+		readonly onDidChangeActive: vscode.Event<string | undefined>;
+		currentSurface(): Surface;
+		readonly onDidChangeSurface: vscode.Event<Surface>;
+	};
 	open(roomId: string): Promise<Room | undefined>;
 	/** What the agents changed in the room since its accepted state. */
 	changes(roomId: string): Promise<readonly Change[]>;
@@ -39,13 +46,28 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 	/** The room's changes, read again at most every few seconds (a git call). */
 	private changes: { roomId: string; at: number; list: readonly Change[] } | undefined;
 	private shownChanges: readonly Change[] = [];
+	private readonly follow = new DetailsFollow();
 
 	constructor(private readonly host: DetailsHost) {
 		this.disposables.push(
 			vscode.window.registerWebviewViewProvider(DETAILS_VIEW_ID, this),
 			host.threads.onDidChangeActive(() => this.schedule()),
+			host.threads.onDidChangeSurface(surface => this.surfaceChanged(surface)),
 			host.onDidChangeThread(roomId => { if (roomId === host.threads.activeRoomId()) { this.schedule(); } }),
 		);
+	}
+
+	/** A page in the middle closes the right bar; a thread opens it again, unless the user closed it on a thread. */
+	private surfaceChanged(surface: Surface): void {
+		const action = this.follow.changed(surface);
+		if (action === 'close') {
+			void vscode.commands.executeCommand('workbench.action.closeAuxiliaryBar');
+		} else if (action === 'open') {
+			// Opening the bar must not take the composer's focus.
+			void Promise.resolve(vscode.commands.executeCommand('workbench.action.toggleAuxiliaryBar'))
+				.then(() => vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup'), () => undefined);
+		}
+		this.schedule(0);
 	}
 
 	dispose(): void {
@@ -68,8 +90,17 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 				}
 			}
 		});
-		view.onDidChangeVisibility(() => { if (view.visible) { this.changes = undefined; this.schedule(0); } });
+		this.follow.changed(this.host.threads.currentSurface());
+		this.follow.visibility(view.visible);
+		view.onDidChangeVisibility(() => {
+			this.follow.visibility(view.visible);
+			if (view.visible) {
+				this.changes = undefined;
+				this.schedule(0);
+			}
+		});
 		view.onDidDispose(() => {
+			this.follow.visibility(false);
 			this.view = undefined;
 			clearInterval(this.tick);
 			this.tick = undefined;
@@ -102,7 +133,8 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 		if (!view?.visible) {
 			return;
 		}
-		const roomId = this.host.threads.activeRoomId();
+		// A board, the artifacts or the new chat have their own details in the page.
+		const roomId = this.follow.showsThread() ? this.host.threads.activeRoomId() : undefined;
 		const room = roomId ? await this.host.open(roomId) : undefined;
 		view.description = room?.state.title;
 		if (!room) {

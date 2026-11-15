@@ -8,6 +8,7 @@
 
 import * as vscode from 'vscode';
 import { createHash, randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { RoomState } from './room';
@@ -135,7 +136,7 @@ export class ArtifactGallery implements vscode.Disposable {
 			items: await Promise.all(this.artifacts.map(async a => ({
 				key: a.key, kind: a.kind, title: a.title, roomId: a.roomId, roomTitle: a.roomTitle, project: a.project ?? '', agentName: a.agentName || labels.unknownAgent,
 				author: authorKey(a), authorLabel: authors.get(authorKey(a)) ?? labels.unknownAgent,
-				versions: await Promise.all(a.versions.map(async v => ({ n: v.n, at: v.at, language: v.language ?? '', content: v.content.slice(0, PREVIEW_LIMIT), src: a.kind === 'image' ? this.imageSrc(panel.webview, v) : undefined, svg: a.kind === 'diagram' ? diagramSvg(v.content) : undefined }))),
+				versions: await Promise.all(a.versions.map(async v => ({ n: v.n, at: v.at, language: v.language ?? '', content: v.content.slice(0, PREVIEW_LIMIT), url: v.url ?? '', path: v.path ?? '', src: a.kind === 'image' ? this.imageSrc(panel.webview, v) : undefined, svg: a.kind === 'diagram' ? diagramSvg(v.content) : undefined }))),
 			}))),
 			labels,
 			select: this.selectNext,
@@ -167,10 +168,11 @@ export class ArtifactGallery implements vscode.Disposable {
 		return {
 			title: vscode.l10n.t('Artifacts'), subtitle: vscode.l10n.t('Every agent\'s output of every thread in one place'), search: vscode.l10n.t('Search'),
 			project: vscode.l10n.t('Project'), all: vscode.l10n.t('All'), noProject: vscode.l10n.t('No project'), kind: vscode.l10n.t('Kind'), agent: vscode.l10n.t('Agent'),
-			pinnedFirst: vscode.l10n.t('Pinned ones on top'), pinnedGroup: vscode.l10n.t('Pinned'), unknownAgent: vscode.l10n.t('Unknown'), thisMachine: vscode.l10n.t('this machine'), empty: vscode.l10n.t('No artifacts yet. Diagrams, documents, pages, code and images the agents write in any thread show up here.'),
+			pinnedFirst: vscode.l10n.t('Pinned ones on top'), pinnedGroup: vscode.l10n.t('Pinned'), unknownAgent: vscode.l10n.t('Unknown'), thisMachine: vscode.l10n.t('this machine'), empty: vscode.l10n.t('No artifacts yet. The pages, documents and pictures the agents write, the artifacts they publish, their diagrams and long code show up here; commands and short snippets stay in the thread.'),
 			noMatch: vscode.l10n.t('Nothing matches the filters.'), pin: vscode.l10n.t('Pin'), unpin: vscode.l10n.t('Unpin'), openTab: vscode.l10n.t('Open in a tab'), thread: vscode.l10n.t('Go to the thread'),
 			send: vscode.l10n.t('Send to the room as an @-reference'), copy: vscode.l10n.t('Copy'), versions: vscode.l10n.t('Versions'), version: vscode.l10n.t('version {0}'), pick: vscode.l10n.t('Pick an artifact on the left.'),
 			mermaid: vscode.l10n.t('This diagram kind is shown as its mermaid source; flowcharts are drawn.'), source: vscode.l10n.t('Source'), kinds, kindOrder: ARTIFACT_KINDS,
+			openUrl: vscode.l10n.t('Open on claude.ai'), published: vscode.l10n.t('Published on claude.ai'), onlyPath: vscode.l10n.t('The agent wrote this file on its machine; its text is not known here.'),
 		};
 	}
 
@@ -220,7 +222,23 @@ export class ArtifactGallery implements vscode.Disposable {
 				await vscode.env.clipboard.writeText(v.content);
 				void vscode.window.setStatusBarMessage(vscode.l10n.t('Copied: {0}', a.title), 2000);
 				return;
+			case 'openUrl':
+				if (v.url && /^https:\/\/claude\.ai\//.test(v.url)) {
+					await vscode.env.openExternal(vscode.Uri.parse(v.url));
+				}
+				return;
 			case 'openTab': {
+				if (!v.content) {
+					// Only its path is known: the file itself when it is on this machine, else its address.
+					if (v.path && existsSync(v.path)) {
+						await vscode.window.showTextDocument(vscode.Uri.file(v.path), { preview: false });
+					} else if (v.url) {
+						await vscode.env.openExternal(vscode.Uri.parse(v.url));
+					} else {
+						void vscode.window.showInformationMessage(vscode.l10n.t('{0} is on the agent\'s machine: {1}', a.title, v.path ?? ''));
+					}
+					return;
+				}
 				const uri = await this.save(a, v);
 				if (a.kind === 'document') {
 					await vscode.commands.executeCommand('markdown.showPreview', uri);
@@ -336,14 +354,16 @@ function galleryHtml(cspSource: string): string {
 		const v = a.versions.find(x => x.n === st.ver) || latest(a);
 		const isPinned = data.pinned.includes(a.key);
 		let preview = '';
-		if (a.kind === 'page') preview = '<iframe sandbox="" srcdoc="' + esc(v.content) + '"></iframe>';
+		if (!v.content && (v.url || v.path)) preview = (v.url ? '<p><a data-act="openUrl">' + esc(v.url) + '</a></p>' : '') + (v.path ? '<p class="mut">' + esc(v.path) + (v.url ? '' : ' · ' + esc(L.onlyPath)) + '</p>' : '');
+		else if (a.kind === 'page') preview = '<iframe sandbox="" srcdoc="' + esc(v.content) + '"></iframe>';
 		else if (a.kind === 'image') preview = v.src ? '<img src="' + esc(v.src) + '" alt="' + esc(a.title) + '">' : '<pre>' + esc(v.content) + '</pre>';
 		else if (a.kind === 'document') { const r = rendered.get(a.key + '#' + v.n); if (r === undefined) { vscode.postMessage({ type: 'render', key: a.key, n: v.n }); preview = '<pre>' + esc(v.content) + '</pre>'; } else preview = r || '<pre>' + esc(v.content) + '</pre>'; }
 		else if (a.kind === 'diagram' && v.svg) preview = '<div class="diagram">' + v.svg + '</div><details><summary class="mut">' + esc(L.source) + '</summary><pre>' + esc(v.content) + '</pre></details>';
 		else preview = (a.kind === 'diagram' ? '<p class="mut">' + esc(L.mermaid) + '</p>' : '') + '<pre>' + esc(v.content) + '</pre>';
 		right.innerHTML = '<h1>' + esc(a.title) + (isPinned ? ' <span class="mut">· ' + esc(L.pinnedGroup) + '</span>' : '') + '</h1>'
 			+ '<div class="mut">' + esc(a.authorLabel) + ' · ' + esc(a.roomTitle) + ' · ' + esc(L.version.replace('{0}', v.n)) + ' · ' + esc(time(v.at)) + ' · <a data-act="thread">' + esc(L.thread) + '</a></div>'
-			+ '<div class="bar"><button class="act" data-act="pin">' + esc(isPinned ? L.unpin : L.pin) + '</button><button class="act" data-act="openTab">' + esc(L.openTab) + '</button><button class="act" data-act="send">' + esc(L.send) + '</button><button class="act" data-act="copy">' + esc(L.copy) + '</button></div>'
+			+ (v.path && v.content ? '<div class="mut">' + esc(v.path) + '</div>' : '')
+			+ '<div class="bar">' + (v.url ? '<button class="act" data-act="openUrl" title="' + esc(L.published) + '">' + esc(L.openUrl) + '</button>' : '') + '<button class="act" data-act="pin">' + esc(isPinned ? L.unpin : L.pin) + '</button><button class="act" data-act="openTab">' + esc(L.openTab) + '</button><button class="act" data-act="send">' + esc(L.send) + '</button><button class="act" data-act="copy">' + esc(L.copy) + '</button></div>'
 			+ '<div class="preview">' + preview + '</div>'
 			+ (a.versions.length > 1 ? '<div class="versions"><b>' + esc(L.versions) + '</b>' + a.versions.map(x => '<button class="chip' + (x.n === v.n ? ' on' : '') + '" data-ver="' + x.n + '">v' + x.n + ' · ' + esc(time(x.at)) + '</button>').join('') + '</div>' : '');
 	}

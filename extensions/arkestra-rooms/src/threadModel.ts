@@ -6,7 +6,7 @@
 
 import type { AgentActivity } from './activity';
 import type { AgentEvent } from './agent';
-import type { Message } from './room';
+import type { Message, RoomState } from './room';
 import { withoutAttachments } from './references';
 import { instructionLine } from './threads';
 import { contextPercent } from './usage';
@@ -160,6 +160,12 @@ export function agentLabel(name: string, agentId: string, local: string): string
 /** The agent's own name without its machine: `Claude · dev` → `Claude`. */
 export function agentTitle(name: string): string {
 	return name.split(' · ')[0] || name;
+}
+
+/** The composer's agent chip: `Claude · tenark` for an SSH agent (its machine as named), `Claude` for a local one. */
+export function agentChip(name: string, agentId: string): string {
+	const machine = machineOf(agentId);
+	return machine ? `${agentTitle(name)} · ${name.split(' · ')[1] ?? machine}` : agentTitle(name);
 }
 
 /** The provider an agent id belongs to, for its letter's colour. */
@@ -323,4 +329,23 @@ export function folderLabel(folder: string | undefined, home: string | undefined
 		return folder;
 	}
 	return home && (p === home || p.startsWith(`${home}/`)) ? `~${p.slice(home.length)}` : p;
+}
+
+/**
+ * The composer's right side, as in the render: the model and effort chip (`Opus 5.5 · High`; `Models`
+ * when several agents can choose), then the thread's permission mode (`Auto` or `Plan`). A
+ * template room has its own plan step, so no mode chip there.
+ */
+export function composerRight(room: { readonly roster: readonly string[]; readonly state: Pick<RoomState, 'mode' | 'template'> }, canChoose: (agentId: string) => boolean, label: (agentId: string) => string, t: { readonly models: string; readonly auto: string; readonly plan: string; readonly modelTitle: string; readonly modeTitle: string }): object[] {
+	const right: object[] = [];
+	const choosers = room.roster.filter(canChoose);
+	if (room.roster.length === 1 && choosers.length === 1) {
+		right.push({ key: 'model', label: label(choosers[0]), cls: 'ghost', title: t.modelTitle, menu: { menu: 'model', agentId: choosers[0] } });
+	} else if (choosers.length) {
+		right.push({ key: 'model', label: t.models, cls: 'ghost', title: t.modelTitle, menu: { menu: 'models' } });
+	}
+	if (room.roster.length && !room.state.template) {
+		right.push({ key: 'mode', label: room.state.mode === 'plan' ? t.plan : t.auto, cls: 'ghost', title: t.modeTitle, menu: { menu: 'mode' } });
+	}
+	return right;
 }

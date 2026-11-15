@@ -1,0 +1,61 @@
+/*---------------------------------------------------------------------------------------------
+ *  Arkestra. The right details panel follows the middle: a page closes the right bar, a thread
+ *  opens it again, the user's own close on a thread is kept, editors change nothing.
+ *--------------------------------------------------------------------------------------------*/
+
+import { test } from 'node:test';
+import * as assert from 'node:assert/strict';
+import { DetailsFollow, surfaceOf } from '../surface';
+
+test('the surface of the active tab: a thread, a page (board, artifacts, new chat), an editor', () => {
+	assert.equal(surfaceOf({ webview: 'mainThreadWebview-arkestra.thread' }, 'arkestra.thread', 'room1'), 'thread');
+	assert.equal(surfaceOf({ webview: 'arkestra.thread' }, 'arkestra.thread', undefined), 'page'); // the new chat
+	assert.equal(surfaceOf({ webview: 'mainThreadWebview-arkestra.project' }, 'arkestra.thread', 'room1'), 'page');
+	assert.equal(surfaceOf({ webview: 'mainThreadWebview-arkestra.artifacts' }, 'arkestra.thread', 'room1'), 'page');
+	assert.equal(surfaceOf(undefined, 'arkestra.thread', 'room1'), 'editor');
+});
+
+test('a board closes the right bar and the thread opens it again; the thread\'s details only on a thread', () => {
+	const f = new DetailsFollow();
+	f.visibility(true);
+	assert.equal(f.changed('thread'), undefined);
+	assert.equal(f.showsThread(), true);
+	assert.equal(f.changed('page'), 'close');
+	assert.equal(f.showsThread(), false);
+	f.visibility(false); // our own close
+	assert.equal(f.changed('page'), undefined); // board to artifacts: stays closed
+	assert.equal(f.changed('thread'), 'open');
+	f.visibility(true);
+	assert.equal(f.showsThread(), true);
+});
+
+test('closed by the user on a thread: a page and back keep it closed until he opens it', () => {
+	const f = new DetailsFollow();
+	f.changed('thread');
+	f.visibility(true);
+	f.visibility(false); // the user closed it
+	assert.equal(f.changed('page'), undefined);
+	assert.equal(f.changed('thread'), undefined);
+	f.visibility(true); // he opened it again
+	assert.equal(f.changed('page'), 'close');
+	f.visibility(false);
+	assert.equal(f.changed('thread'), 'open');
+});
+
+test('editors and terminals change nothing; a bar opened by hand on a page is not reopened later by us', () => {
+	const f = new DetailsFollow();
+	f.changed('thread');
+	f.visibility(true);
+	assert.equal(f.changed('editor'), undefined);
+	assert.equal(f.showsThread(), true);
+	assert.equal(f.changed('thread'), undefined);
+	assert.equal(f.changed('page'), 'close');
+	f.visibility(false);
+	f.visibility(true); // opened by hand on the page
+	assert.equal(f.changed('thread'), undefined); // already open
+	// Closed by hand on the page: not the user's thread choice, and nothing to reopen.
+	assert.equal(f.changed('page'), 'close');
+	f.visibility(false);
+	assert.equal(f.changed('editor'), undefined);
+	assert.equal(f.changed('thread'), 'open');
+});

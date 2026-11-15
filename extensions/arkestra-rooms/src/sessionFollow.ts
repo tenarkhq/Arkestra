@@ -74,9 +74,9 @@ export class SessionFollow {
 			let live = true;
 			try {
 				// The cursor is read now: a follow started again goes on where the last one stopped.
-				const watch = agent.watchSession(link.session, (entries, cursor, meta) => {
+				const watch = agent.watchSession(link.session, (entries, cursor, meta, lines) => {
 					if (live) {
-						entry.room.followed(agentId, entries, cursor, meta);
+						entry.room.followed(agentId, entries, cursor, meta, lines);
 					}
 					caughtUp();
 				}, link.cursor);

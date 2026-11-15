@@ -5,6 +5,7 @@
 import type { TemplateState } from './templates/types';
 import type { BestRun } from './best';
 import type { Agent, AgentEvent, AgentRegistry, ExistingSession, Readiness, SessionEntry, SessionHistory, SessionMeta } from './agent';
+import { artifactsFromSessionLines, mergeProduced, type ProducedArtifact } from './produced';
 
 export type AuthorKind = 'user' | 'agent' | 'system';
 
@@ -53,6 +54,8 @@ export interface RoomState {
 	 * where the live follow goes on (the agent's own cursor).
 	 */
 	adopted?: Record<string, AdoptedSession>;
+	/** What the agents produced with their tools (AR26): files they wrote, artifacts they published. */
+	produced?: ProducedArtifact[];
 }
 
 /** An existing CLI session a thread continues (AR39). */
@@ -179,11 +182,12 @@ export class Room {
 	 * entries are appended, an answer that grew is updated in place, an entry the thread already
 	 * has is not added again (by its id). The cursor is kept for the next follow.
 	 */
-	followed(agentId: string, entries: readonly SessionEntry[], cursor?: string, meta?: SessionMeta): void {
+	followed(agentId: string, entries: readonly SessionEntry[], cursor?: string, meta?: SessionMeta, lines?: readonly string[]): void {
 		const adopted = this.state.adopted?.[agentId];
 		if (!adopted) {
 			return;
 		}
+		const producedSome = !!lines?.length && this.produce(agentId, lines);
 		const name = this.registry.get(agentId)?.name ?? this.state.messages.find(m => m.author.kind === 'agent' && m.author.id === agentId)?.author.name ?? agentId;
 		const index = new Map<string, number>();
 		this.state.messages.forEach((m, i) => { if (m.source?.agent === agentId) { index.set(m.source.entry, i); } });
@@ -210,9 +214,18 @@ export class Room {
 			this.state.adopted = { ...this.state.adopted, [agentId]: next };
 			changed = true;
 		}
-		if (changed) {
+		if (changed || producedSome) {
 			this.touch();
 		}
+	}
+
+	/** An agent's raw session or output lines: what it produced in them is kept (AR26). True: something new. */
+	produce(agentId: string, lines: readonly string[]): boolean {
+		const merged = mergeProduced(this.state.produced, artifactsFromSessionLines(lines, agentId));
+		if (merged) {
+			this.state.produced = merged;
+		}
+		return !!merged;
 	}
 
 	/** The room saved the template state in place; listeners save the room. */
@@ -224,6 +237,7 @@ export class Room {
 
 	private async runTurn(agent: Agent, sink: TurnSink, signal: AbortSignal): Promise<string> {
 		let reply = '';
+		const lines: string[] = [];
 		const shared = await this.shared?.().catch(() => undefined);
 		sink(agent, { kind: 'start' });
 		try {
@@ -235,6 +249,10 @@ export class Room {
 			// No model chosen here: an adopted session goes on with the model it has been running.
 			const model = choice?.model ?? adopted?.model;
 			await agent.turn({ roomId: this.id, transcript: [...this.state.messages], ...(this.state.mode === 'plan' ? { mode: 'plan' as const } : {}), ...(shared ? { shared } : {}), ...(model ? { model } : {}), ...(choice?.effort ? { effort: choice.effort } : {}) }, event => {
+				if (event.kind === 'line') {
+					lines.push(event.line);
+					return;
+				}
 				if (event.kind === 'text') {
 					reply += reply ? `\n\n${event.text}` : event.text;
 				}
@@ -246,8 +264,11 @@ export class Room {
 			reply += reply ? `\n\n[error] ${text}` : `[error] ${text}`;
 		}
 		sink(agent, { kind: 'end' });
+		const producedSome = lines.length > 0 && this.produce(agent.id, lines);
 		if (reply) {
 			this.append({ kind: 'agent', id: agent.id, name: agent.name }, reply);
+		} else if (producedSome) {
+			this.touch();
 		}
 		await this.afterTurn?.(agent, reply).catch(() => undefined);
 		return reply;
@@ -327,8 +348,11 @@ export function mergeHistory(state: RoomState, agent: { readonly id: string; rea
 
 /** What an agent's sessionHistory gave: its entries, and the follow cursor when it has one (an older agent gives a list). */
 export function sessionHistoryOf(read: readonly SessionEntry[] | SessionHistory | undefined): SessionHistory {
-	const history = Array.isArray(read) ? undefined : read as SessionHistory | undefined;
-	return Array.isArray(read) ? { entries: read } : { entries: history?.entries ?? [], ...(typeof history?.cursor === 'string' ? { cursor: history.cursor } : {}), ...(history?.meta ? { meta: history.meta } : {}) };
+	if (Array.isArray(read)) {
+		return { entries: read };
+	}
+	const h = read as SessionHistory | undefined;
+	return { entries: h?.entries ?? [], ...(typeof h?.cursor === 'string' ? { cursor: h.cursor } : {}), ...(h?.meta ? { meta: h.meta } : {}), ...(Array.isArray(h?.lines) ? { lines: h.lines.filter((l): l is string => typeof l === 'string') } : {}) };
 }
 
 /**
@@ -337,7 +361,7 @@ export function sessionHistoryOf(read: readonly SessionEntry[] | SessionHistory 
  * was imported; without one it starts at the session's end when the thread is first followed.
  */
 export function importedRoomState(agent: { id: string; name: string; historyVersion?: number }, session: ExistingSession, history: readonly SessionEntry[] | SessionHistory, project?: string, now: () => Date = () => new Date()): RoomState {
-	const { entries, cursor, meta } = sessionHistoryOf(history);
+	const { entries, cursor, meta, lines } = sessionHistoryOf(history);
 	const state = newRoomState(session.title, project);
 	const at = (e: SessionEntry) => e.at && !Number.isNaN(Date.parse(e.at)) ? new Date(e.at).toISOString() : now().toISOString();
 	state.roster.push(agent.id);
@@ -347,5 +371,9 @@ export function importedRoomState(agent: { id: string; name: string; historyVers
 	}
 	const link: AdoptedSession = { session: session.id, ...(session.cwd ? { cwd: session.cwd } : {}), upTo: state.messages.at(-1)!.id, ...(cursor !== undefined ? { cursor } : {}), ...(agent.historyVersion !== undefined ? { version: agent.historyVersion } : {}) };
 	state.adopted = { [agent.id]: withMeta(link, meta) };
+	const produced = lines?.length ? artifactsFromSessionLines(lines, agent.id) : [];
+	if (produced.length) {
+		state.produced = mergeProduced(undefined, produced);
+	}
 	return state;
 }
