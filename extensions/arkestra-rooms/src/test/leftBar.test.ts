@@ -102,3 +102,11 @@ test('running: a busy thread, or a session whose file changed in the last two mi
 	const out = groups([thread('Busy', { roster: ['codex'] })], listings, { busy: id => id === 'Busy' });
 	assert.deepEqual(out[0].items.map(i => [titles([i])[0], i.running]), [['Live', true], ['Idle', false], ['Busy', true]]);
 });
+
+test('a thread outside the agent groups knows its agent and machine: its continued session first, else its only agent', async () => {
+	const { threadMachine } = await import('../leftBar');
+	const t = (roster: string[], adopted?: { agent: string; session: string }[]) => ({ id: 'x', title: 'x', pinned: false, archived: false, lastAt: '', agents: roster.length, roster, ...(adopted ? { adopted } : {}) });
+	assert.deepEqual([threadGroup(t(['claude@tenark-claude'], [{ agent: 'claude@tenark-claude', session: 's' }])), threadMachine(t(['claude@tenark-claude'], [{ agent: 'claude@tenark-claude', session: 's' }]))], ['claude', 'tenark-claude']);
+	assert.deepEqual([threadGroup(t(['codex'])), threadMachine(t(['codex']))], ['codex', 'local']);
+	assert.deepEqual([threadGroup(t(['claude', 'codex'])), threadMachine(t(['claude', 'codex']))], ['several', undefined]);
+});

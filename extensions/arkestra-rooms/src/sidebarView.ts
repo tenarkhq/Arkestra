@@ -8,7 +8,7 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import type { ListedSession } from './sessionHome';
-import { agentGroups, machineCount as rowMachines, sessionRowId, type AgentListing, type GroupItem, type SessionEntry } from './leftBar';
+import { agentGroups, machineCount as rowMachines, sessionRowId, threadGroup, threadMachine, type AgentListing, type GroupItem, type SessionEntry } from './leftBar';
 import { LOCAL, readMachineEntries, relativeTime } from './machinesModel';
 import { addSection, deleteSection, keepThreads, layoutThreads, matches, moveSection, moveThread, parseSections, renameSection, sectionOf, sectionsFromCategories, shiftSection, type Section } from './sections';
 import { MachinesPage } from './machinesPage';
@@ -237,7 +237,11 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 		const machineLabel = (id: string | undefined) => several && id ? machines.get(id) ?? id : undefined;
 		const thread = (t: ThreadSummary, item?: GroupItem): SidebarRow => {
 			const section = sectionOf(sections, t.id);
-			const machine = machineLabel(item?.machine);
+			// In the agent groups the header names the agent; in a section, Pinned or Archived the row does,
+			// with its machine while there are several.
+			const own = item ? undefined : threadMachine(t);
+			const machine = item ? machineLabel(item.machine) : own && machineCount() > 1 ? machines.get(own) ?? own : undefined;
+			const agent = item ? undefined : groupName(threadGroup(t));
 			return {
 				key: `thread:${t.id}`, kind: 'thread', id: t.id, title: t.title,
 				tip: [t.title, [projectName(t.project), item?.machine ? machines.get(item.machine) ?? item.machine : '', when(item?.at ?? t.lastAt)].filter(Boolean).join(' · ')].filter(Boolean).join('\n'),
@@ -246,6 +250,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 				...(t.archived ? { archived: true } : {}),
 				...(section ? { section } : {}),
 				...(machine ? { machine } : {}),
+				...(agent ? { agent } : {}),
 			};
 		};
 		const sessionRows = new Map<string, SessionEntry>();

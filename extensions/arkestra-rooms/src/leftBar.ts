@@ -60,7 +60,7 @@ export function threadGroup(t: ThreadSummary): string {
 }
 
 /** The machine a thread's work runs on: its continued session's, else its only agent's. */
-function threadMachine(t: ThreadSummary): string | undefined {
+export function threadMachine(t: ThreadSummary): string | undefined {
 	const agent = t.adopted?.[0]?.agent ?? (t.roster?.length === 1 ? t.roster[0] : undefined);
 	return agent ? machineOf(agent) : undefined;
 }

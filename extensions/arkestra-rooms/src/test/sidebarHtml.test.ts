@@ -61,3 +61,8 @@ test('a background refresh waits while the mouse is on the list or a menu is ope
 	assert.match(html, /if \(pending && !dragging && !editing && !menu && !hovering\) \{ pending = false; render\(\); \}/);
 	assert.match(html, /if \(!reopen\) \{ flush\(\); \}/, 'closing a menu shows a held refresh');
 });
+
+test('a row outside the agent groups names its agent and machine on the right', () => {
+	const html = sidebarHtml('N', Object.fromEntries(keys.map(k => [k, k])) as unknown as SidebarStrings);
+	assert.ok(html.includes("if (r.agent || r.machine) { it.append(el('span', 'k m', [r.agent, r.machine].filter(Boolean).join(' · '))); }"));
+});

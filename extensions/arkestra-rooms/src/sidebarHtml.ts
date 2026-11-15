@@ -23,6 +23,8 @@ export interface SidebarRow {
 	readonly section?: string;
 	/** The machine it runs on, only while rows of several machines show. */
 	readonly machine?: string;
+	/** Its agent, on rows outside the agent groups (sections, Pinned, Archived). */
+	readonly agent?: string;
 }
 
 /** One agent's group of the default listing; `older`: past the recent window, behind "Show older". */
@@ -218,7 +220,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 			it.append(icon(r.kind));
 		}
 		it.append(el('span', 'n', r.title));
-		if (r.machine) { it.append(el('span', 'k m', r.machine)); }
+		if (r.agent || r.machine) { it.append(el('span', 'k m', [r.agent, r.machine].filter(Boolean).join(' · '))); }
 		it.title = r.tip || r.title;
 		if (chat) {
 			const more = el('span', 'more', '⋯');
