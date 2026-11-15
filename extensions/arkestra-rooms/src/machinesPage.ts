@@ -146,16 +146,47 @@ export class MachinesPage implements vscode.Disposable {
 					await vscode.commands.executeCommand('arkestra.connections.openFolder', m.machine);
 				}
 				return;
-			case 'edit':
-				if (typeof m.machine === 'string' && m.machine !== LOCAL) {
-					// A changed connection is checked again through the setting's change event.
-					await vscode.commands.executeCommand('arkestra.connections.edit', m.machine);
+			case 'saveConnection': {
+				// The page's own form (a new connection, or an edit in the machine's card); a changed connection is checked again through the setting's change event.
+				if (typeof m.machine !== 'string' || m.machine === LOCAL) {
+					return;
+				}
+				let problem: { field?: string; message: string } | undefined;
+				try {
+					await vscode.extensions.getExtension('vscode.arkestra-connections')?.activate();
+					problem = await vscode.commands.executeCommand<{ field?: string; message: string } | undefined>('arkestra.connections.save', {
+						...(m.machine ? { id: m.machine } : {}), host: String(m.host ?? ''), name: String(m.name ?? ''), folder: String(m.folder ?? ''),
+					});
+				} catch (error) {
+					problem = { message: error instanceof Error ? error.message : String(error) };
+				}
+				void this.panel?.webview.postMessage({ type: 'saved', machine: m.machine, ...(problem ? { error: problem.message, field: problem.field ?? '' } : {}) });
+				return;
+			}
+			case 'hosts': {
+				const hosts = await Promise.resolve(vscode.commands.executeCommand<string[]>('arkestra.connections.sshHosts')).catch(() => []);
+				void this.panel?.webview.postMessage({ type: 'hosts', hosts: Array.isArray(hosts) ? hosts : [] });
+				return;
+			}
+			case 'browse': {
+				if (typeof m.machine !== 'string' || m.machine === LOCAL) {
+					return;
+				}
+				await vscode.extensions.getExtension('vscode.arkestra-connections')?.activate();
+				const listed = await Promise.resolve(vscode.commands.executeCommand<{ dir: string; parent?: string; folders: string[]; error?: string } | undefined>('arkestra.connections.listFolders', m.machine, typeof m.dir === 'string' ? m.dir : ''))
+					.catch(error => ({ dir: typeof m.dir === 'string' ? m.dir : '', folders: [] as string[], error: error instanceof Error ? error.message : String(error) }));
+				void this.panel?.webview.postMessage({ type: 'folders', machine: m.machine, ...(listed ?? { dir: '', folders: [], error: vscode.l10n.t('This connection no longer exists.') }) });
+				return;
+			}
+			case 'terminalAt':
+				if (typeof m.machine === 'string' && m.machine !== LOCAL && typeof m.dir === 'string' && m.dir) {
+					await vscode.commands.executeCommand('arkestra.connections.openTerminal', m.machine, m.dir);
 				}
 				return;
 			case 'remove':
 				// The page asked already (its inline confirm), so no second dialog.
 				if (typeof m.machine === 'string' && m.machine !== LOCAL) {
-					await vscode.commands.executeCommand('arkestra.connections.remove', m.machine, true);
+					await vscode.commands.executeCommand('arkestra.connections.remove', m.machine);
 					this.connections.delete(m.machine);
 				}
 				return;
@@ -268,5 +299,18 @@ function strings(): MachinesStrings {
 		removeAsk: vscode.l10n.t('Remove the connection {0}? Its agents leave the invite list; its threads stay.'),
 		removeYes: vscode.l10n.t('Yes, remove'),
 		cancel: vscode.l10n.t('Cancel'),
+		addConnection: vscode.l10n.t('New SSH connection'),
+		host: vscode.l10n.t('SSH destination'),
+		hostHint: vscode.l10n.t('An alias from ~/.ssh/config or user@host, a port after a colon if needed.'),
+		name: vscode.l10n.t('Name'),
+		nameHint: vscode.l10n.t('Shown next to its agents. Empty: the host\'s name.'),
+		folderField: vscode.l10n.t('Project folder on the machine'),
+		folderHint: vscode.l10n.t('Empty: the home folder.'),
+		save: vscode.l10n.t('Save'),
+		folderUp: vscode.l10n.t('One folder up'),
+		terminalHere: vscode.l10n.t('Open a terminal here'),
+		readingFolders: vscode.l10n.t('Reading the folders…'),
+		noFolders: vscode.l10n.t('No folders here.'),
+		couldNotReadFolder: vscode.l10n.t('The folder could not be read: {0}'),
 	};
 }

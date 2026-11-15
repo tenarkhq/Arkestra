@@ -144,24 +144,13 @@
         "category": "Arkestra"
       },
       {
-        "command": "arkestra.remote.toggleThread",
-        "title": "%remote.toggleThread%",
-        "category": "Arkestra",
-        "icon": "$(radio-tower)"
-      },
-      {
         "command": "arkestra.remote.menu",
         "title": "%remote.menu%",
         "category": "Arkestra"
       }
     ],
     "menus": {
-      "commandPalette": [
-        {
-          "command": "arkestra.remote.toggleThread",
-          "when": "false"
-        }
-      ]
+      "commandPalette": []
     }
   },
   "scripts": {

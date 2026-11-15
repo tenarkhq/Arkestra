@@ -46,6 +46,7 @@ export const BOARDS_LABELS = {
 	empty: 'No boards yet',
 	emptyText: 'Add a GitHub Project to follow its work here: what is open, what is done and how far each line is.',
 	noMatch: 'Nothing matches the search.',
+	remote: 'Remote Control and relay',
 };
 
 export type BoardsLabels = typeof BOARDS_LABELS;
@@ -59,6 +60,8 @@ button, input { font: inherit; color: inherit; }
 h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
 .mut { color: var(--mute); }
 .sub { color: var(--mute); margin-top: 2px; }
+header { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+header .hd { flex: 1 1 320px; min-width: 0; }
 .tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 input[type=search], .field { height: 30px; padding: 0 10px; border-radius: 8px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--line)); outline: none; }
 input[type=search] { width: 280px; max-width: 100%; }
@@ -217,7 +220,7 @@ function draw() {
 	const shown = visible();
 	const pinnedCount = tiles.filter(t => t.pinned).length;
 	const chip = (label, on, attrs, n) => '<button class="chip' + (on ? ' on' : '') + '" ' + attrs + '>' + esc(label) + (n !== undefined ? ' <em>' + n + '</em>' : '') + '</button>';
-	document.getElementById('root').innerHTML = '<div class="page"><header><h1>' + esc(L.title) + '</h1><div class="sub">' + esc(L.subtitle) + '</div></header>'
+	document.getElementById('root').innerHTML = '<div class="page"><header><div class="hd"><h1>' + esc(L.title) + '</h1><div class="sub">' + esc(L.subtitle) + '</div></div><button class="btn" data-act="remote">' + esc(L.remote) + '</button></header>'
 		+ (tiles.length ? '<div class="tools"><input type="search" id="q" placeholder="' + esc(L.search) + '" value="' + esc(st.query) + '"><div class="chips">'
 			+ chip(L.all, st.scope === 'all', 'data-act="scope" data-v="all"', tiles.length)
 			+ chip(L.pinned, st.scope === 'pinned', 'data-act="scope" data-v="pinned"', pinnedCount)
@@ -253,6 +256,7 @@ document.addEventListener('click', e => {
 		if (act === 'remove') { confirmKey = key; draw(); return; }
 		if (act === 'removeYes') { confirmKey = undefined; post({ type: 'remove', key }); draw(); return; }
 		if (act === 'removeNo') { confirmKey = undefined; draw(); return; }
+		if (act === 'remote') { post({ type: 'remote' }); return; }
 		if (act === 'addOpen') { openForm(); return; }
 		if (act === 'addCancel') { closeForm(); return; }
 		if (act === 'addGo') { submit(boardKey(addText)); return; }

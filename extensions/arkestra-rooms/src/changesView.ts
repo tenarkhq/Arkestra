@@ -16,6 +16,22 @@ function refUri(ref: string, file: string): vscode.Uri {
 	return vscode.Uri.from({ scheme: SCHEME, path: `/${file}`, query: JSON.stringify({ ref }) });
 }
 
+/** A file a checkpoint changed, under the checkpoint in its view; a click shows the diff. */
+interface CheckpointFile {
+	readonly kind: 'file';
+	readonly cp: Checkpoint;
+	readonly previous: Checkpoint;
+	readonly change: Change;
+}
+
+/** A line under a checkpoint that has no file to show (the first checkpoint, nothing changed). */
+interface CheckpointNote {
+	readonly kind: 'note';
+	readonly text: string;
+}
+
+type CheckpointNode = Checkpoint | CheckpointFile | CheckpointNote;
+
 export class ChangesUi implements vscode.Disposable {
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly changed = new vscode.EventEmitter<void>();
@@ -40,19 +56,40 @@ export class ChangesUi implements vscode.Disposable {
 				return item;
 			},
 		};
-		const checkpointsTree: vscode.TreeDataProvider<Checkpoint> = {
+		// A checkpoint opens in place to the files it changed (no list at the top of the window); a file shows its diff.
+		const checkpointsTree: vscode.TreeDataProvider<CheckpointNode> = {
 			onDidChangeTreeData: this.changed.event,
 			getChildren: async element => {
 				const room = await this.roomId();
 				const store = this.checkpoints();
-				return element || !room || !store ? [] : store.list(room).catch(() => []);
+				if (!room || !store) {
+					return [];
+				}
+				if (!element) {
+					return store.list(room).catch(() => []);
+				}
+				return 'kind' in element ? [] : this.filesOf(room, element);
 			},
-			getTreeItem: cp => {
-				const item = new vscode.TreeItem(`${cp.n} · ${cp.label}`, vscode.TreeItemCollapsibleState.None);
-				item.description = cp.at ? new Date(cp.at).toLocaleTimeString(vscode.env.language, { hour: '2-digit', minute: '2-digit' }) : undefined;
+			getTreeItem: node => {
+				if ('kind' in node) {
+					if (node.kind === 'note') {
+						const item = new vscode.TreeItem(node.text, vscode.TreeItemCollapsibleState.None);
+						item.contextValue = 'checkpointNote';
+						return item;
+					}
+					const item = new vscode.TreeItem(path.basename(node.change.path), vscode.TreeItemCollapsibleState.None);
+					const dir = path.dirname(node.change.path);
+					item.description = `${dir === '.' ? '' : `${dir} · `}${node.change.status === 'A' ? vscode.l10n.t('added') : node.change.status === 'D' ? vscode.l10n.t('deleted') : vscode.l10n.t('modified')}`;
+					item.resourceUri = this.fileUri(node.change.path);
+					item.contextValue = 'checkpointFile';
+					item.command = { command: 'arkestra.checkpoints.show', title: vscode.l10n.t('Show the change'), arguments: [node] };
+					return item;
+				}
+				const item = new vscode.TreeItem(`${node.n} · ${node.label}`, vscode.TreeItemCollapsibleState.Collapsed);
+				item.description = node.at ? new Date(node.at).toLocaleTimeString(vscode.env.language, { hour: '2-digit', minute: '2-digit' }) : undefined;
 				item.iconPath = new vscode.ThemeIcon('history');
 				item.contextValue = 'checkpoint';
-				item.command = { command: 'arkestra.checkpoints.show', title: vscode.l10n.t('Show'), arguments: [cp] };
+				item.tooltip = vscode.l10n.t('Open it to see what checkpoint {0} changed', node.n);
 				return item;
 			},
 		};
@@ -73,7 +110,7 @@ export class ChangesUi implements vscode.Disposable {
 			vscode.commands.registerCommand('arkestra.changes.keepAll', () => this.act('keep')),
 			vscode.commands.registerCommand('arkestra.changes.discardAll', () => this.act('discard')),
 			vscode.commands.registerCommand('arkestra.checkpoints.restore', (cp: Checkpoint) => this.restore(cp)),
-			vscode.commands.registerCommand('arkestra.checkpoints.show', (cp: Checkpoint) => this.show(cp)),
+			vscode.commands.registerCommand('arkestra.checkpoints.show', (file: CheckpointFile) => this.show(file)),
 			vscode.commands.registerCommand('arkestra.checkpoints.refresh', () => this.refresh()),
 		);
 		const watcher = vscode.workspace.createFileSystemWatcher('**/*');
@@ -160,23 +197,24 @@ export class ChangesUi implements vscode.Disposable {
 		this.refresh();
 	}
 
-	/** What a checkpoint changed compared with the one before it. */
-	private async show(cp: Checkpoint): Promise<void> {
-		const room = await this.roomId();
+	/** The files a checkpoint changed compared with the one before it, or why there are none. */
+	private async filesOf(room: string, cp: Checkpoint): Promise<CheckpointNode[]> {
 		const store = this.checkpoints();
-		if (!room || !store) {
+		const previous = store ? (await store.list(room).catch(() => [])).find(c => c.n < cp.n) : undefined;
+		if (!store || !previous) {
+			return [{ kind: 'note', text: vscode.l10n.t('The first checkpoint of this room') }];
+		}
+		const files = await store.changedBetween(previous.commit, cp.commit).catch(() => []);
+		return files.length ? files.map(change => ({ kind: 'file' as const, cp, previous, change })) : [{ kind: 'note', text: vscode.l10n.t('No file changed') }];
+	}
+
+	/** One file's change in a checkpoint, as a diff with the checkpoint before it. */
+	private async show(file: CheckpointFile): Promise<void> {
+		if (file?.kind !== 'file') {
 			return;
 		}
-		const previous = (await store.list(room)).find(c => c.n < cp.n);
-		if (!previous) {
-			void vscode.window.showInformationMessage(vscode.l10n.t('Checkpoint {0} is the first one of this room.', cp.n));
-			return;
-		}
-		const files = await store.changedBetween(previous.commit, cp.commit);
-		const pick = await vscode.window.showQuickPick(files.map(f => ({ label: path.basename(f.path), description: f.path, change: f })), { title: vscode.l10n.t('What checkpoint {0} changed', cp.n), placeHolder: files.length ? undefined : vscode.l10n.t('No file changed') });
-		if (pick) {
-			await vscode.commands.executeCommand('vscode.diff', refUri(previous.commit, pick.change.path), refUri(cp.commit, pick.change.path), `${pick.label} (${previous.n} → ${cp.n})`);
-		}
+		const { previous, cp, change } = file;
+		await vscode.commands.executeCommand('vscode.diff', refUri(previous.commit, change.path), refUri(cp.commit, change.path), `${path.basename(change.path)} (${previous.n} → ${cp.n})`);
 	}
 
 	dispose(): void {

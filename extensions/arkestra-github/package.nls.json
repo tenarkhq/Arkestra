@@ -21,6 +21,5 @@
   "remote.pair": "Remote Control: new pairing link",
   "remote.copyLink": "Remote Control: copy the pairing link",
   "remote.toggleAll": "Remote Control: every thread / only chosen threads",
-  "remote.toggleThread": "Remote Control for this thread (on/off)",
   "remote.menu": "Remote Control…"
 }

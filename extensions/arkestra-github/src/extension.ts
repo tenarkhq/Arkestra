@@ -16,6 +16,7 @@ import { ProjectBoards, type BoardLease, type BoardSource } from './boardView';
 import { boardKey, cacheKey as boardCacheKey, seedBoards, type BoardEntry } from './boards';
 import { BoardsPage } from './boardsPage';
 import { RemoteControl } from './remoteUi';
+import { relayProblem } from './remotePage';
 
 const TOKEN = 'arkestra.github.relayToken';
 const SCOPES = ['repo', 'read:org', 'project'];
@@ -235,20 +236,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 	context.subscriptions.push(
 		events, states, projectChanged, syncChanged, journalAdded, log, item,
 		{ dispose: () => { clearInterval(ticker); clearTimeout(saveTimer); client?.stop(); sync?.dispose(); extra.forEach(x => { x.sync.dispose(); x.changed.dispose(); }); } },
-		vscode.commands.registerCommand('arkestra.github.connect', async () => {
-			const config = vscode.workspace.getConfiguration('arkestra.github');
-			const url = (await vscode.window.showInputBox({ title: vscode.l10n.t('GitHub relay'), prompt: vscode.l10n.t('The relay\'s address on the edge server'), value: config.get<string>('relayUrl') ?? '', placeHolder: 'https://edge.example.com/arkestra', ignoreFocusOut: true }))?.trim();
-			if (!url) {
-				return;
-			}
-			const relayToken = (await vscode.window.showInputBox({ title: vscode.l10n.t('GitHub relay'), prompt: vscode.l10n.t('This client\'s token from the relay\'s clients file'), password: true, ignoreFocusOut: true }))?.trim();
-			if (!relayToken) {
-				return;
-			}
-			await context.secrets.store(TOKEN, relayToken);
-			await config.update('relayUrl', url, vscode.ConfigurationTarget.Global);
-			await restartRelay();
-		}),
+		// The relay's address and token are typed into the Remote Control page's own fields.
+		vscode.commands.registerCommand('arkestra.github.connect', () => remote.show(true)),
 		vscode.commands.registerCommand('arkestra.github.disconnect', async () => {
 			await context.secrets.delete(TOKEN);
 			await restartRelay();
@@ -270,45 +259,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 			}
 			await restartSync();
 		}),
-		vscode.commands.registerCommand('arkestra.github.setProject', async () => {
-			const config = vscode.workspace.getConfiguration('arkestra.github');
-			const save = (ref: { owner: string; number: number } | undefined) => config.update('project', ref ? `${ref.owner}/${ref.number}` : '', vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
-			// The projects of the signed-in user and their organizations; typing one in stays possible.
-			let projects: ProjectChoice[] = [];
-			let listError: string | undefined;
-			try {
-				token ??= await githubToken(true);
-				projects = parseProjectList(await graphqlClient(async () => token)(PROJECT_LIST_QUERY, {}));
-			} catch (error) {
-				listError = error instanceof Error ? error.message : String(error);
-			}
-			type Pick = vscode.QuickPickItem & { ref?: { owner: string; number: number }; manual?: true };
-			const current = config.get<string>('project') ?? '';
-			const items: Pick[] = [
-				...projects.map(p => ({ label: p.title, description: `${p.owner}/${p.number}${p.closed ? ` · ${vscode.l10n.t('closed')}` : ''}${`${p.owner}/${p.number}` === current ? ` · ${vscode.l10n.t('current')}` : ''}`, ref: { owner: p.owner, number: p.number } })),
-				{ label: `$(edit) ${vscode.l10n.t('Enter owner/number or a project URL…')}`, ...(listError ? { detail: vscode.l10n.t('The list could not be read: {0}', listError) } : {}), manual: true },
-			];
-			const pick = await vscode.window.showQuickPick(items, { title: vscode.l10n.t('GitHub Project'), placeHolder: vscode.l10n.t('The project this workspace follows'), matchOnDescription: true, ignoreFocusOut: true });
-			if (!pick) {
-				return;
-			}
-			if (pick.ref) {
-				await save(pick.ref);
-				return;
-			}
-			const text = await vscode.window.showInputBox({
-				title: vscode.l10n.t('GitHub Project'),
-				prompt: vscode.l10n.t('The project this workspace follows: owner/number or the project\'s URL'),
-				value: config.get<string>('project') ?? '',
-				placeHolder: 'tenarkhq/3',
-				validateInput: v => !v.trim() || parseProjectRef(v) ? undefined : vscode.l10n.t('owner/number, e.g. tenarkhq/3, or https://github.com/orgs/<org>/projects/<n>'),
-				ignoreFocusOut: true,
-			});
-			if (text === undefined) {
-				return;
-			}
-			await save(parseProjectRef(text));
-		}),
+		// The palette's way: the workspace's board with its own project list (no list at the top).
+		vscode.commands.registerCommand('arkestra.github.setProject', () => boards.pickProject()),
 		vscode.commands.registerCommand('arkestra.github.refreshProject', async () => {
 			try {
 				await need().refresh();
@@ -478,6 +430,24 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 			await vscode.commands.executeCommand('arkestra.github.openBoards', { add: true });
 			return undefined;
 		},
+		// "Follow a project…" on the board: the signed-in user's projects and their organizations' in the page; typing one in stays possible.
+		projectChoices: async () => {
+			const current = vscode.workspace.getConfiguration('arkestra.github').get<string>('project') ?? '';
+			try {
+				token ??= await githubToken(true);
+				return { projects: parseProjectList(await graphqlClient(async () => token)(PROJECT_LIST_QUERY, {})), current };
+			} catch (error) {
+				return { projects: [] as ProjectChoice[], current, error: error instanceof Error ? error.message : String(error) };
+			}
+		},
+		followProject: async text => {
+			const ref = parseProjectRef(text);
+			if (!ref) {
+				return vscode.l10n.t('owner/number, e.g. tenarkhq/3, or https://github.com/orgs/<org>/projects/<n>');
+			}
+			await vscode.workspace.getConfiguration('arkestra.github').update('project', `${ref.owner}/${ref.number}`, vscode.workspace.workspaceFolders?.length ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global);
+			return undefined;
+		},
 	}, context.workspaceState);
 	const boardsPage = new BoardsPage({
 		list: boardList,
@@ -524,11 +494,36 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 		vscode.workspace.onDidChangeConfiguration(e => { if (e.affectsConfiguration('arkestra.github.project')) { boardChanged.fire(); } }),
 	);
 	// Remote Control (AR36): the threads on a phone, through the same relay.
-	context.subscriptions.push(new RemoteControl(context, async () => {
-		const url = vscode.workspace.getConfiguration('arkestra.github').get<string>('relayUrl')?.trim();
-		const relayToken = await context.secrets.get(TOKEN);
-		return url && relayToken ? { url, token: relayToken } : undefined;
-	}, log));
+	const relayUrl = () => vscode.workspace.getConfiguration('arkestra.github').get<string>('relayUrl')?.trim() ?? '';
+	const remote = new RemoteControl(context, {
+		get: async () => {
+			const url = relayUrl();
+			const relayToken = await context.secrets.get(TOKEN);
+			return url && relayToken ? { url, token: relayToken } : undefined;
+		},
+		url: relayUrl,
+		hasToken: async () => !!await context.secrets.get(TOKEN),
+		save: async (url, relayToken) => {
+			const problem = relayProblem(url, relayToken, !!await context.secrets.get(TOKEN), {
+				url: vscode.l10n.t('The relay\'s address starts with https:// (or http:// on this machine).'),
+				token: vscode.l10n.t('Paste this client\'s token from the relay\'s clients file.'),
+			});
+			if (problem) {
+				return problem;
+			}
+			if (relayToken.trim()) {
+				await context.secrets.store(TOKEN, relayToken.trim());
+			}
+			await vscode.workspace.getConfiguration('arkestra.github').update('relayUrl', url.trim(), vscode.ConfigurationTarget.Global);
+			await restartRelay();
+			return undefined;
+		},
+		clear: async () => {
+			await context.secrets.delete(TOKEN);
+			await restartRelay();
+		},
+	}, log);
+	context.subscriptions.push(remote);
 	void restartRelay().then(restartSync);
 
 	return {

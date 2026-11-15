@@ -66,6 +66,10 @@ test('the Boards page draws every board and posts what the user does', () => {
 	click({ open: 'csorbar/7' });
 	assert.deepEqual(posted.at(-1), { type: 'open', key: 'csorbar/7' }, 'a tile opens its board');
 
+	assert.ok(page.includes('data-act="remote">Remote Control and relay</button>'), 'Remote Control is reached from the page, not only the palette');
+	click({ act: 'remote' });
+	assert.deepEqual(posted.at(-1), { type: 'remote' });
+
 	click({ act: 'menu', key: 'csorbar/7' });
 	assert.ok(root().includes('role="menu"') && root().includes('>Unpin<') && root().includes('>Open on GitHub<') && root().includes('>Remove<'));
 	click({ act: 'pin', key: 'csorbar/7' });

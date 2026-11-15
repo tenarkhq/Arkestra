@@ -18,10 +18,10 @@ import { statSync } from 'node:fs';
 import { progressItems, taskRooms, type TaskRoom } from './tasks';
 import { TURN_TEXT, turnState, workHtml } from './work';
 import { ActivityView } from './activityView';
-import { choiceLabel, currentModelLabel, effortsFor, fitChoice, type Choice } from './choice';
+import { currentModelLabel, fitChoice, type Choice } from './choice';
 import { threadListItem, threadSnapshot, type ThreadListItem, type ThreadSnapshot } from './threadSnapshot';
 import type { AgentChoices } from './agent';
-import { templateForm } from './templateForm';
+import { TemplateFormPage, type TemplateRequest } from './templateForm';
 import { ChangesUi } from './changesView';
 import { InlineEdits } from './inlineEditUi';
 import { References } from './referencesUi';
@@ -237,64 +237,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		await actions.find(a => a.title === picked)?.run();
 	};
 
-	const pickAndInvite = async (room: Room): Promise<string | undefined> => {
-		const entries = await registry.inviteList(room.roster);
-		if (!entries.length) {
-			void vscode.window.showInformationMessage(vscode.l10n.t('No other agent is known yet.'));
-			return undefined;
-		}
-		const pick = await vscode.window.showQuickPick(entries.map(entry => ({
-			label: entry.readiness.ready ? entry.agent.name : `$(warning) ${entry.agent.name}`,
-			description: entry.agent.detail,
-			detail: describe(entry),
-			entry,
-		})), { title: vscode.l10n.t('Invite an agent into “{0}”', room.state.title), placeHolder: vscode.l10n.t('It receives the thread from the beginning') });
-		if (!pick) {
-			return undefined;
-		}
-		if (!pick.entry.readiness.ready) {
-			await explain(pick.entry);
-			return undefined;
-		}
-		const joined = await invite(room, pick.entry.agent.id);
-		if (pick.entry.agent.choices && room.roster.includes(pick.entry.agent.id)) {
-			await chooseFor(room, pick.entry.agent.id, true);
-		}
-		return joined;
-	};
-
-	/** Who works in a new thread: several can be ticked; the last choice comes ticked. */
+	/** Who worked in the last new thread (the new-chat page ticks them again). */
 	const LAST_AGENTS = 'arkestra.rooms.lastAgents';
-	const pickAgents = (title: string): Promise<string[] | undefined> => new Promise(resolve => {
-		type Item = vscode.QuickPickItem & { entry: InviteEntry };
-		const qp = vscode.window.createQuickPick<Item>();
-		qp.title = title;
-		qp.canSelectMany = true;
-		qp.busy = true;
-		qp.placeholder = vscode.l10n.t('Who works in this thread? More can be invited later.');
-		let done = false;
-		const finish = (ids: string[] | undefined) => { if (!done) { done = true; resolve(ids); qp.dispose(); } };
-		qp.onDidAccept(() => finish(qp.selectedItems.map(i => i.entry.agent.id)));
-		qp.onDidHide(() => finish(undefined));
-		qp.show();
-		void registry.inviteList([]).then(entries => {
-			const last = context.globalState.get<string[]>(LAST_AGENTS) ?? [];
-			qp.items = entries.map(entry => ({
-				label: entry.readiness.ready ? entry.agent.name : `$(warning) ${entry.agent.name}`,
-				description: entry.agent.detail,
-				...(entry.readiness.ready ? {} : { detail: describe(entry) }),
-				entry,
-			}));
-			qp.selectedItems = qp.items.filter(i => i.entry.readiness.ready && last.includes(i.entry.agent.id));
-			qp.busy = false;
-		});
-	});
-	/** A new thread with the agents asked for (or picked), in a project (default: this window's). */
-	const startThread = async (agentIds: readonly string[] | undefined, project?: string): Promise<void> => {
-		const ids = agentIds ?? await pickAgents(vscode.l10n.t('New thread'));
-		if (!ids) {
-			return;
-		}
+	/** A new thread with these agents, in a project (default: this window's). */
+	const startThread = async (ids: readonly string[], project?: string): Promise<void> => {
 		const room = await createRoom(vscode.l10n.t('Room'), project);
 		for (const id of ids) {
 			await invite(room, id);
@@ -337,43 +283,6 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		if (room === current) {
 			currentChanged.fire();
 		}
-	};
-	/** Asks the model, then the effort when the model has efforts. Esc keeps what was there. */
-	const chooseFor = async (room: Room, agentId: string, atInvite = false): Promise<void> => {
-		const agent = registry.get(agentId);
-		const name = agent?.name ?? agentId;
-		const choices = await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: vscode.l10n.t('Reading {0}\'s models…', name) }, () => agentChoices(agentId));
-		if (!choices?.models.length) {
-			if (!atInvite) {
-				void vscode.window.showInformationMessage(vscode.l10n.t('{0} offers no model choice.', name));
-			}
-			return;
-		}
-		const now = room.state.choices?.[agentId] ?? {};
-		type Item = vscode.QuickPickItem & { value: string | undefined };
-		const models: Item[] = [
-			{ label: `$(circle-slash) ${vscode.l10n.t('Default')}`, description: vscode.l10n.t('the agent\'s own setting'), value: undefined },
-			...choices.models.map(m => ({ label: m.label, description: [m.id !== m.label ? m.id : '', m.id === now.model ? vscode.l10n.t('chosen') : ''].filter(Boolean).join(' · '), ...(m.detail ? { detail: m.detail } : {}), value: m.id })),
-		];
-		const model = await vscode.window.showQuickPick(models, { title: vscode.l10n.t('Model for {0} in “{1}”', name, room.state.title), placeHolder: atInvite ? vscode.l10n.t('Esc: the agent\'s default') : undefined, matchOnDescription: true });
-		if (!model) {
-			return;
-		}
-		let effort = model.value === now.model ? now.effort : undefined;
-		const efforts = effortsFor(choices, model.value);
-		if (efforts.length) {
-			const picked = await vscode.window.showQuickPick<Item>([
-				{ label: `$(circle-slash) ${vscode.l10n.t('Default')}`, description: vscode.l10n.t('the model\'s own'), value: undefined },
-				...efforts.map(e => ({ label: e, ...(e === now.effort ? { description: vscode.l10n.t('chosen') } : {}), value: e })),
-			], { title: vscode.l10n.t('Effort for {0}', name) });
-			if (!picked) {
-				return;
-			}
-			effort = picked.value;
-		}
-		await setChoice(room, agentId, { ...(model.value ? { model: model.value } : {}), ...(effort ? { effort } : {}) });
-		const label = choiceLabel(room.state.choices?.[agentId], choices);
-		void vscode.window.setStatusBarMessage(label ? vscode.l10n.t('{0} in this thread: {1}', name, label) : vscode.l10n.t('{0} in this thread: its default model', name), 4000);
 	};
 
 	const invite = async (room: Room, agentId: string): Promise<string> => {
@@ -536,10 +445,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 				return;
 			}
 			if (request.command === 'invite') {
-				const message = await pickAndInvite(room);
-				if (message) {
-					stream.markdown(message);
-				}
+				// The invite list opens on the thread's page, above + agent.
+				await vscode.commands.executeCommand('arkestra.rooms.invite', room.id);
 				return;
 			}
 			const inRoom = room.roster.map(id => registry.get(id)?.name ?? id).join(', ') || vscode.l10n.t('nobody yet');
@@ -808,6 +715,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		modelLabel: async (room, agentId) => currentModelLabel(room.state.choices?.[agentId], await agentChoices(agentId), room.state.adopted?.[agentId]?.model, vscode.l10n.t('Default')),
 		agentChoices,
 		setChoice,
+		invite,
 		setMode: async (room, mode) => {
 			if (room.state.mode === mode || room.state.template) {
 				return;
@@ -986,6 +894,50 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}
 	};
 
+	// A 2ARK template room from its page: the room, both agents, its folder and work trees, then its thread.
+	const startTemplateRoom = async (req: TemplateRequest): Promise<void> => {
+		const room = await createRoom(req.title);
+		for (const role of ['A', 'B'] as Role[]) {
+			await room.invite(req.members[role].id);
+		}
+		const folder = path.join(context.globalStorageUri.fsPath, 'room-files', room.id);
+		await mkdir(folder, { recursive: true });
+		let review: ReviewState | undefined;
+		if (req.review) {
+			const project = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+			const local = req.review.source && !/^https?:/.test(req.review.source) ? path.resolve(project, req.review.source) : undefined;
+			const isFile = local ? await stat(local).then(st => st.isFile(), () => false) : false;
+			if (local && isFile) {
+				await copyFile(local, path.join(folder, 'v1.md'));
+			}
+			review = {
+				reviewer: req.review.reviewer,
+				prompt: req.review.source && !isFile ? `${req.review.prompt}\n\nAz anyag: ${req.review.source}` : req.review.prompt,
+				...(req.review.source ? { source: req.review.source } : {}),
+				version: isFile ? 1 : 0,
+				strict: req.review.strict,
+			};
+		}
+		let code: CodeState | undefined;
+		if (req.code) {
+			const trees = await createWorkTrees(req.code.repo, req.code.base, room.id, { A: req.members.A.name, B: req.members.B.name });
+			code = { ...req.code, ...trees };
+		}
+		const state: TemplateState = {
+			type: req.type, members: req.members, folder, rounds: 0, max: req.max, briefed: {}, waiting: {},
+			...(review ? { review } : {}),
+			...(code ? { code } : {}),
+			...(req.audit ? { audit: { ...req.audit, phase: 'audit' as const, done: {} } } : {}),
+		};
+		room.state.template = state;
+		await store.save(room.state);
+		ensureRun(room)!.engine.start();
+		refreshThreads();
+		await threads.open(room.id);
+	};
+	const templatePage = new TemplateFormPage(registry, startTemplateRoom);
+	context.subscriptions.push(templatePage);
+
 	context.subscriptions.push(
 		sessionParticipant,
 		controller,
@@ -1036,52 +988,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		vscode.commands.registerCommand('arkestra.rooms.newTemplateRoom', async (arg?: unknown) => {
 			// From a project view: { type, brief } presets the form (the task's link as the brief).
 			const preset = arg && typeof arg === 'object' && !Array.isArray(arg) ? arg as { type?: 'coding' | 'audit' | 'review'; brief?: string } : undefined;
-			const req = await templateForm(registry, (await currentRoom())?.roster, preset);
-			if (!req) {
-				return;
-			}
-			try {
-				const room = await createRoom(req.title);
-				for (const role of ['A', 'B'] as Role[]) {
-					await room.invite(req.members[role].id);
-				}
-				const folder = path.join(context.globalStorageUri.fsPath, 'room-files', room.id);
-				await mkdir(folder, { recursive: true });
-				let review: ReviewState | undefined;
-				if (req.review) {
-					const project = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-					const local = req.review.source && !/^https?:/.test(req.review.source) ? path.resolve(project, req.review.source) : undefined;
-					const isFile = local ? await stat(local).then(st => st.isFile(), () => false) : false;
-					if (local && isFile) {
-						await copyFile(local, path.join(folder, 'v1.md'));
-					}
-					review = {
-						reviewer: req.review.reviewer,
-						prompt: req.review.source && !isFile ? `${req.review.prompt}\n\nAz anyag: ${req.review.source}` : req.review.prompt,
-						...(req.review.source ? { source: req.review.source } : {}),
-						version: isFile ? 1 : 0,
-						strict: req.review.strict,
-					};
-				}
-				let code: CodeState | undefined;
-				if (req.code) {
-					const trees = await createWorkTrees(req.code.repo, req.code.base, room.id, { A: req.members.A.name, B: req.members.B.name });
-					code = { ...req.code, ...trees };
-				}
-				const state: TemplateState = {
-					type: req.type, members: req.members, folder, rounds: 0, max: req.max, briefed: {}, waiting: {},
-					...(review ? { review } : {}),
-					...(code ? { code } : {}),
-					...(req.audit ? { audit: { ...req.audit, phase: 'audit' as const, done: {} } } : {}),
-				};
-				room.state.template = state;
-				await store.save(room.state);
-				ensureRun(room)!.engine.start();
-				refreshThreads();
-				await threads.open(room.id);
-			} catch (error) {
-				void vscode.window.showErrorMessage(vscode.l10n.t('The template room could not start: {0}', error instanceof Error ? error.message : String(error)));
-			}
+			await templatePage.open((await currentRoom())?.roster, preset);
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.newThread', async (arg?: unknown) => {
 			// From a project's row: a thread of that project.
@@ -1090,18 +997,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.newThreadWith', async (arg?: unknown) => {
 			const id = typeof arg === 'string' ? arg : (arg as { entry?: InviteEntry } | undefined)?.entry?.agent.id;
-			await startThread(id ? [id] : undefined);
-		}),
-		vscode.commands.registerCommand('arkestra.rooms.fixAgent', async (arg?: unknown) => {
-			const entry = (arg as { entry?: InviteEntry } | undefined)?.entry;
-			if (!entry) {
-				return;
-			}
-			const actions = entry.readiness.actions ?? [];
-			if (actions.length === 1) {
-				await actions[0].run();
+			if (id) {
+				await startThread([id]);
 			} else {
-				await explain(entry);
+				threads.openNew(); // who works in it is chosen on the new-chat page
 			}
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.pin', arg => editRoom(arg, room => { room.state.pinned = true; })),
@@ -1136,74 +1035,47 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			refreshThreads();
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.rename', async (arg: unknown, name?: unknown) => {
+			// The left bar renames in place and passes the new name.
 			const room = await open(threadId(arg));
-			// The left bar renames in place and passes the name; the command palette still asks.
-			const title = room && (typeof name === 'string' ? name.trim() : (await vscode.window.showInputBox({ title: vscode.l10n.t('Rename thread'), value: room.state.title }))?.trim());
+			const title = typeof name === 'string' ? name.trim() : '';
 			if (room && title) {
 				await editRoom(room.id, r => { r.state.title = title; });
-			}
-		}),
-		vscode.commands.registerCommand('arkestra.rooms.setCategory', async (arg: unknown) => {
-			const room = await open(threadId(arg));
-			if (!room) {
-				return;
-			}
-			const existing = [...new Set((await allThreads()).map(t => t.category).filter((c): c is string => !!c))].sort();
-			const none = vscode.l10n.t('No category');
-			const other = vscode.l10n.t('New category…');
-			const pick = await vscode.window.showQuickPick([...existing, other, none], { title: vscode.l10n.t('Category of “{0}”', room.state.title) });
-			const category = pick === other ? (await vscode.window.showInputBox({ title: vscode.l10n.t('New category') }))?.trim() : pick;
-			if (pick === none) {
-				await editRoom(room.id, r => { delete r.state.category; });
-			} else if (category) {
-				await editRoom(room.id, r => { r.state.category = category; });
 			}
 		}),
 	);
 
 	context.subscriptions.push(
 		participant,
-		vscode.commands.registerCommand('arkestra.rooms.new', async () => {
-			const title = await vscode.window.showInputBox({ prompt: vscode.l10n.t('Name of the new room') });
-			if (title !== undefined) {
-				await createRoom(title || vscode.l10n.t('Room'));
-			}
-		}),
+		// The new-chat page: who works in the thread, then its first message.
+		vscode.commands.registerCommand('arkestra.rooms.new', () => threads.openNew()),
 		vscode.commands.registerCommand('arkestra.rooms.invite', async (roomId?: unknown) => {
-			// From a thread's button: that thread's room. From the palette: the room used last.
+			// From a thread's page, a tile or /invite: that thread. From the palette: the thread used last. The list opens above + agent.
 			const id = threadId(roomId);
 			const room = (id ? await open(id) : undefined) ?? await currentRoom();
 			if (!room) {
-				void vscode.window.showInformationMessage(vscode.l10n.t('Start a room in the chat with @room first.'));
+				threads.openNew();
 				return;
 			}
-			const message = await pickAndInvite(room);
-			if (message) {
-				void vscode.window.showInformationMessage(message);
-			}
+			await threads.showMenu(room.id, 'invite');
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.chooseModel', async (arg?: unknown, agentArg?: unknown) => {
+			// The model popover on the thread's page: at the agent's chip, or whose model first.
 			const id = typeof arg === 'string' ? arg : (arg as { thread?: { id: string } } | undefined)?.thread?.id;
 			const room = (id ? await open(id) : undefined) ?? await currentRoom();
 			if (!room) {
-				void vscode.window.showInformationMessage(vscode.l10n.t('Start a room in the chat with @room first.'));
+				threads.openNew();
 				return;
 			}
-			let agentId = typeof agentArg === 'string' ? agentArg : undefined;
-			if (!agentId) {
-				agentId = room.roster.length === 1 ? room.roster[0] : (await vscode.window.showQuickPick(room.roster.map(a => ({ label: registry.get(a)?.name ?? a, description: currentModelLabel(room.state.choices?.[a], choiceCache.get(a)?.choices, room.state.adopted?.[a]?.model) || vscode.l10n.t('default'), id: a })), { title: vscode.l10n.t('Whose model and effort?') }))?.id;
-			}
-			if (agentId) {
-				await chooseFor(room, agentId);
-			}
+			const agentId = typeof agentArg === 'string' ? agentArg : undefined;
+			await threads.showMenu(room.id, agentId ? 'model' : 'models', agentId);
 		}),
+		// The palette's way to a thread (the left bar lists them too).
 		vscode.commands.registerCommand('arkestra.rooms.open', async () => {
 			const rooms = await store.list();
 			const pick = await vscode.window.showQuickPick(rooms.map(r => ({ label: r.title, description: `${r.roster.length} agent`, id: r.id })),
 				{ title: vscode.l10n.t('Open a room') });
-			const room = pick && await open(pick.id);
-			if (room) {
-				await use(room);
+			if (pick) {
+				await threads.open(pick.id);
 			}
 		}),
 	);
