@@ -16,7 +16,7 @@ import type { Room } from './room';
 import { ICONS, detailsPage, escapeHtml, type SharedStrings } from './threadHtml';
 import { readForm } from './pageForm';
 import { detailsModel, elapsed, folderLabel, machineOf, type DetailsTask } from './threadModel';
-import { DetailsFollow, type Surface } from './surface';
+import { DetailsFollow, SETTLE_MS, type BarAction, type Surface } from './surface';
 import { agentMeter, formatTokens, quotaTone, tone } from './usage';
 import { FONT_ROOT, pageFonts } from './webviewFonts';
 import { TURN_TEXT } from './work';
@@ -75,11 +75,18 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 			host.threads.onDidChangeSurface(surface => this.surfaceChanged(surface)),
 			host.onDidChangeThread(roomId => { if (roomId === host.threads.activeRoomId()) { this.schedule(); } }),
 		);
+		// After start the window's layout can close the bar it had: a thread then shows its details again.
+		const settle = setTimeout(() => this.act(this.follow.settled()), SETTLE_MS + 500);
+		this.disposables.push({ dispose: () => clearTimeout(settle) });
 	}
 
 	/** A page in the middle closes the right bar; a thread opens it again, unless the user closed it on a thread. */
 	private surfaceChanged(surface: Surface): void {
-		const action = this.follow.changed(surface);
+		this.act(this.follow.changed(surface));
+		this.schedule(0);
+	}
+
+	private act(action: BarAction): void {
 		if (action === 'close') {
 			void vscode.commands.executeCommand('workbench.action.closeAuxiliaryBar');
 		} else if (action === 'open') {
@@ -87,7 +94,6 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 			void Promise.resolve(vscode.commands.executeCommand(`${DETAILS_VIEW_ID}.focus`))
 				.then(() => vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup'), () => undefined);
 		}
-		this.schedule(0);
 	}
 
 	dispose(): void {
