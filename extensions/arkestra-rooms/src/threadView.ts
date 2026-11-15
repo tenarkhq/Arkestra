@@ -183,7 +183,8 @@ export class ThreadViews implements vscode.Disposable {
 					}
 				}
 			}),
-			host.registry.onDidChange(() => { for (const view of this.views) { if (!view.roomId) { this.schedule(view); } } }),
+			// An agent registered or changed (an SSH machine's comes after start): the new chat's cards and an open thread's chips, names and model.
+			host.registry.onDidChange(() => { for (const view of this.views) { this.schedule(view); } }),
 		);
 	}
 
