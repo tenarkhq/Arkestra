@@ -55,6 +55,9 @@ export class RemoteControl implements vscode.Disposable {
 			vscode.commands.registerCommand('arkestra.remote.copyLink', () => this.copyLink()),
 			vscode.commands.registerCommand('arkestra.remote.toggleAll', () => this.save({ all: !this.saved.all })),
 			vscode.commands.registerCommand('arkestra.remote.menu', () => this.show()),
+			// The thread's own switch in the right panel (as the Claude app's Remote Control switch): this thread on the phone.
+			vscode.commands.registerCommand('arkestra.remote.threadState', (id: unknown) => typeof id === 'string' ? { on: this.saved.on && this.allowed(id) } : undefined),
+			vscode.commands.registerCommand('arkestra.remote.setThread', (id: unknown, on: unknown) => typeof id === 'string' ? this.setThread(id, on === true) : undefined),
 			vscode.window.registerWebviewPanelSerializer(VIEW, { deserializeWebviewPanel: async panel => this.adopt(panel) }),
 		);
 		if (this.saved.on) {
@@ -150,6 +153,27 @@ export class RemoteControl implements vscode.Disposable {
 	}
 
 	private allowed = (id: string): boolean => this.saved.all || this.saved.threads.includes(id);
+
+	/** One thread on or off for the phone: on starts Remote Control if it was off; off with every thread shared keeps the others shared. */
+	private async setThread(id: string, on: boolean): Promise<void> {
+		const s = this.saved;
+		if (on) {
+			if (!s.all && !s.threads.includes(id)) {
+				await this.save({ threads: [...s.threads, id] });
+			}
+			if (!s.on) {
+				await this.start(); // without the relay it shows the page's relay fields
+			}
+			return;
+		}
+		if (s.all) {
+			const rooms = await this.roomsApi();
+			const others = rooms ? (await rooms.threads().catch(() => [])).map(t => t.id).filter(t => t !== id) : [];
+			await this.save({ all: false, threads: others });
+		} else {
+			await this.save({ threads: s.threads.filter(t => t !== id) });
+		}
+	}
 
 	private async pairing(fresh = false): Promise<Pairing> {
 		const stored = fresh ? undefined : await this.context.secrets.get(PAIRING);

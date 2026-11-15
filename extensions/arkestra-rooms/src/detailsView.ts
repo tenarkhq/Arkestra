@@ -107,7 +107,7 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 		view.webview.options = { enableScripts: true, localResourceRoots: [FONT_ROOT] };
 		const shared = sharedStrings();
 		view.webview.html = detailsPage(randomBytes(16).toString('base64'), pageFonts(view.webview), shared);
-		view.webview.onDidReceiveMessage(async (message: { type?: string; index?: unknown; file?: unknown; form?: unknown; values?: unknown }) => {
+		view.webview.onDidReceiveMessage(async (message: { type?: string; index?: unknown; file?: unknown; form?: unknown; values?: unknown; on?: unknown }) => {
 			if (message.type === 'ready') {
 				this.schedule(0);
 				if (this.rememberAsked) {
@@ -125,6 +125,12 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 				}
 				const added = await vscode.commands.executeCommand<boolean>('arkestra.shared.remember', read.values.text);
 				void view.webview.postMessage({ type: 'formDone', form: shared.form.id, note: added ? vscode.l10n.t('Added to the shared memory.') : vscode.l10n.t('The shared memory already has this.') });
+			} else if (message.type === 'remote' && typeof message.on === 'boolean') {
+				const roomId = this.host.threads.activeRoomId();
+				if (roomId) {
+					await Promise.resolve(vscode.commands.executeCommand('arkestra.remote.setThread', roomId, message.on)).catch(() => undefined);
+				}
+				this.schedule(0);
 			} else if (message.type === 'change' && typeof message.index === 'number') {
 				const change = this.shownChanges[message.index];
 				if (change) {
@@ -259,6 +265,11 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 			...[...machines].map(([name, kind]) => `<div class="rr">${ICONS.machine}<span class="n">${escapeHtml(name)}</span><span class="k">${escapeHtml(kind)}</span></div>`),
 			...(folder ? [`<div class="rr" title="${escapeHtml(folder)}">${ICONS.folder}<span class="n">${escapeHtml(folder)}</span></div>`] : []),
 		];
+		// Remote Control for this thread, as the Claude app's switch (the GitHub extension keeps it; none without it).
+		const remote = await Promise.resolve(vscode.commands.executeCommand<{ on: boolean } | undefined>('arkestra.remote.threadState', room.id)).catch(() => undefined);
+		if (remote) {
+			env.push(`<button class="rr" data-remote role="switch" aria-checked="${remote.on}">${ICONS.remote}<span class="n">${escapeHtml(vscode.l10n.t('Remote Control'))}</span><span class="sw"></span></button>`);
+		}
 		parts.push(env.length ? env.join('') : empty(vscode.l10n.t('No machine or folder yet.')));
 		parts.push(this.meters(room, roster));
 		void view.webview.postMessage({ type: 'render', project, html: parts.join('') });

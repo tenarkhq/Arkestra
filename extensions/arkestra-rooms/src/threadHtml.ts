@@ -316,6 +316,7 @@ export const ICONS = {
 	agent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="6" r="2.5"/><path d="M3.5 13.5a4.5 4.5 0 0 1 9 0"/></svg>',
 	done: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="m3 8 3 3 7-7"/></svg>',
 	file: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/></svg>',
+	remote: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="4.5" y="1.5" width="7" height="13" rx="1.5"/><path d="M7 12.2h2"/></svg>',
 	machine: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="7" rx="1.5"/><path d="M5.5 13h5M8 10v3"/></svg>',
 	close: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m4.5 4.5 7 7M11.5 4.5l-7 7"/></svg>',
 	image: IMAGE_ICON,
@@ -971,6 +972,11 @@ button.rr:hover { background: var(--hover); }
 .rr .k { color: var(--dim); font-size: 12px; }
 .rr.mut { color: var(--mute); }
 .rr .add { color: var(--vscode-gitDecoration-addedResourceForeground, #2f9e5b); }
+/* The Remote Control switch (as the Claude app's): the row is the button. */
+.rr .sw { width: 30px; height: 18px; border-radius: 9px; background: var(--line2); position: relative; flex: none; transition: background .15s; }
+.rr .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--vscode-editor-background, #fff); box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+.rr[aria-checked="true"] .sw { background: var(--vscode-button-background, #2f6fdf); }
+.rr[aria-checked="true"] .sw::after { transform: translateX(12px); }
 .rr .del { color: var(--vscode-gitDecoration-deletedResourceForeground, #d64545); }
 /* The agents' dots, the same as the left bar's: runs (pulses), waits for you, stuck; idle and done are quiet. */
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; position: relative; opacity: .55; }
@@ -1030,6 +1036,7 @@ window.addEventListener('message', e => {
 });
 document.addEventListener('click', e => {
 	const b = e.target.closest('[data-change]'); if (b) { vscode.postMessage({ type: 'change', index: Number(b.dataset.change) }); return; }
+	const rc = e.target.closest('[data-remote]'); if (rc) { const on = rc.getAttribute('aria-checked') !== 'true'; rc.setAttribute('aria-checked', String(on)); vscode.postMessage({ type: 'remote', on }); return; }
 	const s = e.target.closest('[data-shared]'); if (s) { vscode.postMessage({ type: 'shared', file: s.dataset.shared }); return; }
 	if (e.target.closest('[data-remember]')) { if (box.hidden) { openRemember(); } else { box.hidden = true; } }
 });
