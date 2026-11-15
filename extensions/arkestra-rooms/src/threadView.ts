@@ -16,7 +16,7 @@ import { FormRequests, formHtml, type FormSpec } from './pageForm';
 import type { Room } from './room';
 import { ICONS, escapeHtml, liveHtml, menuHtml, renderMarkdown, rowHtml, threadPage, type ThreadStrings } from './threadHtml';
 import { FONT_ROOT, pageFonts } from './webviewFonts';
-import { LabelCache, agentChip, agentTitle, composerRight, machineOf, parseSlash, providerOf, threadRows, type LiveTurns, type Row } from './threadModel';
+import { LabelCache, agentChip, agentTitle, composerRight, machineOf, parseSlash, providerOf, threadRows, userWords, type LiveTurns, type Row } from './threadModel';
 import { projectName, titleFrom } from './threads';
 import { surfaceOf, type Surface } from './surface';
 import { turnState } from './work';
@@ -787,7 +787,9 @@ export class ThreadViews implements vscode.Disposable {
 				break;
 			case 'copy':
 				if (view.roomId && typeof message.id === 'string') {
-					const text = (await this.host.open(view.roomId))?.messages.find(m => m.id === message.id)?.text;
+					const found = (await this.host.open(view.roomId))?.messages.find(m => m.id === message.id);
+					// The user's own words as the bubble shows them, without what an app put beside them.
+					const text = found && (found.author.kind === 'user' ? userWords(found.text) : found.text);
 					if (text !== undefined) {
 						await vscode.env.clipboard.writeText(text);
 					}

@@ -304,3 +304,10 @@ test('the jump-to-end button really hides: its own display does not win over [hi
 	assert.ok(page.includes('<button class="down" id="down" hidden title="Jump to the end"'));
 	assert.ok(page.includes('.down[hidden] { display: none; }'));
 });
+
+test('the Claude app\'s artifact view block beside the user\'s words is hidden: the bubble keeps the words, alone it folds', () => {
+	const block = '<artifact-view-context artifact="244be243">\n{"context":{"mode":"canvas"}}\n(The JSON line above is this viewer\'s live state.)\n<artifact-content-authored-by-others/>\n</artifact-view-context>';
+	assert.equal(userWords(`${block}\n\nna ez most sokkal jobb`), 'na ez most sokkal jobb');
+	assert.equal(backgroundNoise(`${block}\n\nna ez most sokkal jobb`), undefined);
+	assert.equal(backgroundNoise(block)?.kind, 'context');
+});
