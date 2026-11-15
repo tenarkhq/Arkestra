@@ -109,9 +109,9 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	};
 	// AR39 · The sessions the agents' CLIs already have on their machines; an SSH listing is slow, so kept for a while.
 	const sessionLists = new Map<string, { at: number; sessions: readonly ExistingSession[] }>();
-	const sessionsOf = async (agent: Agent): Promise<readonly ExistingSession[]> => {
+	const sessionsOf = async (agent: Agent, fresh = false): Promise<readonly ExistingSession[]> => {
 		const cached = sessionLists.get(agent.id);
-		if (cached && Date.now() - cached.at < 120_000) {
+		if (cached && !fresh && Date.now() - cached.at < 120_000) {
 			return cached.sessions;
 		}
 		const sessions = await agent.existingSessions!();
@@ -126,8 +126,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	const sessionHome = async (agentId: string, session: { readonly id: string; readonly cwd?: string }) =>
 		isForeign(agentId, session.cwd, localFolder) ? homeOf(agentId, session, localFolder, await twins(agentId)) : undefined;
 	/** This machine's sessions without the copies an SSH machine has; a copy nobody has is marked. */
-	const listedSessions = async (agent: Agent): Promise<readonly ListedSession[]> => {
-		const sessions = await sessionsOf(agent);
+	const listedSessions = async (agent: Agent, fresh = false): Promise<readonly ListedSession[]> => {
+		const sessions = await sessionsOf(agent, fresh);
 		if (agent.id.includes('@') || !sessions.some(s => isForeign(agent.id, s.cwd, localFolder))) {
 			return sessions;
 		}
@@ -905,6 +905,53 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}
 	}, () => undefined);
 	const sessionAgents = () => registry.all().filter(a => a.existingSessions && a.sessionHistory && a.adoptSession).sort((a, b) => a.name.localeCompare(b.name));
+	/** Sessions being continued now, by CLI and session id: a second click waits for the first. */
+	const adopting = new Map<string, Promise<string | undefined>>();
+	/**
+	 * The thread that continues a CLI session (AR39): the one made before (it catches up first
+	 * when it is to be shown), else a new one with the session's history that follows it live.
+	 * A copy here of an SSH machine's session goes on there. Its room id; a failed read throws.
+	 */
+	const adoptSession = (agentId: string, asSession: ExistingSession, show: boolean): Promise<string | undefined> => {
+		const key = `${agentKind(agentId)}\n${asSession.id}`;
+		const running = adopting.get(key);
+		if (running) {
+			return running;
+		}
+		const work = (async (): Promise<string | undefined> => {
+			const asked = registry.get(agentId);
+			if (!asked?.sessionHistory) {
+				return undefined;
+			}
+			// A copy here of an SSH machine's session goes on there: that is where it grows and where Claude runs it.
+			const { agent, session } = await sessionHome(asked.id, asSession) ?? { agent: asked, session: asSession };
+			if (!agent.sessionHistory) {
+				return undefined;
+			}
+			// A session continued here before opens its thread again (also one that followed this machine's copy of it).
+			const before = (await store.list()).find(s => Object.entries(s.adopted ?? {}).some(([id, link]) => link.session === session.id && agentKind(id) === agentKind(agent.id)));
+			if (before) {
+				// It catches up on what the session wrote since, then follows it live (AR39).
+				if (show && await open(before.id)) {
+					await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Reading the {0} session…', agent.name) }, async () => {
+						await healing.get(before.id);
+						await follow.caughtUp(before.id);
+					});
+				}
+				return before.id;
+			}
+			// The history and where its live follow goes on: nothing written after the read is lost.
+			const history = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Reading the {0} session…', agent.name) }, () => agent.sessionHistory!(session.id));
+			// A local session's folder is its project; an SSH machine's folder is not one here.
+			const project = !agent.id.includes('@') && session.cwd ? vscode.Uri.file(session.cwd).toString() : undefined;
+			const room = track(new Room(importedRoomState({ id: agent.id, name: agent.name, ...(agent.historyVersion !== undefined ? { historyVersion: agent.historyVersion } : {}) }, session, history, project), registry));
+			await store.save(room.state);
+			refreshThreads();
+			return room.id;
+		})().finally(() => adopting.delete(key));
+		adopting.set(key, work);
+		return work;
+	};
 	let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 	const refreshThreads: () => void = () => {
 		clearTimeout(refreshTimer);
@@ -950,7 +997,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			currentThread: () => current?.id,
 			boards: () => github?.boards() ?? [],
 			pinnedArtifacts: () => gallery.pinnedArtifacts(),
-			machineSessions: () => sessionAgents().map(a => ({ id: a.id, name: a.name, sessions: () => listedSessions(a) })),
+			machineSessions: () => sessionAgents().map(a => ({ id: a.id, name: a.name, sessions: (fresh?: boolean) => listedSessions(a, fresh) })),
+			adoptSession: (agentId, session) => adoptSession(agentId, session, false),
 			refreshSessions: () => sessionLists.clear(),
 			continuedSessions: async () => new Map((await store.list()).flatMap(s => Object.entries((loaded.get(s.id)?.state ?? s).adopted ?? {}).map(([agentId, a]) => [`${agentId}\n${a.session}`, s.id] as const))),
 			onDidChange: changedThreads.event,
@@ -965,38 +1013,16 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.continueSession', async (arg: unknown, sessionArg?: ExistingSession) => {
 			const node = arg as { agentId?: string; session?: ExistingSession } | undefined;
-			const asked = registry.get(typeof arg === 'string' ? arg : node?.agentId ?? '');
+			const agentId = typeof arg === 'string' ? arg : node?.agentId ?? '';
 			const asSession = sessionArg ?? node?.session;
-			if (!asked?.sessionHistory || !asSession) {
-				return;
-			}
-			// A copy here of an SSH machine's session goes on there: that is where it grows and where Claude runs it.
-			const { agent, session } = await sessionHome(asked.id, asSession) ?? { agent: asked, session: asSession };
-			if (!agent.sessionHistory) {
-				return;
-			}
-			// A session continued here before opens its thread again (also one that followed this machine's copy of it).
-			const before = (await store.list()).find(s => Object.entries(s.adopted ?? {}).some(([id, link]) => link.session === session.id && agentKind(id) === agentKind(agent.id)));
-			if (before) {
-				// It catches up on what the session wrote since, then follows it live (AR39).
-				if (await open(before.id)) {
-					await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Reading the {0} session…', agent.name) }, async () => {
-						await healing.get(before.id);
-						await follow.caughtUp(before.id);
-					});
-				}
-				await vscode.commands.executeCommand('arkestra.rooms.openThread', before.id);
+			if (!asSession) {
 				return;
 			}
 			try {
-				// The history and where its live follow goes on: nothing written after the read is lost.
-				const history = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: vscode.l10n.t('Reading the {0} session…', agent.name) }, () => agent.sessionHistory!(session.id));
-				// A local session's folder is its project; an SSH machine's folder is not one here.
-				const project = !agent.id.includes('@') && session.cwd ? vscode.Uri.file(session.cwd).toString() : undefined;
-				const room = track(new Room(importedRoomState({ id: agent.id, name: agent.name, ...(agent.historyVersion !== undefined ? { historyVersion: agent.historyVersion } : {}) }, session, history, project), registry));
-				await store.save(room.state);
-				refreshThreads();
-				await vscode.commands.executeCommand('arkestra.rooms.openThread', room.id);
+				const room = await adoptSession(agentId, asSession, true);
+				if (room) {
+					await vscode.commands.executeCommand('arkestra.rooms.openThread', room);
+				}
 			} catch (error) {
 				void vscode.window.showErrorMessage(vscode.l10n.t('Could not read the session: {0}', error instanceof Error ? error.message : String(error)));
 			}

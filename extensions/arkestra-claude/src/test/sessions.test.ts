@@ -4,12 +4,12 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { spawn, type SpawnOptions } from 'node:child_process';
+import { execFileSync, spawn, type SpawnOptions } from 'node:child_process';
 import { mkdir, mkdtemp, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { ClaudeCodeAgent, ROOM_PREAMBLE } from '../claudeCode';
-import { localListing, localSessionFile, parseHistory, parseListing, readScript } from '../sessions';
+import { LIST_SCRIPT, localListing, localSessionFile, parseHistory, parseListing, readScript } from '../sessions';
 import type { Message } from '../rooms';
 
 const ID = (n: number) => `0000000${n}-aaaa-bbbb-cccc-dddddddddddd`;
@@ -93,4 +93,23 @@ test('an adopted session goes on with --resume in its own folder, and gets only 
 	const prompt = rest[rest.indexOf('-p') + 1];
 	assert.ok(prompt.includes('now deploy') && !prompt.includes('fix the stop') && !prompt.startsWith(ROOM_PREAMBLE), prompt);
 
+});
+
+test('the listing skips scripts\' and pipelines\' sessions (claude -p, the Agent SDK) and temporary folders, the same over SSH as here', { skip: process.platform === 'win32' }, async () => {
+	const home = await mkdtemp(path.join(tmpdir(), 'arkestra-home-'));
+	const projects = path.join(home, '.claude', 'projects');
+	const chats = path.join(projects, '-home-r-tenark');
+	const scratch = path.join(projects, '-tmp-claude-1001-beat-triage');
+	await mkdir(chats, { recursive: true });
+	await mkdir(scratch, { recursive: true });
+	await writeFile(path.join(chats, `${ID(1)}.jsonl`), user('Tenark X', { entrypoint: 'claude-desktop' }));
+	await writeFile(path.join(chats, `${ID(2)}.jsonl`), user('a dispatcher brief', { entrypoint: 'sdk-cli' }));
+	await writeFile(path.join(chats, `${ID(3)}.jsonl`), [JSON.stringify({ type: 'user', message: { content: '<system-reminder>context</system-reminder>' } }), user('ArkadeOS', { entrypoint: 'cli' })].join('\n'));
+	await writeFile(path.join(scratch, `${ID(4)}.jsonl`), user('You triage one beat', { entrypoint: 'claude-desktop' }));
+	await utimes(path.join(chats, `${ID(1)}.jsonl`), 1700000000, 1700000000);
+	const here = parseListing(await localListing(home));
+	assert.deepEqual(here.map(s => s.title), ['ArkadeOS', 'Tenark X']);
+	// The folders are named after paths (-home-...): the shell listing must not read them as options.
+	const shell = parseListing(execFileSync('sh', ['-c', LIST_SCRIPT], { env: { ...process.env, HOME: home } }).toString());
+	assert.deepEqual(shell, here);
 });

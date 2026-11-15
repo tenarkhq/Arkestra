@@ -7,7 +7,7 @@ import * as assert from 'node:assert/strict';
 import { Script } from 'node:vm';
 import { sidebarHtml, type SidebarStrings } from '../sidebarHtml';
 
-const keys = ['newChat', 'search', 'searchPlaceholder', 'boards', 'artifacts', 'machines', 'pinned', 'newSection', 'unsectioned', 'archived', 'noChats', 'noMatch', 'more', 'running', 'moveTo', 'noSection', 'newSectionMenu', 'sectionName', 'pin', 'unpin', 'rename', 'archive', 'restore', 'delete', 'renameSection', 'moveUp', 'moveDown', 'deleteSection'];
+const keys = ['newChat', 'search', 'searchPlaceholder', 'boards', 'artifacts', 'machines', 'pinned', 'newSection', 'archived', 'showOlder', 'showFewer', 'noChats', 'noMatch', 'more', 'running', 'moveTo', 'noSection', 'newSectionMenu', 'sectionName', 'pin', 'unpin', 'rename', 'archive', 'restore', 'delete', 'renameSection', 'moveUp', 'moveDown', 'deleteSection'];
 const strings = Object.fromEntries(keys.map(k => [k, k === 'newChat' ? 'New <b>chat</b> "x"' : k])) as unknown as SidebarStrings;
 
 test('the page runs only its own nonce, shows its strings escaped and its script compiles', () => {
@@ -34,4 +34,30 @@ test('section and thread names are typed in place in the left bar, never in an i
 	assert.match(html, /post\(\{ type: 'section', action: 'rename', id, name \}\)/);
 	assert.match(html, /post\(\{ type: 'thread', action: 'rename', id: r\.id, name \}\)/);
 	assert.doesNotMatch(html, /post\(\{ type: 'section', action: 'new' \}\)/);
+});
+
+test('session rows of the machines are rows like threads: menu and drag, but no Delete (the session stays on its machine)', () => {
+	const html = sidebarHtml('NONCE123', strings);
+	assert.match(html, /const chat = r\.kind === 'thread' \|\| r\.kind === 'session';/);
+	assert.match(html, /it\.dataset\.menu = '1';/);
+	assert.match(html, /\.\.\.\(r\.kind === 'thread' \? \[\{ label: S\.delete, danger: true, run: act\('delete'\) \}\] : \[\]\)/);
+	assert.match(html, /e\.target\.closest\('\.it\[data-menu\]'\)/, 'the right click menu opens on session rows too');
+	assert.match(html, /e\.target\.closest && e\.target\.closest\('\.it\[data-menu\]'\)/, 'session rows can be dragged into a section');
+});
+
+test('the agent groups: a header per agent that takes a row back out of its section, and "Show older" per group', () => {
+	const html = sidebarHtml('NONCE123', strings);
+	assert.match(html, /for \(const g of model\.groups\) \{\n\t\t\tout\.append\(header\(g\.name, ''\)\);/);
+	assert.match(html, /S\.showOlder\.replace\('\{0\}', String\(g\.older\.length\)\)/);
+	assert.match(html, /more\.dataset\.action = 'older:' \+ g\.id;/);
+	assert.match(html, /ui\.olderOpen = Object\.assign\(\{\}, ui\.olderOpen, \{ \[g\]: !ui\.olderOpen\[g\] \}\)/);
+	assert.doesNotMatch(html, /unsectioned/);
+});
+
+test('a background refresh waits while the mouse is on the list or a menu is open, so rows do not move under the pointer', () => {
+	const html = sidebarHtml('NONCE123', strings);
+	assert.match(html, /if \(m\.quiet && \(hovering \|\| menu\)\) \{ pending = true; return; \}/);
+	assert.match(html, /list\.addEventListener\('mouseleave', \(\) => \{ hovering = false; flush\(\); \}\);/);
+	assert.match(html, /if \(pending && !dragging && !editing && !menu && !hovering\) \{ pending = false; render\(\); \}/);
+	assert.match(html, /if \(!reopen\) \{ flush\(\); \}/, 'closing a menu shows a held refresh');
 });
