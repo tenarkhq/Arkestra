@@ -87,6 +87,10 @@ export interface ThreadSummary {
 	/** ISO time of the last message, or empty. */
 	readonly lastAt: string;
 	readonly agents: number;
+	/** Its agents in the order they answer (the left bar groups threads by agent). */
+	readonly roster?: readonly string[];
+	/** The CLI sessions it continues (AR39): such a session shows as this thread's row. */
+	readonly adopted?: readonly { readonly agent: string; readonly session: string }[];
 }
 
 export function summarize(state: RoomState): ThreadSummary {
@@ -99,6 +103,8 @@ export function summarize(state: RoomState): ThreadSummary {
 		archived: !!state.archived,
 		lastAt: state.messages.at(-1)?.at ?? '',
 		agents: state.roster.length,
+		...(state.roster.length ? { roster: [...state.roster] } : {}),
+		...(state.adopted && Object.keys(state.adopted).length ? { adopted: Object.entries(state.adopted).map(([agent, a]) => ({ agent, session: a.session })) } : {}),
 	};
 }
 
