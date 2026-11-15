@@ -16,7 +16,7 @@ import { copyFile, mkdir, readFile, stat } from 'node:fs/promises';
 import { progressItems, taskRooms, type TaskRoom } from './tasks';
 import { TURN_TEXT, turnState, workHtml } from './work';
 import { ActivityView } from './activityView';
-import { choiceLabel, effortsFor, fitChoice, type Choice } from './choice';
+import { chipLabel, choiceLabel, effortsFor, fitChoice, type Choice } from './choice';
 import { threadListItem, threadSnapshot, type ThreadListItem, type ThreadSnapshot } from './threadSnapshot';
 import type { AgentChoices } from './agent';
 import { templateForm } from './templateForm';
@@ -742,7 +742,18 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		},
 		send: sendToRoom,
 		stop: roomId => remoteStop(roomId),
-		modelLabel: async (room, agentId) => choiceLabel(room.state.choices?.[agentId], await agentChoices(agentId)),
+		modelLabel: async (room, agentId) => chipLabel(room.state.choices?.[agentId], await agentChoices(agentId), vscode.l10n.t('Default')),
+		agentChoices,
+		setChoice,
+		setMode: async (room, mode) => {
+			if (room.state.mode === mode || room.state.template) {
+				return;
+			}
+			room.state.mode = mode;
+			room.post(mode === 'plan' ? PLAN_ON : PLAN_OFF);
+			await store.save(room.state);
+			threadChanged.fire(room.id);
+		},
 	});
 	context.subscriptions.push(threads, new DetailsView({
 		registry, activity, onDidChangeThread: threadChanged.event, threads, open,

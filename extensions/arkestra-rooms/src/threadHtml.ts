@@ -7,6 +7,7 @@
 import { fontFaces, fontSrc, TYPE_CSS, type PageFonts } from './fonts';
 import { imageName, imageRefs, imageSource, userImages, type ImageResolver } from './images';
 import { agentLabel, foldLabel, providerOf, type FoldItem, type LivePart, type Row } from './threadModel';
+import type { MenuItem } from './choice';
 
 export function escapeHtml(value: string): string {
 	return value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]!));
@@ -283,6 +284,24 @@ export const ICONS = {
 	folder: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3H6l1.5 1.5h5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/></svg>',
 };
 
+/**
+ * A composer menu's rows (the model, effort and mode popover above a chip, as in the Claude
+ * desktop app): headings, lines, and choices with the chosen one checked. Each choice carries
+ * its message to the extension.
+ */
+export function menuHtml(items: readonly MenuItem[]): string {
+	return items.map(i => {
+		if (i.kind === 'sep') {
+			return '<div class="msep" role="separator"></div>';
+		}
+		if (i.kind === 'header') {
+			return `<div class="mh">${escapeHtml(i.label ?? '')}</div>`;
+		}
+		const label = `<span class="ml"><span class="mt">${escapeHtml(i.label ?? '')}</span>${i.detail ? `<small>${escapeHtml(i.detail)}</small>` : ''}</span>`;
+		return `<button class="mi${i.checked ? ' on' : ''}" role="menuitemradio" aria-checked="${i.checked ? 'true' : 'false'}" data-action="${escapeHtml(JSON.stringify(i.action ?? {}))}">${label}<span class="mc">${i.checked ? ICONS.check : ''}</span></button>`;
+	}).join('');
+}
+
 /** Colours, spacing and type of the render, on the theme's variables. */
 const BASE_CSS = `
 :root {
@@ -414,6 +433,17 @@ button.chip:hover { background: var(--hover); }
 .chip .g.waiting, .chip .g.warn { background: var(--warn); }
 .chip.add { color: var(--mute); border-style: dashed; }
 .chip.ghost { border-color: transparent; color: var(--mute); }
+.chip.open { background: var(--hover); color: var(--fg); }
+.pop { position: fixed; z-index: 40; min-width: 232px; max-width: 320px; max-height: 62vh; overflow-y: auto; padding: 5px; border-radius: 12px; border: 1px solid var(--line2); background: var(--vscode-menu-background, var(--vscode-editorWidget-background, var(--vscode-editor-background))); color: var(--vscode-menu-foreground, var(--fg)); box-shadow: 0 12px 32px rgba(0,0,0,.38); display: flex; flex-direction: column; font-size: 13px; }
+.pop .mh { padding: 7px 10px 4px; color: var(--mute); font-size: 11.5px; font-weight: 500; }
+.pop .msep { height: 1px; background: var(--line); margin: 4px 2px; flex: none; }
+.pop .mi { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 30px; padding: 5px 10px; border-radius: 7px; text-align: left; flex: none; }
+.pop .mi:hover, .pop .mi:focus-visible { background: var(--sel); outline: none; }
+.pop .ml { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.pop .mt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pop .ml small { color: var(--mute); font-size: 11.5px; overflow-wrap: anywhere; }
+.pop .mc { width: 14px; height: 14px; color: var(--accent); flex: none; }
+.pop .mc svg { width: 14px; height: 14px; }
 .sp { flex: 1; }
 .round { width: 26px; height: 26px; display: grid; place-items: center; color: var(--mute); border-radius: 7px; }
 .round:hover { background: var(--hover); color: var(--fg); }
@@ -509,18 +539,71 @@ function setMode(m) {
 	else { $('compose').appendChild(box); $('compose').style.display = ''; }
 }
 function chip(c) {
-	const b = document.createElement(c.action ? 'button' : 'span');
-	b.className = 'chip' + (c.cls ? ' ' + c.cls : '');
+	const b = document.createElement(c.action || c.menu ? 'button' : 'span');
+	b.className = 'chip' + (c.cls ? ' ' + c.cls : '') + (c.key && popKey === c.key ? ' open' : '');
 	if (c.dot) { const d = document.createElement('span'); d.className = 'g ' + c.dot; b.appendChild(d); }
 	b.appendChild(document.createTextNode(c.label));
 	if (c.title) { b.title = c.title; }
-	if (c.action) { b.addEventListener('click', () => vscode.postMessage(c.action)); }
+	if (c.key) { b.dataset.chip = c.key; }
+	if (c.menu) {
+		b.setAttribute('aria-haspopup', 'menu');
+		b.addEventListener('click', () => {
+			if (popKey === c.key) { closeMenu(); return; }
+			showMenu(c.key, '<div class="mh"></div>');
+			pop.firstChild.textContent = strings.loading || '…';
+			vscode.postMessage({ type: 'menu', anchor: c.key, ...c.menu });
+		});
+	} else if (c.action) { b.addEventListener('click', () => vscode.postMessage(c.action)); }
 	return b;
 }
 function renderChips(left, right) {
 	$('chips').replaceChildren(...left.map(chip));
 	$('right').replaceChildren(...right.map(chip));
+	if (pop) { if (!document.querySelector('[data-chip="' + CSS.escape(popKey) + '"]')) { closeMenu(); } else { placeMenu(); } }
 }
+// The composer's popover menus (model and effort, mode), anchored above their chip.
+let pop = null, popKey = null;
+function closeMenu() {
+	if (pop) { pop.remove(); }
+	const open = popKey && document.querySelector('[data-chip="' + CSS.escape(popKey) + '"]');
+	if (open) { open.classList.remove('open'); }
+	pop = null;
+	popKey = null;
+}
+function placeMenu() {
+	const anchor = pop && document.querySelector('[data-chip="' + CSS.escape(popKey) + '"]');
+	if (!anchor) { return; }
+	const r = anchor.getBoundingClientRect();
+	const w = pop.offsetWidth, h = pop.offsetHeight;
+	pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + 'px';
+	if (r.top - h - 6 >= 8 || r.top > window.innerHeight - r.bottom) { pop.style.top = ''; pop.style.bottom = (window.innerHeight - r.top + 6) + 'px'; }
+	else { pop.style.bottom = ''; pop.style.top = (r.bottom + 6) + 'px'; }
+}
+function showMenu(key, html) {
+	const anchor = document.querySelector('[data-chip="' + CSS.escape(key) + '"]');
+	if (!anchor) { return; }
+	if (popKey !== key) { closeMenu(); }
+	if (!pop) { pop = document.createElement('div'); pop.className = 'pop'; pop.setAttribute('role', 'menu'); document.body.appendChild(pop); }
+	popKey = key;
+	anchor.classList.add('open');
+	pop.innerHTML = html;
+	placeMenu();
+	const first = pop.querySelector('.mi.on') || pop.querySelector('.mi');
+	if (first) { first.focus(); }
+}
+document.addEventListener('mousedown', e => { if (pop && !pop.contains(e.target) && !(e.target.closest && e.target.closest('[data-chip="' + CSS.escape(popKey) + '"]'))) { closeMenu(); } });
+window.addEventListener('resize', () => { if (pop) { placeMenu(); } });
+document.addEventListener('keydown', e => {
+	if (!pop) { return; }
+	if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); const key = popKey; closeMenu(); const a = document.querySelector('[data-chip="' + CSS.escape(key) + '"]'); if (a) { a.focus(); } return; }
+	if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+		e.preventDefault();
+		const items = [...pop.querySelectorAll('.mi')];
+		const i = items.indexOf(document.activeElement);
+		const next = items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length];
+		if (next) { next.focus(); }
+	}
+}, true);
 function renderCards() {
 	const el = $('cards');
 	el.replaceChildren(...cards.map(c => {
@@ -652,6 +735,16 @@ input.addEventListener('input', () => { grow(); vscode.setState({ ...(vscode.get
 send.addEventListener('click', submit);
 $('attach').addEventListener('click', () => vscode.postMessage({ type: 'attach' }));
 document.addEventListener('click', e => {
+	const item = e.target.closest('.pop .mi[data-action]');
+	if (item) {
+		let action = {};
+		try { action = JSON.parse(item.dataset.action); } catch { /* not a choice */ }
+		if (action.type === 'menu') { const key = popKey; showMenu(key, '<div class="mh"></div>'); pop.firstChild.textContent = strings.loading || '…'; vscode.postMessage({ ...action, anchor: key }); return; }
+		closeMenu();
+		if (action.type) { vscode.postMessage(action); }
+		input.focus();
+		return;
+	}
 	const thumb = e.target.closest('img.thumb');
 	if (thumb) { openImage(thumb.currentSrc || thumb.src, thumb.alt); return; }
 	const code = e.target.closest('[data-copycode]');
@@ -706,6 +799,8 @@ window.addEventListener('message', e => {
 		grow();
 	} else if (m.type === 'focus') {
 		input.focus();
+	} else if (m.type === 'menu') {
+		if (popKey === m.anchor) { showMenu(m.anchor, m.html || ''); }
 	} else if (m.type === 'attached') {
 		const a = atts.find(x => x.id === m.id);
 		if (a && m.path) { a.path = m.path; a.url = m.url || ''; a.name = m.name || a.name; if (a.url) { a.preview = undefined; } }
