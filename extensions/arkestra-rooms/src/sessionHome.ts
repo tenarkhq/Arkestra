@@ -76,7 +76,10 @@ export function rehome(state: RoomState, from: string, to: { readonly id: string
 	state.messages = state.messages.map((m): Message => {
 		const author = m.author.kind === 'agent' && m.author.id === from ? { kind: 'agent' as const, id: to.id, name: to.name } : m.author;
 		const source = m.source?.agent === from ? { ...m.source, agent: to.id } : m.source;
-		return author === m.author && source === m.source ? m : { ...m, author, ...(source ? { source } : {}) };
+		// "… session continued here (folder)." names the folder where the session now is.
+		const old = `session continued here (${link.cwd}).`;
+		const text = m.author.kind === 'system' && to.cwd && link.cwd && to.cwd !== link.cwd && m.text.endsWith(old) ? m.text.slice(0, -old.length) + `session continued here (${to.cwd}).` : m.text;
+		return author === m.author && source === m.source && text === m.text ? m : { ...m, author, text, ...(source ? { source } : {}) };
 	});
 	if (state.project && link.cwd && filePath(state.project) === link.cwd) {
 		delete state.project;

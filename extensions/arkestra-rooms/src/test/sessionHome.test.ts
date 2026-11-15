@@ -63,6 +63,8 @@ test('a moved thread runs in the folder its machine names, not the copy\'s path'
 	const state = importedRoomState({ id: 'claude', name: 'Claude' }, S('s1', '/Users/roland/p'), { entries: [{ role: 'user', text: 'go', id: 'u1' }], cursor: '9' });
 	assert.ok(rehome(state, 'claude', { id: 'claude@tenark', name: 'Claude · tenark', cwd: '/home/tenark-claude/p' }));
 	assert.equal(state.adopted!['claude@tenark'].cwd, '/home/tenark-claude/p');
+	assert.ok(state.messages.some(m => m.author.kind === 'system' && m.text === 'Claude session continued here (/home/tenark-claude/p).'), 'the thread\'s first line names the folder it now runs in');
+	assert.ok(!state.messages.some(m => m.text.includes('/Users/roland/p')));
 	const kept = importedRoomState({ id: 'claude', name: 'Claude' }, S('s2', '/home/t'), { entries: [{ role: 'user', text: 'go', id: 'u1' }] });
 	assert.ok(rehome(kept, 'claude', { id: 'claude@tenark', name: 'Claude · tenark' }));
 	assert.equal(kept.adopted!['claude@tenark'].cwd, '/home/t', 'no folder from the machine: the one it had');
