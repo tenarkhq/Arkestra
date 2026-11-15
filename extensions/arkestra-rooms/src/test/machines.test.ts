@@ -178,3 +178,10 @@ test('the edit form starts from the connection as it is set, not from the resolv
 		['tenark-claude', 'tenark-claude@srv:2222', '~', ''],
 	]);
 });
+
+test('the page binds its embedded functions to their names: the shipped bundle renames function declarations', () => {
+	const strings = new Proxy({}, { get: (_t, k) => typeof k === 'string' ? k : undefined }) as unknown as MachinesStrings;
+	const script = /<script nonce="N">([\s\S]*?)<\/script>/.exec(machinesHtml('N', strings))![1];
+	assert.match(script, /const sessionMatches = function \w*\(/);
+	assert.match(script, /const canList = function \w*\(/);
+});

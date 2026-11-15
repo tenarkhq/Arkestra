@@ -237,8 +237,9 @@ export function machinesHtml(nonce: string, s: MachinesStrings, fonts?: PageFont
 (() => {
 	const vscode = acquireVsCodeApi();
 	const S = JSON.parse(document.getElementById('l10n').textContent);
-	${sessionMatches.toString()}
-	${canList.toString()}
+	// Bound to their names here: the shipped bundle renames functions, so a bare declaration would not be found.
+	const sessionMatches = ${sessionMatches.toString()};
+	const canList = ${canList.toString()};
 	const st = Object.assign({ agent: '', machine: '', query: '', folded: [] }, vscode.getState() || {});
 	// The machine whose Remove waits for its Yes; not kept across reloads.
 	let confirming = '';

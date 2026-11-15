@@ -141,3 +141,8 @@ test('the Boards page draws every board and posts what the user does', () => {
 	send({ type: 'data', tiles: [ws], openForm: true });
 	assert.ok(root().includes('id="addIn"'));
 });
+
+test('the Boards page binds the board-ref parser to its name: the shipped bundle renames function declarations', () => {
+	const html = boardsHtml('n', 'c', {}, 'https://fonts.example');
+	assert.match(html, /const parseProjectRef = function \w*\(/);
+});

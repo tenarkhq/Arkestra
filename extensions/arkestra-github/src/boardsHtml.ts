@@ -132,7 +132,8 @@ const vscode = acquireVsCodeApi();
 const L = __LABELS__;
 const ICON_BOARD = __ICON_BOARD__;
 const ICON_PIN = __ICON_PIN__;
-__PARSE__
+// Bound to its name: the shipped bundle renames functions, so a bare declaration would not be found.
+const parseProjectRef = __PARSE__;
 const boardKey = text => { const r = parseProjectRef(String(text || '')); return r ? r.owner.toLowerCase() + '/' + r.number : undefined; };
 const st = Object.assign({ query: '', scope: 'all', owners: [] }, vscode.getState() || {});
 let tiles = [];
