@@ -608,18 +608,25 @@ export class ThreadViews implements vscode.Disposable {
 			const entries = await this.host.registry.inviteList(room.roster);
 			items = [
 				{ kind: 'header', label: entries.length ? vscode.l10n.t('Invite into this thread · it reads the thread from the beginning') : vscode.l10n.t('No other agent is known yet.') },
-				...entries.map(e => e.readiness.ready
-					? { label: agentTitle(e.agent.name), detail: e.agent.name.split(' · ')[1] ? `${e.agent.name.split(' · ')[1]} · SSH` : vscode.l10n.t('this machine'), action: { type: 'inviteAgent', agentId: e.agent.id } }
-					: { label: agentTitle(e.agent.name), detail: `${e.readiness.reason ?? vscode.l10n.t('not ready')}${e.readiness.actions?.length ? ` · ${e.readiness.actions.map(a => a.title).join(' / ')}` : ''}`, action: { type: 'menu', menu: 'fix', agentId: e.agent.id } }),
+				...entries.map(e => {
+					// Two agents of one kind differ only by machine, so every row says where it runs.
+					const machine = machineOf(e.agent.id) ?? e.agent.name.split(' · ')[1];
+					const where = machine ? `${machine} · SSH` : vscode.l10n.t('this machine');
+					return e.readiness.ready
+						? { label: agentTitle(e.agent.name), detail: where, action: { type: 'inviteAgent', agentId: e.agent.id } }
+						: { label: agentTitle(e.agent.name), detail: `${where} · ${e.readiness.reason ?? vscode.l10n.t('not ready')}${e.readiness.actions?.length ? ` · ${e.readiness.actions.map(a => a.title).join(' / ')}` : ''}`, action: { type: 'menu', menu: 'fix', agentId: e.agent.id } };
+				}),
 				{ kind: 'sep' },
 				{ label: vscode.l10n.t('Add another agent (ACP)…'), detail: vscode.l10n.t('From the ACP Registry or a command of your own'), action: { type: 'menu', menu: 'acp' } },
 			];
 		} else if (kind === 'model' && agentId && room.roster.includes(agentId)) {
 			const choices = await this.host.agentChoices(agentId);
+			// With no model chosen here the thread runs what its session runs; the Default row names it.
+			const sessionModel = !room.state.choices?.[agentId]?.model && room.state.adopted?.[agentId]?.model ? await this.host.modelLabel(room, agentId).then(l => l.split(' · ')[0], () => undefined) : undefined;
 			items = choices?.models.length
 				? modelMenu(agentId, room.state.choices?.[agentId], choices, {
 					model: vscode.l10n.t('Model'), effort: vscode.l10n.t('Effort'), default: vscode.l10n.t('Default'),
-					agentDefault: vscode.l10n.t('the agent\'s own setting'), modelDefault: vscode.l10n.t('the model\'s own'),
+					agentDefault: sessionModel ? vscode.l10n.t('{0}, the one the session runs', sessionModel) : vscode.l10n.t('the agent\'s own setting'), modelDefault: vscode.l10n.t('the model\'s own'),
 				})
 				: [{ kind: 'header', label: vscode.l10n.t('{0} offers no model choice.', name(agentId)) }];
 		} else if (kind === 'models') {
