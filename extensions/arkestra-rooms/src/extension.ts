@@ -135,6 +135,9 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	/** The account's list was read again (its context fills too). */
 	const cloudReadDone = new vscode.EventEmitter<void>();
 	context.subscriptions.push(cloudReadDone);
+	// Read every 10 s while the window has the focus, as the Claude app's list changes.
+	const cloudTimer = setInterval(() => { if (vscode.window.state.focused) { void readCloud(); } }, 10_000);
+	context.subscriptions.push({ dispose: () => clearInterval(cloudTimer) });
 	const bridgeOf = new Map<string, string>();
 	let cloud: CloudSessions | undefined;
 	let cloudAt = 0;
@@ -173,8 +176,9 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			refreshThreadsLater();
 		}
 	};
+	let cloudSeen = '';
 	const readCloud = (): Promise<void> => {
-		if (Date.now() - cloudAt < 30_000) {
+		if (Date.now() - cloudAt < 10_000) {
 			return cloudRead;
 		}
 		cloudAt = Date.now();
@@ -189,6 +193,12 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 					}
 					cloud = agent.cloud;
 					await syncWithCloud();
+					// The left bar's dots follow what the Claude app's sessions do now.
+					const seen = rows.map(r => `${r.id}:${r.worker ?? ''}:${r.unread ? 1 : 0}`).join(',');
+					if (seen !== cloudSeen) {
+						cloudSeen = seen;
+						refreshThreadsLater();
+					}
 					cloudReadDone.fire();
 					return;
 				} catch {
