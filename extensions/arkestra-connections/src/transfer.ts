@@ -133,6 +133,21 @@ export function runRemote(machine: Machine, script: string, options: TransferOpt
 	});
 }
 
+/** The remote read of a text file: at most `max` bytes; exit 3 when it is not a file. */
+export function readScript(remoteFile: string, max: number): string {
+	const file = remotePath(remoteFile);
+	return `[ -f ${file} ] || { echo 'No such file.' >&2; exit 3; }; head -c ${Math.max(1, Math.floor(max))} -- ${file}`;
+}
+
+/** A remote file's text (its first `max` bytes); throws with the remote error when it cannot be read. */
+export async function readRemote(machine: Machine, remoteFile: string, options: TransferOptions, max = 512 * 1024): Promise<string> {
+	const r = await runRemote(machine, readScript(remoteFile, max), options);
+	if (!r.ok) {
+		throw new Error(r.err.trim().split('\n').at(-1) || 'cat failed');
+	}
+	return r.out;
+}
+
 /** A remote folder's entries; throws with the remote error when it cannot be read. */
 export async function listRemote(machine: Machine, remoteDir: string, options: TransferOptions): Promise<RemoteEntry[]> {
 	const r = await runRemote(machine, listScript(remoteDir), options);

@@ -16,6 +16,7 @@ import { ARTIFACT_KINDS, authorKey, authorLabels, extensionFor, filterArtifacts,
 import { flowchartSvg, parseFlowchart } from './flowchart';
 import { fontFaces, fontSrc, TYPE_CSS, type PageFonts } from './fonts';
 import { FONT_ROOT, pageFonts } from './webviewFonts';
+import { machineOf } from './threadModel';
 
 const PINNED = 'arkestra.artifacts.pinned';
 /** Characters of one version sent to the gallery page (a preview, not an archive). */
@@ -24,6 +25,8 @@ const PREVIEW_LIMIT = 200_000;
 export class ArtifactGallery implements vscode.Disposable {
 	private panel: vscode.WebviewPanel | undefined;
 	private artifacts: Artifact[] = [];
+	/** Files the agents wrote, read on request (`machine\npath` → text or why not): the gallery shows and acts on them. */
+	private readonly files = new Map<string, { text?: string; error?: string }>();
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly pinsChanged = new vscode.EventEmitter<void>();
 	/** Fires when an artifact is pinned or unpinned (the left bar's Pinned list follows). */
@@ -104,7 +107,20 @@ export class ArtifactGallery implements vscode.Disposable {
 		for (const room of await this.rooms()) {
 			all.push(...roomArtifacts(room, await this.reviewVersions(room)));
 		}
-		return all;
+		// A file known only by its path gets the text read for it.
+		return all.map(a => a.versions.some(v => !v.content && v.path && this.files.get(fileKey(a, v.path))?.text !== undefined)
+			? { ...a, versions: a.versions.map(v => !v.content && v.path && this.files.get(fileKey(a, v.path))?.text !== undefined ? { ...v, content: this.files.get(fileKey(a, v.path))!.text! } : v) }
+			: a);
+	}
+
+	/** Reads a file an agent wrote: here when the agent is local, over SSH when it runs on a machine. */
+	private async readWritten(a: Artifact, file: string): Promise<{ text?: string; error?: string }> {
+		const machine = machineOf(a.agentId);
+		const result: { text?: string; error?: string } = machine
+			? await Promise.resolve(vscode.commands.executeCommand<{ text?: string; error?: string } | undefined>('arkestra.connections.readFile', machine, file)).then(r => r ?? { error: vscode.l10n.t('The machine is not connected.') }, e => ({ error: e instanceof Error ? e.message : String(e) }))
+			: await readFile(file, 'utf8').then(text => ({ text }), e => ({ error: e instanceof Error ? e.message : String(e) }));
+		// Only text is shown: a picture or a binary file stays its path.
+		return result.text !== undefined && result.text.includes('\u0000') ? { error: vscode.l10n.t('It is not a text file.') } : result;
 	}
 
 	/** A brief check room's versions (v1.md, v2.md…) are one document with versions. */
@@ -138,7 +154,7 @@ export class ArtifactGallery implements vscode.Disposable {
 			items: await Promise.all(this.artifacts.map(async a => ({
 				key: a.key, kind: a.kind, title: a.title, roomId: a.roomId, roomTitle: a.roomTitle, project: a.project ?? '', agentName: a.agentName || labels.unknownAgent,
 				author: authorKey(a), authorLabel: authors.get(authorKey(a)) ?? labels.unknownAgent,
-				versions: await Promise.all(a.versions.map(async v => ({ n: v.n, at: v.at, language: v.language ?? '', content: v.content.slice(0, PREVIEW_LIMIT), url: v.url ?? '', path: v.path ?? '', src: a.kind === 'image' ? this.imageSrc(panel.webview, v) : undefined, svg: a.kind === 'diagram' ? diagramSvg(v.content) : undefined }))),
+				versions: await Promise.all(a.versions.map(async v => ({ n: v.n, at: v.at, language: v.language ?? '', content: v.content.slice(0, PREVIEW_LIMIT), url: v.url ?? '', path: v.path ?? '', readError: !v.content && v.path ? this.files.get(fileKey(a, v.path))?.error ?? '' : '', src: a.kind === 'image' ? this.imageSrc(panel.webview, v) : undefined, svg: a.kind === 'diagram' ? diagramSvg(v.content) : undefined }))),
 			}))),
 			labels,
 			select: this.selectNext,
@@ -174,7 +190,7 @@ export class ArtifactGallery implements vscode.Disposable {
 			noMatch: vscode.l10n.t('Nothing matches the filters.'), pin: vscode.l10n.t('Pin'), unpin: vscode.l10n.t('Unpin'), openTab: vscode.l10n.t('Open in a tab'), thread: vscode.l10n.t('Go to the thread'),
 			send: vscode.l10n.t('Send to the room as an @-reference'), copy: vscode.l10n.t('Copy'), versions: vscode.l10n.t('Versions'), version: vscode.l10n.t('version {0}'), pick: vscode.l10n.t('Pick an artifact on the left.'),
 			mermaid: vscode.l10n.t('This diagram kind is shown as its mermaid source; flowcharts are drawn.'), source: vscode.l10n.t('Source'), kinds, kindOrder: ARTIFACT_KINDS,
-			openUrl: vscode.l10n.t('Open on claude.ai'), published: vscode.l10n.t('Published on claude.ai'), onlyPath: vscode.l10n.t('The agent wrote this file on its machine; its text is not known here.'),
+			openUrl: vscode.l10n.t('Open on claude.ai'), published: vscode.l10n.t('Published on claude.ai'), onlyPath: vscode.l10n.t('The agent wrote this file on its machine; its text is not known here.'), reading: vscode.l10n.t('Reading the file from the agent\'s machine…'), readFailed: vscode.l10n.t('The file could not be read: {0}'),
 		};
 	}
 
@@ -202,6 +218,15 @@ export class ArtifactGallery implements vscode.Disposable {
 		}
 		if (m.type === 'thread' && m.roomId) {
 			return this.openThread(m.roomId);
+		}
+		if (m.type === 'fetch' && m.key) {
+			const a = this.artifacts.find(x => x.key === m.key);
+			const v = a && (a.versions.find(x => x.n === m.n) ?? a.versions.at(-1));
+			if (a && v?.path && !v.content && !this.files.has(fileKey(a, v.path))) {
+				this.files.set(fileKey(a, v.path), await this.readWritten(a, v.path));
+				return this.render();
+			}
+			return;
 		}
 		const found = m.key ? this.find(m.key, m.n) : undefined;
 		if (!found) {
@@ -283,6 +308,8 @@ export function galleryHtml(cspSource: string, fonts?: PageFonts): string {
 	body { ${TYPE_CSS} font-size: 13px; }
 	.wrap { display: grid; grid-template-columns: minmax(280px, 400px) 1fr; height: 100vh; }
 	.left { border-right: 1px solid var(--line); overflow: auto; padding: 28px 20px 32px 28px; display: flex; flex-direction: column; gap: 12px; }
+	/* A long list scrolls; the header, search and chips above it keep their height. */
+	.left > * { flex: none; }
 	.right { overflow: auto; padding: 28px 32px 40px; min-width: 0; }
 	h1 { font-size: 22px; font-weight: 600; letter-spacing: -.01em; margin: 0 0 4px; }
 	.right h1 { font-size: 18px; }
@@ -331,6 +358,8 @@ export function galleryHtml(cspSource: string, fonts?: PageFonts): string {
 	const st = Object.assign({ query: '', project: '', kinds: [], agents: [], pinnedFirst: true, sel: undefined, ver: undefined }, vscode.getState() || {});
 	let data = { items: [], pinned: [], labels: {} };
 	const rendered = new Map();
+	// Written files asked for once (key#n): the extension reads them from the agent's machine.
+	const asked = new Set();
 	const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 	const latest = a => a.versions[a.versions.length - 1];
 	const save = () => vscode.setState(st);
@@ -381,7 +410,8 @@ export function galleryHtml(cspSource: string, fonts?: PageFonts): string {
 		const v = a.versions.find(x => x.n === st.ver) || latest(a);
 		const isPinned = data.pinned.includes(a.key);
 		let preview = '';
-		if (!v.content && (v.url || v.path)) preview = (v.url ? '<p><a data-act="openUrl">' + esc(v.url) + '</a></p>' : '') + (v.path ? '<p class="mut">' + esc(v.path) + (v.url ? '' : ' · ' + esc(L.onlyPath)) + '</p>' : '');
+		if (!v.content && v.path && !v.url && !v.readError && !asked.has(a.key + '#' + v.n)) { asked.add(a.key + '#' + v.n); vscode.postMessage({ type: 'fetch', key: a.key, n: v.n }); }
+		if (!v.content && (v.url || v.path)) preview = (v.url ? '<p><a data-act="openUrl">' + esc(v.url) + '</a></p>' : '') + (v.path ? '<p class="mut">' + esc(v.path) + (v.url ? '' : ' · ' + esc(v.readError ? L.readFailed.replace('{0}', v.readError) : asked.has(a.key + '#' + v.n) ? L.reading : L.onlyPath)) + '</p>' : '');
 		else if (a.kind === 'page') preview = '<iframe sandbox="" srcdoc="' + esc(v.content) + '"></iframe>';
 		else if (a.kind === 'image') preview = v.src ? '<img src="' + esc(v.src) + '" alt="' + esc(a.title) + '">' : '<pre>' + esc(v.content) + '</pre>';
 		else if (a.kind === 'document') { const r = rendered.get(a.key + '#' + v.n); if (r === undefined) { vscode.postMessage({ type: 'render', key: a.key, n: v.n }); preview = '<pre>' + esc(v.content) + '</pre>'; } else preview = r || '<pre>' + esc(v.content) + '</pre>'; }
@@ -419,6 +449,11 @@ export function galleryHtml(cspSource: string, fonts?: PageFonts): string {
 		if (m.type === 'rendered') { rendered.set(m.key + '#' + m.n, m.html); drawDetail(); }
 	});
 </script></body></html>`;
+}
+
+/** A written file's key in the read cache: the agent's machine and the path. */
+function fileKey(a: Artifact, file: string): string {
+	return `${machineOf(a.agentId) ?? ''}\n${file}`;
 }
 
 /** A flowchart drawn as SVG; other mermaid kinds stay source. */

@@ -10,7 +10,7 @@ import { chmod, mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/pr
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import type { Machine } from '../ssh';
-import { droppedPaths, groupByParent, joinRemote, listRemote, parseListing, shellArgs, shellWords, untarScript, upload, uploadedPaths } from '../transfer';
+import { droppedPaths, groupByParent, joinRemote, listRemote, parseListing, readRemote, readScript, shellArgs, shellWords, untarScript, upload, uploadedPaths } from '../transfer';
 
 const FAKE_SSH = `#!/bin/sh
 while [ $# -gt 1 ]; do
@@ -71,5 +71,10 @@ test('an upload over ssh: files and a folder from two places arrive with their l
 	assert.deepEqual(await listRemote(machine, '~/deploy/new', { ssh }), [{ name: 'site', folder: true }, { name: 'b.txt', folder: false }, { name: 'notes one.txt', folder: false }]);
 	await assert.rejects(upload({ ...machine, host: 'down' }, [path.join(dir, 'other', 'b.txt')], '~/x', { ssh }), /Connection refused/);
 	await assert.rejects(listRemote(machine, '~/nope', { ssh }));
+	// A file the agent wrote there is read back as text, cut at the limit; a missing one says so.
+	assert.equal(await readRemote(machine, '~/deploy/new/notes one.txt', { ssh }), 'notes');
+	assert.equal(await readRemote(machine, '~/deploy/new/notes one.txt', { ssh }, 3), 'not');
+	await assert.rejects(readRemote(machine, '~/deploy/new/none.md', { ssh }), /No such file/);
+	assert.equal(readScript("~/a b'c.md", 10), `[ -f "$HOME"/'a b'\\''c.md' ] || { echo 'No such file.' >&2; exit 3; }; head -c 10 -- "$HOME"/'a b'\\''c.md'`);
 	assert.ok(existsSync(remote));
 });

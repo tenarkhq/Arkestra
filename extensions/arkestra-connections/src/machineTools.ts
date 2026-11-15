@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import type { Machine } from './ssh';
-import { droppedPaths, joinRemote, listRemote, remoteParent, shellArgs, upload, uploadedPaths } from './transfer';
+import { droppedPaths, joinRemote, listRemote, readRemote, remoteParent, shellArgs, upload, uploadedPaths } from './transfer';
 
 /** A folder on an SSH machine. */
 interface Place {
@@ -25,6 +25,8 @@ export class MachineTools implements vscode.Disposable {
 			// The Machines page's "Open a folder": this computer through the folder dialog; an SSH machine's folders are walked in the page itself.
 			vscode.commands.registerCommand('arkestra.connections.openFolder', (machineId?: string) => this.openFolder(machineId)),
 			vscode.commands.registerCommand('arkestra.connections.listFolders', (machineId?: unknown, dir?: unknown) => this.listFolders(machineId, dir)),
+			// A text file an agent wrote on an SSH machine, for the Artifacts page.
+			vscode.commands.registerCommand('arkestra.connections.readFile', (machineId?: unknown, file?: unknown) => this.readFile(machineId, file)),
 			// With a folder: the page's "Open a terminal here"; without: the palette's, in the machine's default folder.
 			vscode.commands.registerCommand('arkestra.connections.openTerminal', (machineId?: string, dir?: unknown) => this.openTerminal(machineId, typeof dir === 'string' && dir ? dir : undefined)),
 			vscode.commands.registerCommand('arkestra.connections.upload', (machineId?: string) => this.pickAndUpload(machineId)),
@@ -78,6 +80,19 @@ export class MachineTools implements vscode.Disposable {
 			return { dir: at, ...(parent ? { parent } : {}), folders };
 		} catch (error) {
 			return { dir: at, ...(parent ? { parent } : {}), folders: [], error: error instanceof Error ? error.message : String(error) };
+		}
+	}
+
+	/** A text file on an SSH machine (its first 512 KB), or why it could not be read. */
+	private async readFile(machineId: unknown, file: unknown): Promise<{ text?: string; error?: string } | undefined> {
+		const machine = typeof machineId === 'string' ? this.machines().find(m => m.id === machineId) : undefined;
+		if (!machine || typeof file !== 'string' || !file) {
+			return undefined;
+		}
+		try {
+			return { text: await readRemote(machine, file, this.ssh()) };
+		} catch (error) {
+			return { error: error instanceof Error ? error.message : String(error) };
 		}
 	}
 

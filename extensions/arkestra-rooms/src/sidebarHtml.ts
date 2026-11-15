@@ -413,7 +413,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 				m.setAttribute('role', 'menuitem');
 				m.tabIndex = -1;
 				m.append(el('span', 'l', i.label));
-				if (i.sub) { m.append(el('span', 's', '›')); }
+				if (i.sub && !i.back) { m.append(el('span', 's', '›')); }
 				if (i.check) { m.append(el('span', 's', '✓')); }
 				m.addEventListener('click', ev => {
 					ev.stopPropagation();
