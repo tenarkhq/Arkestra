@@ -7,7 +7,7 @@ import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 import { EntryAssembler, LineSplitter, type Piece } from './follow';
-import type { SessionEntry, SessionHistory } from './rooms';
+import type { SessionEntry, SessionHistory, SessionMeta } from './rooms';
 import { dataUrlImage, folderStore, withImages, type ImageStore, type SessionImage } from './sessionImages';
 
 const THREAD_ID = /^[0-9A-Za-z][0-9A-Za-z_-]{1,79}$/;
@@ -101,6 +101,40 @@ export function codexPiece(line: string): Piece {
 }
 
 /**
+ * What one rollout line says about the thread itself: the model of a turn (`turn_context`), and
+ * how full the context was at the latest model call (`token_count`'s last usage).
+ */
+export function codexMeta(line: string): SessionMeta | undefined {
+	if (!line.includes('"turn_context"') && !line.includes('"token_count"')) {
+		return undefined;
+	}
+	let data: any;
+	try {
+		data = JSON.parse(line);
+	} catch {
+		return undefined;
+	}
+	const p = data?.payload;
+	if (data?.type === 'turn_context') {
+		return typeof p?.model === 'string' && p.model ? { model: p.model } : undefined;
+	}
+	const last = data?.type === 'event_msg' && p?.type === 'token_count' ? p.info?.last_token_usage : undefined;
+	if (!last || typeof last !== 'object') {
+		return undefined; // the thread's running total is not the context
+	}
+	const context = typeof last.total_tokens === 'number' ? last.total_tokens : (last.input_tokens ?? 0) + (last.output_tokens ?? 0);
+	return context > 0 ? { context } : undefined;
+}
+
+/**
+ * A rollout line that can hold what Codex produced (AR26): a patch that adds a file (its
+ * apply_patch tool, or a shell command that runs it). Other lines are not handed on.
+ */
+export function codexToolLine(line: string): boolean {
+	return line.includes('"response_item"') && line.includes('*** Add File:');
+}
+
+/**
  * A rollout file read from its start (the history import), the way the live follow reads it:
  * the same entries under the same ids, the room's own turns left out, and the cursor the
  * follow goes on from, so nothing written after the read is lost and nothing comes twice.
@@ -110,9 +144,19 @@ export class RolloutHistory {
 	private readonly splitter = new LineSplitter();
 	private readonly assembler = new EntryAssembler({ mute: true, positional: true });
 	private readonly entries: SessionEntry[] = [];
+	private meta: SessionMeta | undefined;
+	/** The patch lines read (`codexToolLine`), for what Codex produced (AR26). */
+	private lines: string[] = [];
 
 	push(chunk: Buffer): void {
 		for (const line of this.splitter.push(chunk)) {
+			const meta = codexMeta(line.text);
+			if (meta) {
+				this.meta = { ...this.meta, ...meta };
+			}
+			if (codexToolLine(line.text)) {
+				this.lines.push(line.text);
+			}
 			const entry = line.text.trim() ? this.assembler.feed(codexPiece(line.text), line.start) : undefined;
 			if (!entry) {
 				continue;
@@ -128,21 +172,27 @@ export class RolloutHistory {
 	/**
 	 * The entries read, the latest `limit` of them, and the follow's cursor: after the last whole
 	 * line, or at the start of an answer that may still grow (the follow reads it again, same id).
+	 * With them the thread's model and context fill, and the patch lines (handed over once).
 	 */
-	result(limit = 300): Required<Pick<SessionHistory, 'entries' | 'cursor'>> {
-		return { entries: this.entries.slice(-limit), cursor: this.assembler.cursor(this.splitter.position) };
+	result(limit = 300): RolloutRead {
+		const lines = this.lines;
+		this.lines = [];
+		return { entries: this.entries.slice(-limit), cursor: this.assembler.cursor(this.splitter.position), ...(this.meta ? { meta: this.meta } : {}), ...(lines.length ? { lines } : {}) };
 	}
 }
 
+/** A rollout file read: its entries and follow cursor always, its model, fill and patch lines when it has them. */
+export type RolloutRead = SessionHistory & Required<Pick<SessionHistory, 'entries' | 'cursor'>>;
+
 /** A whole rollout file's content as history and follow cursor. */
-export function rolloutHistory(content: Buffer, limit = 300): Required<Pick<SessionHistory, 'entries' | 'cursor'>> {
+export function rolloutHistory(content: Buffer, limit = 300): RolloutRead {
 	const history = new RolloutHistory();
 	history.push(content);
 	return history.result(limit);
 }
 
 /** Reads a rollout file on this machine up to its size now, in pieces (a long thread is many MB). */
-export async function readLocalRollout(file: string, limit = 300): Promise<Required<Pick<SessionHistory, 'entries' | 'cursor'>>> {
+export async function readLocalRollout(file: string, limit = 300): Promise<RolloutRead> {
 	const handle = await fs.open(file, 'r');
 	try {
 		const { size } = await handle.stat();

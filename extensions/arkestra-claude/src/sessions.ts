@@ -310,6 +310,15 @@ export function claudePiece(line: string): Piece {
 	return pieceOf(data);
 }
 
+/**
+ * A line that can hold what Claude produced with its tools (AR26): a tool use (Write, Edit, the
+ * Artifact tool), or a tool's result that names a claude.ai artifact. The rest (text, the results
+ * of reads and commands: most of a long session file) is not handed on, so a 50 MB read stays small.
+ */
+export function claudeToolLine(line: string): boolean {
+	return line.includes('"tool_use"') || (line.includes('"tool_result"') && line.includes('claude.ai/'));
+}
+
 /** The model and context fill one line tells, if it tells them (an answer of the main chain). */
 export function claudeMeta(line: string): SessionMeta | undefined {
 	if (!line.includes('"assistant"')) {
@@ -332,6 +341,8 @@ export class ClaudeHistory {
 	private splitter: LineSplitter;
 	private readonly assembler = new EntryAssembler({ mute: true });
 	private readonly entries: SessionEntry[] = [];
+	/** The tool lines read (`claudeToolLine`), for what Claude produced (AR26). */
+	private lines: string[] = [];
 	private meta: SessionMeta | undefined;
 	private head: Buffer | undefined;
 
@@ -367,6 +378,9 @@ export class ClaudeHistory {
 		} catch {
 			return; // the first line of a read from the middle, or one still being written
 		}
+		if (claudeToolLine(text)) {
+			this.lines.push(text);
+		}
 		const meta = metaOf(data);
 		if (meta) {
 			this.meta = { ...this.meta, ...meta };
@@ -383,9 +397,15 @@ export class ClaudeHistory {
 		}
 	}
 
-	/** The latest `limit` entries, where the follow goes on (after the last whole line, or where an answer still growing began), the model and fill. */
+	/**
+	 * The latest `limit` entries, where the follow goes on (after the last whole line, or where an
+	 * answer still growing began), the model and fill, and the tool lines read. The lines are
+	 * handed over once: this reader lets go of them.
+	 */
 	result(limit = 300): SessionHistory & { readonly cursor: string } {
-		return { entries: this.entries.slice(-limit), cursor: this.assembler.cursor(this.splitter.position), ...(this.meta ? { meta: this.meta } : {}) };
+		const lines = this.lines;
+		this.lines = [];
+		return { entries: this.entries.slice(-limit), cursor: this.assembler.cursor(this.splitter.position), ...(this.meta ? { meta: this.meta } : {}), ...(lines.length ? { lines } : {}) };
 	}
 }
 

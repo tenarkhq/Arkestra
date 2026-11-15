@@ -23,7 +23,9 @@ export type AgentEvent =
 	| { readonly kind: 'tool'; readonly text: string }
 	| { readonly kind: 'error'; readonly text: string }
 	| { readonly kind: 'usage'; readonly usage: Usage }
-	| { readonly kind: 'work'; readonly work: WorkUpdate };
+	| { readonly kind: 'work'; readonly work: WorkUpdate }
+	/** One raw line of the agent's own output (stream-json, a rollout line), for what it produced with its tools (AR26). */
+	| { readonly kind: 'line'; readonly line: string };
 
 /**
  * What an agent does beside its answer (AR37), as the vendors' desktop apps show it: its task
@@ -91,8 +93,9 @@ export interface Agent {
 	/**
 	 * Follows one of those sessions live: the entries appended (or an answer grown) after
 	 * `cursor`, each with its id, and the cursor to go on from later. No cursor: from now on.
+	 * `lines`: the session file's raw lines behind them that hold tool uses, for the artifacts (AR26).
 	 */
-	watchSession?(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string, meta?: SessionMeta) => void, cursor?: string): { dispose(): void };
+	watchSession?(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string, meta?: SessionMeta, lines?: readonly string[]) => void, cursor?: string): { dispose(): void };
 }
 
 /** What an agent can run with: its models, each with the reasoning efforts it knows (none: no effort choice). */
@@ -110,6 +113,8 @@ export interface ExistingSession {
 export interface SessionHistory {
 	readonly entries: readonly SessionEntry[];
 	readonly cursor?: string;
+	/** The session file's raw lines read that hold tool uses, for the artifacts (AR26). */
+	readonly lines?: readonly string[];
 	/** What the session file says about the session itself, when it says it. */
 	readonly meta?: SessionMeta;
 }

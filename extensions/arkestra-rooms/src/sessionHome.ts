@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { Agent, ExistingSession } from './agent';
+import { artifactsFromSessionLines, mergeProduced } from './produced';
 import { mergeHistory, sessionHistoryOf, withMeta, type Message, type RoomState } from './room';
 
 /** A session as the Machines list shows it; `elsewhere`: a copy from another machine that no SSH machine here lists. */
@@ -154,15 +155,53 @@ export async function healAdopted(state: RoomState, registry: { get(id: string):
 		if (!now || !agent?.sessionHistory || (id === agentId && (agent.historyVersion ?? 1) <= (now.version ?? 1))) {
 			continue;
 		}
-		const read = await agent.sessionHistory(link.session).catch(() => undefined);
-		if (read === undefined) {
-			continue; // read again on the next open; a moved thread follows from the session's end meanwhile
-		}
-		const { entries, cursor, meta } = sessionHistoryOf(read);
-		mergeHistory(state, { id, name: agent.name }, entries);
-		cleanSessionMessages(state);
-		state.adopted = { ...state.adopted, [id]: withMeta({ ...now, ...(cursor !== undefined ? { cursor } : {}), ...(agent.historyVersion !== undefined ? { version: agent.historyVersion } : {}) }, meta) };
-		changed = true;
+		// Not read: read again on the next open; a moved thread follows from the session's end meanwhile.
+		changed = await readAgain(state, id, agent) || changed;
 	}
 	return changed;
+}
+
+/**
+ * Reads an adopted session once more into its thread: what the thread lacks goes in at its
+ * place, what the agent produced with its tools is kept (AR26; a thread read by an older reader
+ * has none), and the follow goes on from the read's cursor. False when it could not be read.
+ */
+export async function readAgain(state: RoomState, id: string, agent: Agent): Promise<boolean> {
+	const now = state.adopted?.[id];
+	const read = now && agent.sessionHistory ? await agent.sessionHistory(now.session).catch(() => undefined) : undefined;
+	if (!now || read === undefined) {
+		return false;
+	}
+	const { entries, cursor, meta, lines } = sessionHistoryOf(read);
+	mergeHistory(state, { id, name: agent.name }, entries);
+	cleanSessionMessages(state);
+	const produced = lines?.length ? mergeProduced(state.produced, artifactsFromSessionLines(lines, id)) : undefined;
+	if (produced) {
+		state.produced = produced;
+	}
+	state.adopted = { ...state.adopted, [id]: withMeta({ ...now, ...(cursor !== undefined ? { cursor } : {}), ...(agent.historyVersion !== undefined ? { version: agent.historyVersion } : {}) }, meta) };
+	return true;
+}
+
+/**
+ * The SSH agent (same CLI) whose machine lists this thread's session too: where a thread whose
+ * local agent cannot run here (its CLI is not installed) can go on. Only for a local agent.
+ */
+export function elsewhere<A extends { readonly id: string }>(agentId: string, sessionId: string | undefined, candidates: readonly { readonly agent: A; readonly sessions: readonly ExistingSession[] }[]): A | undefined {
+	if (!sessionId || !isLocalAgent(agentId)) {
+		return undefined;
+	}
+	return candidates.find(c => !isLocalAgent(c.agent.id) && agentKind(c.agent.id) === agentKind(agentId) && c.sessions.some(s => s.id === sessionId))?.agent;
+}
+
+/**
+ * Moves the thread from this computer's agent to the SSH agent that has its session (the
+ * user's choice: "Continue on tenark-claude"), then reads the session there. True when it moved.
+ */
+export async function continueOn(state: RoomState, from: string, to: Agent): Promise<boolean> {
+	if (!rehome(state, from, { id: to.id, name: to.name })) {
+		return false;
+	}
+	await readAgain(state, to.id, to);
+	return true;
 }

@@ -9,7 +9,7 @@ import { randomBytes } from 'node:crypto';
 import { ActivityBoard, type AgentActivity } from './activity';
 import { AgentRegistry, type Agent, type ExistingSession, type InviteEntry } from './agent';
 import { AgentNotReadyError, Room, importedRoomState, newRoomState } from './room';
-import { agentKind, cleanSessionMessages, healAdopted, homeOf, isForeign, placeLocalSessions, type ListedSession } from './sessionHome';
+import { agentKind, cleanSessionMessages, continueOn, elsewhere, healAdopted, homeOf, isForeign, placeLocalSessions, type ListedSession } from './sessionHome';
 import { RoomStore } from './store';
 import { SessionFollow } from './sessionFollow';
 import { laneAgent, laneEntries, type LaneEntry } from './lanes';
@@ -816,6 +816,18 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			room.post(mode === 'plan' ? PLAN_ON : PLAN_OFF);
 			await store.save(room.state);
 			threadChanged.fire(room.id);
+		},
+		// A thread whose local agent's CLI is not on this computer: the SSH machine that has its session takes over.
+		sessionElsewhere: async (room, agentId) => {
+			const agent = elsewhere(agentId, room.state.adopted?.[agentId]?.session, await twins(agentId));
+			return agent ? { id: agent.id, machine: agent.name.split(' · ')[1] || agent.id.slice(agent.id.indexOf('@') + 1) } : undefined;
+		},
+		continueOn: async (room, from, to) => {
+			const agent = registry.get(to);
+			if (agent && await continueOn(room.state, from, agent)) {
+				room.touch();
+				follow.refresh(room);
+			}
 		},
 	});
 	context.subscriptions.push(threads, new DetailsView({

@@ -235,6 +235,9 @@ export interface ThreadStrings {
 	readonly other: (n: number) => string;
 	readonly working: string;
 	readonly copy: string;
+	/** An error row's second sentence when an SSH machine has the thread's session, and its button. */
+	readonly runsOn?: (machine: string) => string;
+	readonly continueOn?: (machine: string) => string;
 }
 
 const letter = (agentId: string, name: string) => `<i class="av ${providerOf(agentId)}">${escapeHtml((name.trim()[0] ?? '?').toUpperCase())}</i>`;
@@ -254,7 +257,21 @@ export function rowHtml(row: Row, s: ThreadStrings, md: (text: string, opts?: Ma
 				+ `<div class="acts"><button class="act" data-copy="${escapeHtml(row.id)}" title="${escapeHtml(s.copy)}" aria-label="${escapeHtml(s.copy)}">${COPY_ICON}</button>${time ? `<span>${escapeHtml(time)}</span>` : ''}</div></div>`;
 		case 'fold':
 			return foldHtml(row.items, s);
+		case 'error':
+			return errorHtml(row, s);
 	}
+}
+
+/**
+ * An agent's failed turn: a notice in the error tone, under whose turn it was. When the agent's
+ * CLI is not on this computer and an SSH machine has the session, it says so and offers to go on there.
+ */
+function errorHtml(row: Extract<Row, { type: 'error' }>, s: ThreadStrings): string {
+	const home = row.missing ? row.home : undefined;
+	// The first sentence says what is wrong; the second, what to do (here: go on where the session is).
+	const text = home ? `${row.text.replace(/^(.*?\.)\s[\s\S]*$/, '$1')} ${(s.runsOn ?? (m => `This session runs on ${m}: open it from there.`))(home.machine)}` : row.text;
+	const button = home ? `<div class="nbtns"><button class="chip" data-continue="${escapeHtml(row.agentId)}" data-to="${escapeHtml(home.id)}">${escapeHtml((s.continueOn ?? (m => `Continue on ${m}`))(home.machine))}</button></div>` : '';
+	return `<div class="notice error" role="alert"><div class="eh">${escapeHtml(agentLabel(row.name, row.agentId, s.local))}</div><div>${escapeHtml(text)}</div>${button}</div>`;
 }
 
 function foldHtml(items: readonly FoldItem[], s: ThreadStrings): string {
@@ -426,6 +443,8 @@ body { background: var(--vscode-editor-background); height: 100vh; display: flex
 .err { color: var(--err); font-size: 12.5px; }
 .notice { color: var(--mute); font-size: 13px; line-height: 1.55; border-left: 2px solid var(--line2); padding-left: 12px; }
 .notice .md p:last-child { margin-bottom: 0; }
+.notice.error { color: var(--fg); border-left-color: var(--err); }
+.notice.error .eh { color: var(--err); font-size: 12px; font-weight: 600; margin-bottom: 2px; }
 .nbtns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .compose { padding: 12px 28px 18px; }
 .box { max-width: 740px; margin: 0 auto; border: 1px solid var(--line2); border-radius: 14px; background: var(--vscode-input-background); padding: 12px 14px 10px; display: flex; flex-direction: column; gap: 12px; }
@@ -767,6 +786,8 @@ document.addEventListener('click', e => {
 	if (copy) { vscode.postMessage({ type: 'copy', id: copy.dataset.copy }); }
 	const btn = e.target.closest('[data-button]');
 	if (btn) { vscode.postMessage({ type: 'button', index: Number(btn.dataset.button) }); }
+	const cont = e.target.closest('[data-continue]');
+	if (cont) { cont.disabled = true; vscode.postMessage({ type: 'continueOn', agentId: cont.dataset.continue, to: cont.dataset.to }); }
 });
 window.addEventListener('message', e => {
 	const m = e.data;

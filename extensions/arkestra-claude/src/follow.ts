@@ -129,9 +129,14 @@ export interface FollowOptions {
 	 * Entries made or changed since the last call, and the cursor to go on from later. The
 	 * first call comes once what was there is read, even with nothing new.
 	 */
-	readonly onEntries: (entries: LiveEntry[], cursor: string, meta?: SessionMeta) => void;
+	readonly onEntries: (entries: LiveEntry[], cursor: string, meta?: SessionMeta, lines?: readonly string[]) => void;
 	/** Reads what a line says about the session itself (its model, its context fill); the latest goes with `onEntries` when it changed. */
 	readonly meta?: (line: string) => SessionMeta | undefined;
+	/**
+	 * The raw lines to hand over with the entries (what the agent produced with its tools, AR26):
+	 * a batch of such lines alone is handed over too. Kept only until that call.
+	 */
+	readonly keep?: (line: string) => boolean;
 	/** How often the file is checked besides the change events, and how long a cursor-only change waits. */
 	readonly pollMs?: number;
 	readonly cursorDelayMs?: number;
@@ -148,6 +153,7 @@ class Feed {
 	private first = true;
 	private meta: SessionMeta | undefined;
 	private metaChanged = false;
+	private lines: string[] = [];
 	private timer: ReturnType<typeof setTimeout> | undefined;
 
 	constructor(private readonly options: FollowOptions, offset: number, muted: boolean) {
@@ -162,6 +168,7 @@ class Feed {
 
 	/** Starts again at `offset` (a file read anew, a connection restarted at a cursor). */
 	restart(offset: number, muted: boolean): void {
+		this.lines = [];
 		this.splitter = new LineSplitter(offset);
 		this.assembler = new EntryAssembler({ mute: true, positional: true }, muted);
 	}
@@ -178,13 +185,16 @@ class Feed {
 				this.meta = { ...this.meta, ...meta };
 				this.metaChanged = true;
 			}
+			if (this.options.keep && line.text.trim() && this.options.keep(line.text)) {
+				this.lines.push(line.text);
+			}
 		}
 	}
 
 	/** Hands over what changed; a cursor-only change waits a little and goes with the next one. */
 	flush(force = false): void {
 		const cursor = this.cursor;
-		if (this.changed.size || this.first || force || this.metaChanged) {
+		if (this.changed.size || this.first || force || this.metaChanged || this.lines.length) {
 			const entries = [...this.changed.values()];
 			this.changed.clear();
 			this.first = false;
@@ -198,9 +208,14 @@ class Feed {
 		clearTimeout(this.timer);
 		this.timer = undefined;
 		this.sent = cursor;
-		if (this.metaChanged) {
-			this.metaChanged = false;
-			this.options.onEntries(entries, cursor, this.meta);
+		const lines = this.lines;
+		this.lines = [];
+		const meta = this.metaChanged ? this.meta : undefined;
+		this.metaChanged = false;
+		if (lines.length) {
+			this.options.onEntries(entries, cursor, meta, lines);
+		} else if (meta) {
+			this.options.onEntries(entries, cursor, meta);
 		} else {
 			this.options.onEntries(entries, cursor);
 		}

@@ -15,7 +15,7 @@ import { allowedImage, attachmentName, fileReference, imageSource, type ImageRes
 import type { Room } from './room';
 import { ICONS, escapeHtml, liveHtml, menuHtml, renderMarkdown, rowHtml, threadPage, type ThreadStrings } from './threadHtml';
 import { FONT_ROOT, pageFonts } from './webviewFonts';
-import { agentChip, agentTitle, composerRight, machineOf, parseSlash, providerOf, threadRows, type LiveTurns, type Row } from './threadModel';
+import { LabelCache, agentChip, agentTitle, composerRight, machineOf, parseSlash, providerOf, threadRows, type LiveTurns, type Row } from './threadModel';
 import { projectName, titleFrom } from './threads';
 import { surfaceOf, type Surface } from './surface';
 import { turnState } from './work';
@@ -50,6 +50,10 @@ export interface ThreadHost {
 	setChoice(room: Room, agentId: string, choice: Choice): Promise<void>;
 	/** Plan mode on or off for the thread (the mode menu; /plan and /execute do the same). */
 	setMode(room: Room, mode: 'plan' | undefined): Promise<void>;
+	/** The SSH agent whose machine has the session this thread's local agent continues (its CLI is not installed here). */
+	sessionElsewhere?(room: Room, agentId: string): Promise<{ readonly id: string; readonly machine: string } | undefined>;
+	/** Moves the thread from this computer's agent to that SSH agent and reads the session there. */
+	continueOn?(room: Room, from: string, to: string): Promise<void>;
 }
 
 interface View {
@@ -110,7 +114,9 @@ export class ThreadViews implements vscode.Disposable {
 	private readonly disposables: vscode.Disposable[] = [];
 	private readonly rowCache = new Map<string, string>();
 	/** Model labels per room, agent and choice; reading an agent's models can be slow (SSH), so never awaited in an update. */
-	private readonly labels = new Map<string, string | Promise<void>>();
+	private readonly labels = new LabelCache();
+	/** Per room and agent: the SSH machine that has the session, for an error row (read in the background, like the labels). */
+	private readonly homes = new Map<string, { readonly id: string; readonly machine: string } | null | Promise<void>>();
 	private active: View | undefined;
 	private readonly activeChanged = new vscode.EventEmitter<string | undefined>();
 	/** The thread of the panel used last; the right panel follows it. */
@@ -375,6 +381,8 @@ export class ThreadViews implements vscode.Disposable {
 			other: n => n === 1 ? vscode.l10n.t('1 system message') : vscode.l10n.t('{0} system messages', n),
 			working: vscode.l10n.t('working…'),
 			copy: vscode.l10n.t('Copy'),
+			runsOn: machine => vscode.l10n.t('This session runs on {0}: open it from there.', machine),
+			continueOn: machine => vscode.l10n.t('Continue on {0}', machine),
 		};
 	}
 
@@ -391,7 +399,7 @@ export class ThreadViews implements vscode.Disposable {
 	}
 
 	private rowHtml(row: Row, s: ThreadStrings, image: ImageResolver, roomId: string): string {
-		const key = `${roomId}:${row.id}:${row.type === 'fold' ? row.items.length : row.text.length}`;
+		const key = `${roomId}:${row.id}:${row.type === 'fold' ? row.items.length : row.text.length}${row.type === 'error' ? `:${row.home?.id ?? ''}` : ''}`;
 		let html = this.rowCache.get(key);
 		if (html === undefined) {
 			const time = row.type === 'agent' && row.at ? new Date(row.at).toLocaleTimeString(vscode.env.language, { hour: '2-digit', minute: '2-digit' }) : '';
@@ -415,7 +423,8 @@ export class ThreadViews implements vscode.Disposable {
 		view.panel.iconPath = new vscode.ThemeIcon('comment-discussion');
 		this.updateRoots(view, room);
 		const image = this.resolver(view, room);
-		const rows = threadRows(room.messages).map(row => ({ key: row.id, html: this.rowHtml(row, s, image, room.id) }));
+		const rows = threadRows(room.messages).map(row => row.type === 'error' && row.missing ? { ...row, ...this.homeOf(view, room, row.agentId) } : row)
+			.map(row => ({ key: row.id, html: this.rowHtml(row, s, image, room.id) }));
 		if (view.pending && room.messages.slice(view.pending.after).some(m => m.author.kind === 'user')) {
 			view.pending = undefined;
 		}
@@ -453,19 +462,32 @@ export class ThreadViews implements vscode.Disposable {
 		});
 	}
 
-	/** The cached label; a missing one is read in the background (the plain one shows meanwhile) and the panel updated when it arrives. */
+	/**
+	 * Where an error row's agent could go on: the SSH machine that has the thread's session, when
+	 * the agent is this computer's and its CLI is not here. Read once in the background per session.
+	 */
+	private homeOf(view: View, room: Room, agentId: string): { home?: { readonly id: string; readonly machine: string } } {
+		const session = room.state.adopted?.[agentId]?.session;
+		if (!session || machineOf(agentId) || !this.host.sessionElsewhere) {
+			return {};
+		}
+		const key = `${room.id}:${agentId}:${session}`;
+		const known = this.homes.get(key);
+		if (known === undefined) {
+			this.homes.set(key, this.host.sessionElsewhere(room, agentId).then(home => { this.homes.set(key, home ?? null); }, () => { this.homes.set(key, null); }).finally(() => this.schedule(view)));
+		}
+		return known && !(known instanceof Promise) ? { home: known } : {};
+	}
+
+	/**
+	 * The cached label; a missing one is read in the background (the plain one shows meanwhile) and
+	 * the panel updated when it arrives. The session's own model and fill are in the key: a thread
+	 * read again (healed, moved to its machine) shows its model without a reload.
+	 */
 	private modelLabel(view: View, room: Room, agentId: string): string {
 		const choice = room.state.choices?.[agentId];
 		const plain = chipLabel(choice, undefined, vscode.l10n.t('Default'));
-		const key = `${room.id}:${agentId}:${JSON.stringify(choice ?? {})}`;
-		const known = this.labels.get(key);
-		if (typeof known === 'string') {
-			return known || plain;
-		}
-		if (!known) {
-			this.labels.set(key, this.host.modelLabel(room, agentId).then(label => { this.labels.set(key, label); }, () => { this.labels.set(key, ''); }).finally(() => this.schedule(view)));
-		}
-		return plain;
+		return this.labels.get(room.id, agentId, choice, room.state.adopted?.[agentId], () => this.host.modelLabel(room, agentId), () => this.schedule(view)) || plain;
 	}
 
 	/** A chip's popover: the agent's models and efforts, whose model to set, or the thread's mode. */
@@ -537,7 +559,7 @@ export class ThreadViews implements vscode.Disposable {
 		});
 	}
 
-	private async receive(view: View, message: { type?: string; text?: unknown; agents?: unknown; agentId?: unknown; id?: unknown; index?: unknown; name?: unknown; mime?: unknown; data?: unknown; path?: unknown; uris?: unknown; anchor?: unknown; menu?: unknown; model?: unknown; effort?: unknown; mode?: unknown }): Promise<void> {
+	private async receive(view: View, message: { type?: string; text?: unknown; agents?: unknown; agentId?: unknown; id?: unknown; index?: unknown; name?: unknown; mime?: unknown; data?: unknown; path?: unknown; uris?: unknown; anchor?: unknown; menu?: unknown; model?: unknown; effort?: unknown; mode?: unknown; to?: unknown }): Promise<void> {
 		switch (message.type) {
 			case 'menu':
 				if (typeof message.anchor === 'string' && typeof message.menu === 'string') {
@@ -639,6 +661,14 @@ export class ThreadViews implements vscode.Disposable {
 					}
 				}
 				break;
+			case 'continueOn': {
+				const room = view.roomId ? await this.host.open(view.roomId) : undefined;
+				if (room && typeof message.agentId === 'string' && typeof message.to === 'string') {
+					await this.host.continueOn?.(room, message.agentId, message.to);
+				}
+				this.schedule(view);
+				break;
+			}
 			case 'button': {
 				const button = typeof message.index === 'number' ? view.buttons[message.index] : undefined;
 				if (button) {

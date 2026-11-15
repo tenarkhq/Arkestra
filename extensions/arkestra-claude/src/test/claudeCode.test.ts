@@ -48,7 +48,9 @@ test('the first turn sends the preamble and the whole thread, the next resumes t
 	const events: AgentEvent[] = [];
 	const t1 = [msg('user', 'user', 'fix the stop state'), msg('agent', 'codex', 'I edited state.py')];
 	await agent.turn({ roomId: 'r', transcript: t1 }, e => events.push(e), new AbortController().signal);
-	assert.deepEqual(events, [{ kind: 'tool', text: 'Edit src/advisor/state.py' }, { kind: 'text', text: 'Done.' }]);
+	// The tool use's raw line goes first (what Claude produced, AR26); text-only lines are not handed on.
+	const toolLine = JSON.stringify({ type: 'assistant', session_id: 's1', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'src/advisor/state.py' } }, { type: 'text', text: 'Done.' }] } });
+	assert.deepEqual(events, [{ kind: 'line', line: toolLine }, { kind: 'tool', text: 'Edit src/advisor/state.py' }, { kind: 'text', text: 'Done.' }]);
 
 	const t2 = [...t1, msg('agent', 'claude', 'Done.'), msg('user', 'user', 'now the test')];
 	await agent.turn({ roomId: 'r', transcript: t2 }, () => { }, new AbortController().signal);

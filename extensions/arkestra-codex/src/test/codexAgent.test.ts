@@ -4,11 +4,11 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { spawn as nodeSpawn } from 'node:child_process';
+import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process';
 import { appendFile, chmod, copyFile, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { CodexAgent, ROOM_PREAMBLE, codexHistory, codexSessions, codexLimits, codexModels, codexPlan, codexUsage, codexWork, describeItem, modelOverride, type CodexAuth } from '../codexAgent';
+import { CodexAgent, ROOM_PREAMBLE, startProblem, codexHistory, codexSessions, codexLimits, codexModels, codexPlan, codexUsage, codexWork, describeItem, modelOverride, type CodexAuth } from '../codexAgent';
 import type { AgentEvent, Message } from '../rooms';
 
 const FAKE = `#!/usr/bin/env node
@@ -62,6 +62,9 @@ function handle(m) {
       if (text.includes('FAIL')) {
         out({ method: 'error', params: { threadId: 'th1', turnId, willRetry: false, error: { message: 'usage limit reached' } } });
         return out({ method: 'turn/completed', params: { threadId: 'th1', turn: { id: turnId, status: 'failed', error: { message: 'usage limit reached' } } } });
+      }
+      if (text.includes('PATCH') && process.env.FAKE_ROLLOUT) {
+        fs.appendFileSync(process.env.FAKE_ROLLOUT, JSON.stringify({ timestamp: '2026-11-15T09:00:00Z', type: 'response_item', payload: { type: 'custom_tool_call', name: 'apply_patch', call_id: 'c-new', input: '*** Begin Patch\\n*** Add File: docs/plan.md\\n+# Plan\\n*** End Patch' } }) + '\\n');
       }
       out({ method: 'item/started', params: { threadId: 'other', item: { type: 'commandExecution', command: 'ls' } } });
       out({ method: 'item/started', params: { threadId: 'th1', turnId, item: { type: 'fileChange', changes: [{ path: 'src/advisor/state.py', kind: 'update' }] } } });
@@ -397,4 +400,76 @@ test('import then follow: what the thread wrote between the history read and the
 		delete process.env.FAKE_ROLLOUT;
 		agent.dispose();
 	}
+});
+
+const patchLine = (callId: string, file: string) => JSON.stringify({ timestamp: '2026-11-15T08:00:00Z', type: 'response_item', payload: { type: 'custom_tool_call', name: 'apply_patch', call_id: callId, input: `*** Begin Patch\n*** Add File: ${file}\n+# Old\n*** End Patch` } });
+
+test('a turn hands over the rollout lines it wrote that add files (what Codex produced), not the older ones', async () => {
+	for (const remote of [false, true]) {
+		const { agent, dir } = await setup({ mode: 'subscription' }, remote);
+		const file = path.join(dir, 'rollout-2026-11-15T08-00-00-th1.jsonl');
+		await writeFile(file, patchLine('c-old', 'docs/old.md') + '\n');
+		process.env.FAKE_ROLLOUT = file;
+		try {
+			// The first turn starts the thread (its file is new: read from its start); the next one reads only what it wrote.
+			const first = msg('user', 'user', 'hello');
+			await agent.turn({ roomId: 'r', transcript: [first] }, () => { }, never());
+			const events: AgentEvent[] = [];
+			await agent.turn({ roomId: 'r', transcript: [first, msg('user', 'user', 'write the PATCH')] }, e => events.push(e), never());
+			const lines = events.filter((e): e is Extract<AgentEvent, { kind: 'line' }> => e.kind === 'line').map(e => JSON.parse(e.line));
+			assert.deepEqual(lines.map(l => l.payload.call_id), ['c-new'], remote ? 'over SSH' : 'here');
+			// The answer and its tool line are there as before.
+			assert.deepEqual(events.filter(e => e.kind !== 'line'), [{ kind: 'tool', text: 'Edit src/advisor/state.py' }, { kind: 'text', text: 'Done.' }]);
+		} finally {
+			delete process.env.FAKE_ROLLOUT;
+			agent.dispose();
+		}
+	}
+});
+
+test('history and follow: the rollout\'s model and context fill, and its patch lines; older imports read once more', async () => {
+	const { agent, dir } = await setup();
+	assert.equal(agent.historyVersion, 2);
+	const file = path.join(dir, path.basename(FIXTURE));
+	await copyFile(FIXTURE, file);
+	await appendFile(file, patchLine('c1', 'docs/a.md') + '\n' + JSON.stringify({ timestamp: '2026-11-14T10:20:00Z', type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { total_tokens: 99999 }, last_token_usage: { input_tokens: 40000, output_tokens: 1200, total_tokens: 41200 }, model_context_window: 258400 } } }) + '\n');
+	process.env.FAKE_ROLLOUT = file;
+	try {
+		const history = await agent.sessionHistory('01a1e000-0000-7000-8000-00000000c0de');
+		assert.deepEqual(history.meta, { model: 'gpt-5.5', context: 41200 });
+		assert.deepEqual(history.lines?.map(l => JSON.parse(l).payload.call_id), ['c1']);
+		const got: { meta?: unknown; lines?: readonly string[] }[] = [];
+		await new Promise<void>((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error('timed out')), 5000);
+			const follow = agent.watchSession('01a1e000-0000-7000-8000-00000000c0de', (_entries, _cursor, meta, lines) => {
+				got.push({ ...(meta ? { meta } : {}), ...(lines ? { lines } : {}) });
+				if (got.some(g => g.lines)) {
+					clearTimeout(timer);
+					follow.dispose();
+					resolve();
+				}
+			}, history.cursor);
+			void (async () => {
+				await new Promise(r => setTimeout(r, 200));
+				await appendFile(file, JSON.stringify({ timestamp: '2026-11-14T11:00:00Z', type: 'turn_context', payload: { model: 'gpt-5.6' } }) + '\n' + patchLine('c2', 'docs/b.md') + '\n');
+			})();
+		});
+		const batch = got.find(g => g.lines)!;
+		assert.deepEqual(batch.lines!.map(l => JSON.parse(l).payload.call_id), ['c2']);
+		assert.deepEqual(batch.meta, { model: 'gpt-5.6' });
+	} finally {
+		delete process.env.FAKE_ROLLOUT;
+		agent.dispose();
+	}
+});
+
+test('Codex that cannot start says so in plain words: not installed here, or on the SSH machine', async () => {
+	assert.equal(startProblem('Codex', { code: 'ENOENT' })?.message, 'Codex is not installed on this computer. Install it or connect a machine that has it.');
+	assert.equal(startProblem('Codex', { code: 'ENOENT' }, 'tenark-codex'), undefined, 'ssh missing here is not Codex missing there');
+	const dir = await mkdtemp(path.join(tmpdir(), 'arkestra-codex-missing-'));
+	const local = new CodexAgent({ command: path.join(dir, 'codex'), sandbox: 'workspace-write', cwd: () => dir, auth: async () => ({ mode: 'subscription' }), apiKeyHome: path.join(dir, 'k') });
+	await assert.rejects(local.turn({ roomId: 'r', transcript: [msg('user', 'user', 'hi')] }, () => { }, never()), (e: Error) => e.message === 'Codex is not installed on this computer. Install it or connect a machine that has it.');
+	const missing = (_c: string, _a: string[], options: SpawnOptions) => nodeSpawn('sh', ['-c', 'echo "bash: codex: command not found" >&2; exit 127'], options);
+	const remote = new CodexAgent({ command: 'codex', sandbox: 'workspace-write', cwd: () => undefined, auth: async () => ({ mode: 'subscription' }), apiKeyHome: '~/.arkestra-codex', spawn: missing, identity: { id: 'codex@tenark-codex', name: 'Codex · tenark-codex', where: 'tenark-codex' } });
+	await assert.rejects(remote.turn({ roomId: 'r', transcript: [msg('user', 'user', 'hi')] }, () => { }, never()), /Codex is not installed on tenark-codex\. Install it there or choose another machine\./);
 });

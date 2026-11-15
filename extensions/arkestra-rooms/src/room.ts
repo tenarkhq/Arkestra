@@ -5,6 +5,7 @@
 import type { TemplateState } from './templates/types';
 import type { BestRun } from './best';
 import type { Agent, AgentEvent, AgentRegistry, ExistingSession, Readiness, SessionEntry, SessionHistory, SessionMeta } from './agent';
+import { readableAgentError } from './agentErrors';
 import { artifactsFromSessionLines, mergeProduced, type ProducedArtifact } from './produced';
 
 export type AuthorKind = 'user' | 'agent' | 'system';
@@ -259,7 +260,9 @@ export class Room {
 				sink(agent, event);
 			}, signal);
 		} catch (error) {
-			const text = error instanceof Error ? error.message : String(error);
+			// A CLI that is not there says so in plain words (`spawn claude ENOENT` is not for the user).
+			const machine = agent.id.includes('@') ? agent.name.split(' · ')[1] || agent.id.slice(agent.id.indexOf('@') + 1) : undefined;
+			const text = readableAgentError(error instanceof Error ? error.message : String(error), agent.id, machine).text;
 			sink(agent, { kind: 'error', text });
 			reply += reply ? `\n\n[error] ${text}` : `[error] ${text}`;
 		}

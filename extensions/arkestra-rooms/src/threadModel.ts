@@ -6,6 +6,7 @@
 
 import type { AgentActivity } from './activity';
 import type { AgentEvent } from './agent';
+import { readableAgentError, splitError } from './agentErrors';
 import type { Message, RoomState } from './room';
 import { withoutAttachments } from './references';
 import { instructionLine } from './threads';
@@ -94,7 +95,12 @@ export function userWords(text: string): string {
 export type Row =
 	| { readonly type: 'user'; readonly id: string; readonly at: string; readonly text: string; readonly attached: number }
 	| { readonly type: 'agent'; readonly id: string; readonly at: string; readonly agentId: string; readonly name: string; readonly text: string }
-	| { readonly type: 'fold'; readonly id: string; readonly items: readonly FoldItem[] };
+	| { readonly type: 'fold'; readonly id: string; readonly items: readonly FoldItem[] }
+	/**
+	 * The error an agent's turn ended with, in plain words. `missing`: its CLI is not on that
+	 * computer; `home`: the SSH agent whose machine has the thread's session (the view fills it in).
+	 */
+	| { readonly type: 'error'; readonly id: string; readonly agentId: string; readonly name: string; readonly text: string; readonly missing?: boolean; readonly home?: { readonly id: string; readonly machine: string } };
 
 /** The room's messages as the panel's rows: consecutive system and background lines in one fold. */
 export function threadRows(messages: readonly Message[]): Row[] {
@@ -121,7 +127,15 @@ export function threadRows(messages: readonly Message[]): Row[] {
 			}
 			rows.push({ type: 'user', id: m.id, at: m.at, text: words, attached: count });
 		} else if (m.author.kind === 'agent') {
-			rows.push({ type: 'agent', id: m.id, at: m.at, agentId: m.author.id, name: m.author.name, text: m.text });
+			// A turn that failed: what it wrote, then its error as an error row (`[error] …` in the room).
+			const { answer, error } = splitError(m.text);
+			if (answer || error === undefined) {
+				rows.push({ type: 'agent', id: m.id, at: m.at, agentId: m.author.id, name: m.author.name, text: answer });
+			}
+			if (error !== undefined) {
+				const readable = readableAgentError(error, m.author.id, machineOf(m.author.id) ? m.author.name.split(' · ')[1] || machineOf(m.author.id) : undefined);
+				rows.push({ type: 'error', id: `${m.id}:error`, agentId: m.author.id, name: m.author.name, text: readable.text, ...(readable.missing ? { missing: true } : {}) });
+			}
 		} else {
 			fold({ id: m.id, kind: 'system', summary: m.to ? oneLine(`${m.author.name}: ${instructionLine(m.text)}`) : oneLine(m.text) });
 		}
@@ -329,6 +343,42 @@ export function folderLabel(folder: string | undefined, home: string | undefined
 		return folder;
 	}
 	return home && (p === home || p.startsWith(`${home}/`)) ? `~${p.slice(home.length)}` : p;
+}
+
+/**
+ * The composer chip's labels (`Opus 5.5 · High`), read in the background. Cached per room, agent,
+ * choice and the adopted session's model and context fill: a session read again (healed, moved to
+ * its machine) shows its model without a reload. While a new label is read the last one for the
+ * same choice stays (no flicker on every fill change); older labels of that agent are let go.
+ */
+export class LabelCache {
+	private readonly labels = new Map<string, string | Promise<void>>();
+	private readonly last = new Map<string, string>();
+
+	/** The label, or undefined while there is none yet (the caller shows its plain one). */
+	get(roomId: string, agentId: string, choice: object | undefined, adopted: { readonly model?: string; readonly context?: number } | undefined, read: () => Promise<string>, arrived: () => void): string | undefined {
+		const base = `${roomId}:${agentId}:${JSON.stringify(choice ?? {})}`;
+		const key = `${base}:${adopted?.model ?? ''}:${adopted?.context ?? ''}`;
+		const known = this.labels.get(key);
+		if (typeof known === 'string') {
+			return known || undefined;
+		}
+		if (!known) {
+			const done = (label: string) => {
+				for (const k of this.labels.keys()) {
+					if (k !== key && k.startsWith(`${roomId}:${agentId}:`) && typeof this.labels.get(k) === 'string') {
+						this.labels.delete(k);
+					}
+				}
+				this.labels.set(key, label);
+				if (label) {
+					this.last.set(base, label);
+				}
+			};
+			this.labels.set(key, read().then(done, () => done('')).finally(arrived));
+		}
+		return this.last.get(base);
+	}
 }
 
 /**
