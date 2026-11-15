@@ -657,6 +657,14 @@ function graphEl() {
 	const all = new Map(g.nodes.map(n => [n.id, Object.assign({}, n)]));
 	const lanesShown = new Set(g.nodes.filter(n => n.kind === 'task' && shownIds.has(n.id)).map(n => n.lane));
 	const nodes = new Map([...all].filter(([id, n]) => n.kind === 'milestone' ? lanesShown.has(n.lane) : shownIds.has(id)));
+	// With filters on, the shown tasks keep their order but close up (columns and rows of hidden tasks go):
+	// kept places of a few tasks lie far apart. This view is not saved as their places.
+	const filtered = g.nodes.some(n => n.kind === 'task' && !shownIds.has(n.id));
+	if (filtered) {
+		const xs = [...new Set([...nodes.values()].map(n => n.x))].sort((a, b) => a - b);
+		const ys = [...new Set([...nodes.values()].map(n => n.y))].sort((a, b) => a - b);
+		for (const n of nodes.values()) { n.x = 40 + xs.indexOf(n.x) * (W + 60); n.y = 40 + ys.indexOf(n.y) * (H + 36); }
+	}
 	const z = ui.graph.zoom;
 	// The canvas is cut to the tasks the filters show: kept places of hidden tasks leave no empty field to scroll past.
 	const shown = [...nodes.values()];
@@ -722,7 +730,7 @@ function graphEl() {
 					if (hit && hit.id !== n.id) linkNodes(n, hit, ui.graph.mode);
 					return;
 				}
-				if (moved) post({ type: 'savePosition', id: n.id, x: n.x, y: n.y });
+				if (moved && !filtered) post({ type: 'savePosition', id: n.id, x: n.x, y: n.y });
 				else clickNode(n);
 			};
 			window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);

@@ -189,6 +189,8 @@ assert.ok(!find(body, (e: any) => e.tag === 'g' && e.attrs['data-node'] === 'D0'
 	assert.equal(vy, Math.max(0, Math.min(...shownNodes.map(p => p[1])) - 40), 'view box starts at the shown nodes (y)');
 	assert.equal(vw, Math.max(...shownNodes.map(p => p[0])) + 200 + 40 - vx, 'view box ends at the shown nodes (x)');
 	assert.ok(vh > 0);
+	// Filtered: the shown tasks close up into columns 260 apart and rows 100 apart from (40, 40).
+	assert.ok(shownNodes.every(p => (p[0] - 40) % 260 === 0 && (p[1] - 40) % 100 === 0), 'shown tasks close up');
 }
 statusSel().value = ''; statusSel().fire('change');
 const node = find(body, (e: any) => e.tag === 'g' && e.attrs['data-node'] === 'I1')[0];
