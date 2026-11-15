@@ -26,6 +26,11 @@ export interface MachinesStrings {
 	readonly noAgent: string;
 	readonly noMatch: string;
 	readonly couldNotRead: string;
+	/** `{0} is not installed here`: a missing agent, said quietly. */
+	readonly notInstalled: string;
+	/** The count chip: `{0} · 1 session`, `{0} · {1} sessions`. */
+	readonly oneSession: string;
+	readonly nSessions: string;
 	readonly connected: string;
 	readonly connecting: string;
 	readonly unreachable: string;
@@ -375,7 +380,7 @@ export function machinesHtml(nonce: string, s: MachinesStrings, fonts?: PageFont
 			const counts = el('span', 'counts');
 			for (const k of m.counts) {
 				const b = el('span', 'badge ' + k.kind);
-				b.append(el('i'), document.createTextNode(k.agent + ' ' + k.n));
+				b.append(el('i'), document.createTextNode((k.n === 1 ? S.oneSession : S.nSessions).replace('{0}', k.agent).replace('{1}', String(k.n))));
 				counts.append(b);
 			}
 			facts.append(counts);
@@ -404,7 +409,7 @@ export function machinesHtml(nonce: string, s: MachinesStrings, fonts?: PageFont
 		if (!canList(c)) {
 			if (!m.sessions.length && c.state !== 'error') { body.append(c.state === 'connecting' ? note(S.connectingNote, true) : note(S.unreachableNote)); }
 		} else {
-			for (const e of m.errors) { body.append(el('div', 'err', S.couldNotRead.replace('{0}', e.agent).replace('{1}', e.message))); }
+			for (const e of m.errors) { body.append(e.missing ? note(S.notInstalled.replace('{0}', e.agent)) : el('div', 'err', S.couldNotRead.replace('{0}', e.agent).replace('{1}', e.message))); }
 			if ((m.state === 'loading' || m.state === 'idle') && !m.sessions.length) { body.append(note(S.loading, true)); }
 			if (m.state === 'none') { body.append(note(S.noAgent)); }
 			else if ((m.state === 'ok' || m.state === 'partial') && !m.sessions.length) { body.append(note(S.noSessions)); }

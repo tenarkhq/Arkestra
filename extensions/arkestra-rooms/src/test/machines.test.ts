@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { Script } from 'node:vm';
 import { machinesHtml, type MachinesStrings } from '../machinesHtml';
+import { notInstalled } from '../agentErrors';
 import { agentKind, agentLabel, canList, connectionState, defaultFolder, machineOf, machinesModel, readMachineEntries, relativeTime, sessionKey, sessionMatches, type Listing } from '../machinesModel';
 
 const NOW = Date.parse('2026-11-15T12:00:00Z');
@@ -110,7 +111,7 @@ test('this machine first, then the SSH machines; each lists all its agents\' ses
 		['Old fix', 'claude', 'Claude', 'app', 'yesterday', 'room-7'],
 		['x2', 'codex', 'Codex', '', '', undefined],
 	]);
-	assert.deepEqual(model.machines[2].errors, [{ agent: 'Claude', message: 'ssh: Permission denied' }]);
+	assert.deepEqual(model.machines[2].errors, [{ agent: 'Claude', message: 'ssh: Permission denied', missing: false }]);
 	assert.deepEqual(model.machines[2].sessions.map(s => s.key), ['codex@tenark-claude\ny']);
 });
 
@@ -133,7 +134,7 @@ test('the filters: agent kind, machine, and the search over title and folder', (
 });
 
 test('the page runs only its own nonce, shows its strings escaped and its script compiles', () => {
-	const keys = ['title', 'subtitle', 'search', 'refresh', 'connections', 'agent', 'machine', 'all', 'claude', 'codex', 'openThread', 'continueHere', 'loading', 'noSessions', 'noAgent', 'noMatch', 'couldNotRead', 'connected', 'connecting', 'unreachable', 'connectionError', 'unknown', 'localTip', 'reconnect', 'unreachableNote', 'connectingNote', 'checked', 'folder', 'openFolder', 'edit', 'remove', 'removeAsk', 'removeYes', 'cancel', 'addConnection', 'host', 'hostHint', 'name', 'nameHint', 'folderField', 'folderHint', 'save', 'folderUp', 'terminalHere', 'readingFolders', 'noFolders', 'couldNotReadFolder'];
+	const keys = ['title', 'subtitle', 'search', 'refresh', 'connections', 'agent', 'machine', 'all', 'claude', 'codex', 'openThread', 'continueHere', 'loading', 'noSessions', 'noAgent', 'noMatch', 'couldNotRead', 'notInstalled', 'oneSession', 'nSessions', 'connected', 'connecting', 'unreachable', 'connectionError', 'unknown', 'localTip', 'reconnect', 'unreachableNote', 'connectingNote', 'checked', 'folder', 'openFolder', 'edit', 'remove', 'removeAsk', 'removeYes', 'cancel', 'addConnection', 'host', 'hostHint', 'name', 'nameHint', 'folderField', 'folderHint', 'save', 'folderUp', 'terminalHere', 'readingFolders', 'noFolders', 'couldNotReadFolder'];
 	const strings = Object.fromEntries(keys.map(k => [k, k === 'title' ? 'Ma<b>chines</b> "x"' : k])) as unknown as MachinesStrings;
 	const html = machinesHtml('NONCE123', strings, { base: 'vscode-resource://fonts', cspSource: 'vscode-resource:' });
 	assert.match(html, /default-src 'none'; style-src 'nonce-NONCE123'; font-src vscode-resource:; script-src 'nonce-NONCE123';/);
@@ -184,4 +185,14 @@ test('the page binds its embedded functions to their names: the shipped bundle r
 	const script = /<script nonce="N">([\s\S]*?)<\/script>/.exec(machinesHtml('N', strings))![1];
 	assert.match(script, /const sessionMatches = function \w*\(/);
 	assert.match(script, /const canList = function \w*\(/);
+});
+
+test('an agent that is only not installed on a machine is a quiet fact there, not a failure; counts say what they count', () => {
+	const strings = new Proxy({}, { get: (_t, k) => typeof k === 'string' ? k : undefined }) as unknown as MachinesStrings;
+	const script = /<script nonce="N">([\s\S]*?)<\/script>/.exec(machinesHtml('N', strings))![1];
+	assert.ok(script.includes("e.missing ? note(S.notInstalled"), 'a missing agent is a note');
+	assert.ok(script.includes('S.oneSession : S.nSessions'), 'the count chip names sessions');
+	assert.equal(notInstalled('Codex is not installed on tenark-claude. Install it there or choose another machine.'), true);
+	assert.equal(notInstalled('Codex is not installed on this computer. Install it or connect a machine that has it.'), true);
+	assert.equal(notInstalled('ssh: Permission denied'), false);
 });

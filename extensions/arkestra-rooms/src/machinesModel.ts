@@ -5,6 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { ExistingSession } from './agent';
+import { notInstalled } from './agentErrors';
 
 /** This machine's id; an SSH machine has the id of its `arkestra.connections.machines` entry. */
 export const LOCAL = 'local';
@@ -140,7 +141,8 @@ export interface PageMachine {
 	/** Sessions per agent, of the agents read so far. */
 	readonly counts: readonly { readonly kind: AgentKind; readonly agent: string; readonly n: number }[];
 	readonly state: MachineState;
-	readonly errors: readonly { readonly agent: string; readonly message: string }[];
+	/** Agents that could not list; `missing`: only because the agent is not installed on the machine. */
+	readonly errors: readonly { readonly agent: string; readonly message: string; readonly missing: boolean }[];
 	readonly sessions: readonly PageSession[];
 }
 
@@ -260,12 +262,12 @@ export function machinesModel(input: {
 		machines: order.map((m): PageMachine => {
 			const agents = input.agents.filter(a => machineOf(a.id) === m.id);
 			const sessions: PageSession[] = [];
-			const errors: { agent: string; message: string }[] = [];
+			const errors: { agent: string; message: string; missing: boolean }[] = [];
 			const counts: { kind: AgentKind; agent: string; n: number }[] = [];
 			for (const agent of agents) {
 				const listing = input.listings.get(agent.id);
 				if (listing?.state === 'error') {
-					errors.push({ agent: agentLabel(agent.name), message: listing.message });
+					errors.push({ agent: agentLabel(agent.name), message: listing.message, missing: notInstalled(listing.message) });
 				} else if (listing?.state === 'ok') {
 					counts.push({ kind: agentKind(agent.id), agent: agentLabel(agent.name), n: listing.sessions.length });
 					for (const s of listing.sessions) {

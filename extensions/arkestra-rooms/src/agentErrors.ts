@@ -22,6 +22,11 @@ export function productOf(name: string): string | undefined {
 }
 
 const NOT_INSTALLED = / is not installed on (this computer|[^.\s]+)\./;
+
+/** Whether an agent's error only says its CLI is not installed there (a fact of the machine, not a failure). */
+export function notInstalled(message: string): boolean {
+	return NOT_INSTALLED.test(message);
+}
 const NOT_ALLOWED = / could not be started on (this computer|[^:\s]+): it is not allowed to run\./;
 
 /**
