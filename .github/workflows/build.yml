@@ -231,3 +231,12 @@ jobs:
           git -C feed add -A
           git -C feed commit -qm "Update feed: ${RELEASE_VERSION}"
           git -C feed push origin versions
+
+      # Old releases are not kept: their installers fill the storage. The newest two stay (the
+      # one just made, and the one before it for a step back); their tags stay too.
+      - name: Remove older releases
+        run: |
+          gh api --paginate "repos/${ASSETS_REPOSITORY}/releases?per_page=100" -q '.[] | "\(.created_at) \(.id)"' \
+            | sort -r | tail -n +3 | while read -r _ id; do
+              gh api -X DELETE "repos/${ASSETS_REPOSITORY}/releases/${id}"
+            done
