@@ -19,6 +19,7 @@
     "onWebviewPanel:arkestra.agents",
     "onWebviewPanel:arkestra.lane",
     "onWebviewPanel:arkestra.artifacts",
+    "onWebviewPanel:arkestra.machines",
     "onWebviewPanel:arkestra.thread"
   ],
   "main": "./out/extension",
@@ -290,6 +291,12 @@
         "title": "%artifacts.open%",
         "category": "Arkestra",
         "icon": "$(layers)"
+      },
+      {
+        "command": "arkestra.machines.open",
+        "title": "%machines.open%",
+        "category": "Arkestra",
+        "icon": "$(vm)"
       },
       {
         "command": "arkestra.rooms.chooseModel",

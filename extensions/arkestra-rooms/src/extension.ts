@@ -940,6 +940,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			pinnedArtifacts: () => gallery.pinnedArtifacts(),
 			machineSessions: () => sessionAgents().map(a => ({ id: a.id, name: a.name, sessions: () => listedSessions(a) })),
 			refreshSessions: () => sessionLists.clear(),
+			continuedSessions: async () => new Map((await store.list()).flatMap(s => Object.entries((loaded.get(s.id)?.state ?? s).adopted ?? {}).map(([agentId, a]) => [`${agentId}\n${a.session}`, s.id] as const))),
 			onDidChange: changedThreads.event,
 		}),
 		gallery.onDidChangePins(() => changedThreads.fire()),

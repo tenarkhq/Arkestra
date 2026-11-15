@@ -11,9 +11,7 @@
   "categories": [
     "AI"
   ],
-  "activationEvents": [
-    "onView:arkestra.machines"
-  ],
+  "activationEvents": [],
   "main": "./out/extension",
   "capabilities": {
     "virtualWorkspaces": false,
@@ -82,91 +80,37 @@
       {
         "command": "arkestra.connections.remove",
         "title": "%remove%",
-        "category": "Arkestra",
-        "icon": "$(close)"
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.connections.openFolder",
+        "title": "%openFolder%",
+        "category": "Arkestra"
+      },
+      {
+        "command": "arkestra.connections.edit",
+        "title": "%edit%",
+        "category": "Arkestra"
       },
       {
         "command": "arkestra.connections.openTerminal",
         "title": "%openTerminal%",
-        "category": "Arkestra",
-        "icon": "$(add)"
+        "category": "Arkestra"
       },
       {
         "command": "arkestra.connections.upload",
         "title": "%upload%",
-        "category": "Arkestra",
-        "icon": "$(cloud-upload)"
-      },
-      {
-        "command": "arkestra.connections.refreshMachines",
-        "title": "%refreshMachines%",
-        "category": "Arkestra",
-        "icon": "$(refresh)"
-      }
-    ],
-    "views": {
-      "arkestra-details": [
-        {
-          "id": "arkestra.machines",
-          "name": "%machines.view%",
-          "icon": "$(remote)",
-          "visibility": "hidden"
-        }
-      ]
-    },
-    "viewsWelcome": [
-      {
-        "view": "arkestra.machines",
-        "contents": "%machines.empty%"
+        "category": "Arkestra"
       }
     ],
     "menus": {
-      "view/title": [
-        {
-          "command": "arkestra.connections.add",
-          "when": "view == arkestra.machines",
-          "group": "navigation@1"
-        },
-        {
-          "command": "arkestra.connections.refreshMachines",
-          "when": "view == arkestra.machines",
-          "group": "navigation@2"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "arkestra.connections.openTerminal",
-          "when": "view == arkestra.machines && viewItem =~ /^(machine|folder)$/",
-          "group": "inline@1"
-        },
-        {
-          "command": "arkestra.connections.upload",
-          "when": "view == arkestra.machines && viewItem =~ /^(machine|folder)$/",
-          "group": "inline@2"
-        },
-        {
-          "command": "arkestra.connections.refreshMachines",
-          "when": "view == arkestra.machines && viewItem =~ /^(machine|folder)$/",
-          "group": "9_refresh"
-        },
-        {
-          "command": "arkestra.connections.remove",
-          "when": "view == arkestra.machines && viewItem == machine",
-          "group": "inline@3"
-        },
-        {
-          "command": "arkestra.connections.remove",
-          "when": "view == arkestra.machines && viewItem == machine",
-          "group": "z_remove"
-        }
-      ],
       "commandPalette": [
         {
-          "command": "arkestra.connections.refreshMachines",
+          "command": "arkestra.connections.remove",
           "when": "false"
         },
         {
-          "command": "arkestra.connections.remove",
+          "command": "arkestra.connections.edit",
           "when": "false"
         }
       ]
