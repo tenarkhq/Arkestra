@@ -10,7 +10,7 @@ import type { Message, RoomState } from '../room';
 
 const code = (lines: number) => Array.from({ length: lines }, (_, i) => `line ${i}`).join('\n');
 
-test('an answer\'s artifacts: diagram, document, page, svg and image links, long code; short code and logs are not', () => {
+test('an answer\'s artifacts: diagram, long document and page, svg, image and claude.ai links, long code; shell, short code and snippets are not', () => {
 	const found = findInAnswer([
 		'### Import folyamat',
 		'```mermaid',
@@ -19,32 +19,56 @@ test('an answer\'s artifacts: diagram, document, page, svg and image links, long
 		'```',
 		'Itt a javaslat:',
 		'```python schema.py',
-		code(6),
+		code(40),
 		'```',
 		'```ts',
-		'short()',
+		code(39),
 		'```',
 		'```console',
-		code(8),
+		code(80),
+		'```',
+		'```bash',
+		'( set -euo pipefail',
+		code(60),
 		'```',
 		'```html',
 		'<title>Termékoldal</title><h1>Hello</h1>',
+		code(9),
+		'```',
+		'```html',
+		'<b>rövid példa</b>',
 		'```',
 		'```markdown',
 		'# Kiadási ellenőrzőlista',
-		'- [ ] tesztek',
+		code(9),
+		'```',
+		'```md',
+		'# Csak egy minta',
+		'```',
+		'Logó:',
+		'```svg',
+		'<svg viewBox="0 0 1 1"></svg>',
 		'```',
 		'![Képernyőkép](docs/shot.png)',
+		'Kész: [Kiadási jegyzet](https://claude.ai/artifact/0f3a9c2e-1111) és https://claude.ai/code/artifact/7b2d44aa-2222',
 	].join('\n'));
 	assert.deepEqual(found.map(f => [f.kind, f.title]), [
 		['diagram', 'Import folyamat'],
 		['code', 'schema.py'],
 		['page', 'Termékoldal'],
 		['document', 'Kiadási ellenőrzőlista'],
+		['image', 'Logó'],
 		['image', 'Képernyőkép'],
+		['page', 'Kiadási jegyzet'],
+		['page', 'claude.ai · 7b2d44aa'],
 	]);
 	assert.equal(found[1].language, 'python');
+	assert.equal(found[6].url, 'https://claude.ai/artifact/0f3a9c2e-1111');
+	assert.equal(found[7].url, 'https://claude.ai/code/artifact/7b2d44aa-2222');
 	assert.equal(findInAnswer('```mermaid\nunclosed').length, 0);
+	// The command block of the screenshot is not an artifact, however long; nor is a block without a language.
+	assert.equal(findInAnswer('```bash\n( set -euo pipefail\n' + code(200) + '\n```').length, 0);
+	assert.equal(findInAnswer('```\n' + code(200) + '\n```').length, 0);
 });
 
 const msg = (id: string, author: 'agent' | 'user', name: string, text: string, at: string): Message =>
@@ -57,7 +81,7 @@ test('the same title later is the next version; an unchanged repeat is not; user
 			msg('2', 'user', 'You', '### Import folyamat\n```mermaid\nflowchart LR\nX-->Y\n```', '2026-11-14T13:55:00Z'),
 			msg('3', 'agent', 'Claude', '### Import folyamat\n```mermaid\nflowchart LR\nA-->B-->C\n```', '2026-11-14T14:01:00Z'),
 			msg('4', 'agent', 'Codex', '### Import folyamat\n```mermaid\nflowchart LR\nA-->B-->C\n```', '2026-11-14T14:03:00Z'),
-			msg('5', 'agent', 'Codex', '`schema.py`\n```python\n' + code(5) + '\n```', '2026-11-14T13:58:00Z'),
+			msg('5', 'agent', 'Codex', '`schema.py`\n```python\n' + code(40) + '\n```', '2026-11-14T13:58:00Z'),
 		],
 	};
 	const list = roomArtifacts(room);

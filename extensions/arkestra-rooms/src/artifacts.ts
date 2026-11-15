@@ -1,11 +1,13 @@
 /*---------------------------------------------------------------------------------------------
- *  Arkestra. Artifacts (AR26): what agents produce in any thread, in one gallery. Diagrams
- *  (mermaid), documents (markdown), pages (HTML), images (SVG, image links) and code blocks
- *  are found in the agents' answers; the same title in a later answer is the next version.
- *  No VS Code here, so it is testable.
+ *  Arkestra. Artifacts (AR26): what agents produce to keep, in any thread, in one gallery: the
+ *  files they wrote and the claude.ai artifacts they published (from their tool uses, see
+ *  produced.ts), and in their answers diagrams (mermaid), long documents and pages, SVG, image
+ *  links, claude.ai artifact links and long code. Shell commands and short snippets are part of
+ *  the answer, not artifacts. The same title later is the next version. No VS Code here.
  *--------------------------------------------------------------------------------------------*/
 
 import type { Message, RoomState } from './room';
+import { ARTIFACT_URL } from './produced';
 
 export type ArtifactKind = 'diagram' | 'document' | 'page' | 'code' | 'image';
 
@@ -18,6 +20,10 @@ export interface ArtifactVersion {
 	readonly content: string;
 	/** Fence language for code; `data:` or a path for an image link. */
 	readonly language?: string;
+	/** Where the agent wrote it (on its own machine). */
+	readonly path?: string;
+	/** The published artifact's address (claude.ai). */
+	readonly url?: string;
 }
 
 export interface Artifact {
@@ -34,7 +40,11 @@ export interface Artifact {
 }
 
 /** Code blocks shorter than this are part of the answer, not an artifact. */
-export const MIN_CODE_LINES = 5;
+export const MIN_CODE_LINES = 40;
+/** Markdown and HTML blocks shorter than this are examples in the answer, not documents or pages. */
+export const MIN_DOC_LINES = 10;
+/** Commands to run and their output are never artifacts, however long. */
+const NOT_CODE = new Set(['bash', 'sh', 'zsh', 'fish', 'shell', 'console', 'shell-session', 'powershell', 'ps1', 'pwsh', 'cmd', 'bat', 'batch', 'terminal', 'text', 'txt', 'plain', 'log', 'output', 'diff', 'patch']);
 
 const KIND_BY_LANGUAGE: Record<string, ArtifactKind> = {
 	mermaid: 'diagram', md: 'document', markdown: 'document', html: 'page', htm: 'page', svg: 'image',
@@ -45,6 +55,7 @@ interface Found {
 	readonly title: string;
 	readonly content: string;
 	readonly language?: string;
+	readonly url?: string;
 }
 
 const clean = (s: string) => s.replace(/[*_`#>]+/g, '').replace(/\s+/g, ' ').replace(/[:：]\s*$/, '').trim();
@@ -91,7 +102,7 @@ export function findInAnswer(text: string): Found[] {
 			}
 			const body = lines.slice(i + 1, j).join('\n');
 			const language = info.split(/\s+/)[0].toLowerCase();
-			const kind = KIND_BY_LANGUAGE[language] ?? (j - i - 1 >= MIN_CODE_LINES && language && !['text', 'txt', 'console', 'shell-session', 'log', 'output'].includes(language) ? 'code' : undefined);
+			const kind = blockKind(language, j - i - 1);
 			if (kind && body.trim()) {
 				const title = titleFor(lines, i, info) ?? defaultTitle(kind, body, language);
 				out.push({ kind, title, content: body, ...(language ? { language } : {}) });
@@ -102,8 +113,25 @@ export function findInAnswer(text: string): Found[] {
 		for (const m of lines[i].matchAll(/!\[([^\]]*)\]\(([^)\s]+)\)/g)) {
 			out.push({ kind: 'image', title: clean(m[1]) || m[2].split('/').pop()!.slice(0, 60), content: m[2], language: 'link' });
 		}
+		for (const m of lines[i].matchAll(ARTIFACT_URL)) {
+			// `[Release notes](https://claude.ai/artifact/…)`: the link's text is its title.
+			const named = [...lines[i].matchAll(/\[([^\]]+)\]\(([^)\s]+)\)/g)].find(l => l[2] === m[0])?.[1];
+			out.push({ kind: 'page', title: named && !named.includes('claude.ai/') ? clean(named) : `claude.ai · ${m[0].split('/').pop()!.slice(0, 8)}`, content: '', url: m[0], language: 'url' });
+		}
 	}
 	return out;
+}
+
+/** What a fenced block of this language and length is: mermaid and SVG always, documents and pages when long, code only when long and not a command. */
+function blockKind(language: string, lines: number): ArtifactKind | undefined {
+	const kind = KIND_BY_LANGUAGE[language];
+	if (kind === 'diagram' || kind === 'image') {
+		return kind;
+	}
+	if (kind) {
+		return lines >= MIN_DOC_LINES ? kind : undefined;
+	}
+	return language && lines >= MIN_CODE_LINES && !NOT_CODE.has(language) ? 'code' : undefined;
 }
 
 function defaultTitle(kind: ArtifactKind, body: string, language: string): string {
@@ -120,9 +148,19 @@ function defaultTitle(kind: ArtifactKind, body: string, language: string): strin
 	return `${language || 'kód'} · ${clean(first).slice(0, 40)}`;
 }
 
+/** A file's text after an agent's edits; an edit whose text is not there is left out. */
+export function applyEdits(text: string, edits: readonly { readonly old: string; readonly new: string; readonly all?: boolean }[]): string {
+	for (const e of edits) {
+		if (e.old && text.includes(e.old)) {
+			text = e.all ? text.split(e.old).join(e.new) : text.replace(e.old, () => e.new);
+		}
+	}
+	return text;
+}
+
 const keyOf = (roomId: string, kind: ArtifactKind, title: string) => `${roomId}|${kind}|${title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '')}`;
 
-/** A room's artifacts with their versions, newest version last. */
+/** A room's artifacts with their versions, newest version last: the answers' and what the agents produced with their tools. */
 export function roomArtifacts(room: RoomState, extra: readonly { title: string; kind: ArtifactKind; versions: readonly ArtifactVersion[]; agentId: string; agentName: string }[] = []): Artifact[] {
 	const byKey = new Map<string, { a: Omit<Artifact, 'versions'>; versions: ArtifactVersion[] }>();
 	const add = (kind: ArtifactKind, title: string, agentId: string, agentName: string, v: Omit<ArtifactVersion, 'n'>) => {
@@ -132,20 +170,45 @@ export function roomArtifacts(room: RoomState, extra: readonly { title: string; 
 			entry = { a: { key, kind, title, roomId: room.id, roomTitle: room.title, ...(room.project ? { project: room.project } : {}), agentId, agentName }, versions: [] };
 			byKey.set(key, entry);
 		}
-		if (entry.versions.at(-1)?.content === v.content) {
+		const last = entry.versions.at(-1);
+		if (last && v.url && (!v.content || v.content === last.content)) {
+			entry.versions[entry.versions.length - 1] = { ...last, url: v.url }; // the file written before, now published
+			return;
+		}
+		if (last?.content === v.content && (!v.url || last.url === v.url)) {
 			return; // repeated unchanged: not a new version
 		}
 		entry.versions.push({ ...v, n: entry.versions.length + 1 });
 		entry.a = { ...entry.a, agentId, agentName }; // the latest version's author
 	};
+	type Item = { readonly at: string; readonly run: () => void };
+	const items: Item[] = [];
+	const nameOf = (agentId: string) => room.messages.find(m => m.author.kind === 'agent' && m.author.id === agentId)?.author.name ?? agentId;
+	const published = new Set((room.produced ?? []).map(p => p.url).filter(Boolean));
+	for (const p of room.produced ?? []) {
+		items.push({
+			at: p.at, run: () => {
+				const key = keyOf(room.id, p.kind, p.title);
+				const before = byKey.get(key)?.versions.at(-1)?.content;
+				// An edit changes the latest text the room has; without one only the path is known.
+				const content = p.edits ? (before ? applyEdits(before, p.edits) : '') : p.content;
+				add(p.kind, p.title, p.agentId, nameOf(p.agentId), { at: p.at, messageId: p.id, content, ...(p.language ? { language: p.language } : content ? {} : { language: 'file' }), ...(p.path ? { path: p.path } : {}), ...(p.url ? { url: p.url } : {}) });
+			},
+		});
+	}
 	for (const m of room.messages as readonly Message[]) {
 		if (m.author.kind !== 'agent') {
 			continue;
 		}
 		for (const f of findInAnswer(m.text)) {
-			add(f.kind, f.title, m.author.id, m.author.name, { at: m.at, messageId: m.id, content: f.content, ...(f.language ? { language: f.language } : {}) });
+			if (f.url && published.has(f.url)) {
+				continue; // the publish itself is there already, with its file
+			}
+			items.push({ at: m.at, run: () => add(f.kind, f.title, m.author.id, m.author.name, { at: m.at, messageId: m.id, content: f.content, ...(f.language ? { language: f.language } : {}), ...(f.url ? { url: f.url } : {}) }) });
 		}
 	}
+	// In time order, so versions follow one another whichever source they came from.
+	items.map((item, i) => ({ item, i })).sort((a, b) => a.item.at.localeCompare(b.item.at) || a.i - b.i).forEach(x => x.item.run());
 	for (const e of extra) {
 		for (const v of e.versions) {
 			add(e.kind, e.title, e.agentId, e.agentName, v);

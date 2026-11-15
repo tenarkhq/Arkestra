@@ -26,7 +26,12 @@ export type AgentEvent =
 	| { readonly kind: 'tool'; readonly text: string }
 	| { readonly kind: 'error'; readonly text: string }
 	| { readonly kind: 'usage'; readonly usage: Usage }
-	| { readonly kind: 'work'; readonly work: WorkUpdate };
+	| { readonly kind: 'work'; readonly work: WorkUpdate }
+	/**
+	 * One raw line of the agent's own output (Claude Code's stream-json, a Codex rollout line), for
+	 * what it produced with its tools (AR26): files written, artifacts published. Optional.
+	 */
+	| { readonly kind: 'line'; readonly line: string };
 
 /**
  * What an agent does beside its answer (AR37), as the vendors' desktop apps show it: its task
@@ -100,9 +105,10 @@ export interface Agent {
 	 * Follows one of those sessions live (it goes on in a terminal or the vendor's app): the
 	 * entries appended (or an answer grown) after `cursor`, each with its id, and the cursor to
 	 * go on from later. No cursor: from now on. The first call comes once it has caught up.
-	 * The turns the room itself sent into the session are left out.
+	 * The turns the room itself sent into the session are left out. `lines`: the session file's
+	 * raw lines read for these entries, tool uses included, for the artifacts (AR26); optional.
 	 */
-	watchSession?(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string) => void, cursor?: string): { dispose(): void };
+	watchSession?(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string, lines?: readonly string[]) => void, cursor?: string): { dispose(): void };
 }
 
 /** A session the agent's own CLI already has on its machine (AR39): started in a terminal, an IDE, or earlier. */
@@ -119,6 +125,8 @@ export interface ExistingSession {
 export interface SessionHistory {
 	readonly entries: readonly SessionEntry[];
 	readonly cursor?: string;
+	/** The session file's raw lines read, tool uses included, for the artifacts (AR26); optional. */
+	readonly lines?: readonly string[];
 }
 
 /** One message of an existing session, as the thread shows it. */
