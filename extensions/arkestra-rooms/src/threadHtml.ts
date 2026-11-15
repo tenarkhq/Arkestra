@@ -551,8 +551,11 @@ const conv = $('conv'), rowsEl = $('rows'), liveEl = $('live'), noticeEl = $('no
 let mode = document.body.dataset.mode, busy = false, selected = null, cards = [], strings = {};
 const nearBottom = () => conv.scrollHeight - conv.scrollTop - conv.clientHeight < 80;
 const down = $('down');
-const showDown = () => { down.hidden = nearBottom(); };
+let stuck = true;
+const showDown = () => { stuck = nearBottom(); down.hidden = stuck; };
 conv.addEventListener('scroll', showDown, { passive: true });
+// A picture that loads later makes the thread taller: one that sat at the end stays there.
+conv.addEventListener('load', e => { if (e.target.tagName === 'IMG' && stuck) { conv.scrollTop = conv.scrollHeight; } }, true);
 down.addEventListener('click', () => { conv.scrollTo({ top: conv.scrollHeight, behavior: 'smooth' }); });
 function keyed(el, list) {
 	const old = new Map([...el.children].map(c => [c.dataset.key, c]));

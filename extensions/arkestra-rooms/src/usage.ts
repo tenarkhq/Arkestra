@@ -75,7 +75,8 @@ export function quotaTone(percent: number): 'ok' | 'warn' | 'crit' {
 
 /** 12345 → 12.3k, 2_400_000 → 2.4M. */
 export function formatTokens(n: number): string {
-	return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+	const short = (v: number) => v.toFixed(1).replace(/\.0$/, '');
+	return n >= 1_000_000 ? `${short(n / 1_000_000)}M` : n >= 1000 ? `${short(n / 1000)}k` : String(n);
 }
 
 /** The tone of a fill level: calm under 70 %, warning to 90 %, then critical. */
