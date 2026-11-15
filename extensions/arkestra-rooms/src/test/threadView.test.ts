@@ -314,4 +314,6 @@ test('the Claude app\'s artifact view block beside the user\'s words is hidden: 
 
 test('pasted text keeps its words without the Claude app\'s wrapper', () => {
 	assert.equal(userWords('nézd:\n<pasted_content id="0ec0">\ncsorbar@tenarkprd:/opt$ ls\n</pasted_content>\nmi ez?'), 'nézd:\ncsorbar@tenarkprd:/opt$ ls\nmi ez?');
+	// The Claude app closes it with the id too.
+	assert.equal(userWords('\n\n<pasted_content id="0ec0">\n```\ngh auth status\n```\n</pasted_content id="0ec0">\n'), '```\ngh auth status\n```');
 });
