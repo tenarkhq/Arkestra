@@ -8,7 +8,7 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import type { ListedSession } from './sessionHome';
-import { agentGroups, machineCount as rowMachines, sessionRowId, threadGroup, threadMachine, type AgentListing, type GroupItem, type SessionEntry } from './leftBar';
+import { agentGroups, machineCount as rowMachines, sessionRowId, threadGroup, threadMachine, type AgentListing, type GroupItem, type RowState, type SessionEntry } from './leftBar';
 import { LOCAL, readMachineEntries, relativeTime } from './machinesModel';
 import { addSection, deleteSection, keepThreads, layoutThreads, matches, moveSection, moveThread, parseSections, renameSection, sectionOf, sectionsFromCategories, shiftSection, type Section } from './sections';
 import { MachinesPage } from './machinesPage';
@@ -46,6 +46,10 @@ export interface MachineSessions {
 export interface SidebarSource {
 	threads(): Promise<ThreadSummary[]>;
 	busy(roomId: string): boolean;
+	/** A thread row's status dot (running as the listing sees it); none: nothing to show. */
+	threadState?(thread: ThreadSummary, running: boolean, selected: boolean): RowState | undefined;
+	/** A session row's dot, from the Claude app's account when it has the session. */
+	sessionState?(session: ListedSession, running: boolean): RowState | undefined;
 	/** The room of the thread used last. */
 	currentThread(): string | undefined;
 	boards(): readonly SidebarBoard[];
@@ -224,6 +228,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			await this.context.globalState.update(SECTIONS_KEY, sections);
 		}
 		const q = this.query;
+		const selected = this.selected();
 		const layout = layoutThreads(threads, sections, q);
 		const now = Date.now();
 		const language = vscode.env.language;
@@ -243,15 +248,18 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			const own = item ? undefined : threadMachine(t);
 			const machine = item ? machineLabel(item.machine) : own && machineCount() > 1 ? machines.get(own) ?? own : undefined;
 			const agent = item ? undefined : groupName(threadGroup(t));
+			const agentKind = item ? undefined : threadGroup(t);
 			return {
 				key: `thread:${t.id}`, kind: 'thread', id: t.id, title: t.title,
 				tip: [t.title, [projectName(t.project), item?.machine ? machines.get(item.machine) ?? item.machine : '', when(item?.at ?? t.lastAt)].filter(Boolean).join(' · ')].filter(Boolean).join('\n'),
 				...((item ? item.running : this.source.busy(t.id)) ? { running: true } : {}),
+				...stateOf(this.source.threadState?.(t, item ? item.running : this.source.busy(t.id), selected === `thread:${t.id}`)),
 				...(t.pinned ? { pinned: true } : {}),
 				...(t.archived ? { archived: true } : {}),
 				...(section ? { section } : {}),
 				...(machine ? { machine } : {}),
 				...(agent ? { agent } : {}),
+				...(agentKind ? { agentKind } : {}),
 			};
 		};
 		const sessionRows = new Map<string, SessionEntry>();
@@ -268,6 +276,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 				key: `session:${id}`, kind: 'session', id, title: session.title,
 				tip: [session.title, [folder, machines.get(item.machine) ?? item.machine, when(session.updatedAt)].filter(Boolean).join(' · '), vscode.l10n.t('Opening it continues the session here.')].join('\n'),
 				...(item.running ? { running: true } : {}),
+				...stateOf(this.source.sessionState?.(session, item.running)),
 				...(machine ? { machine } : {}),
 			};
 		};
@@ -465,6 +474,8 @@ function groupName(id: string): string {
 	}
 }
 
+const stateOf = (state: RowState | undefined) => state ? { state } : {};
+
 /** The machines' names by id, for the small machine label of a row. */
 export function machineNames(): Map<string, string> {
 	const entries = readMachineEntries(vscode.workspace.getConfiguration('arkestra.connections').get('machines'));
@@ -495,6 +506,10 @@ function strings(): SidebarStrings {
 		noMatch: vscode.l10n.t('Nothing matches.'),
 		more: vscode.l10n.t('More actions'),
 		running: vscode.l10n.t('An agent is working'),
+		waiting: vscode.l10n.t('Waiting for you: a question, a permission or a plan to approve'),
+		stuck: vscode.l10n.t('Stuck: the last turn failed'),
+		done: vscode.l10n.t('Done: an answer you have not seen yet'),
+		inside: vscode.l10n.t('Inside: {0} waiting for you, {1} running'),
 		moveTo: vscode.l10n.t('Move to section'),
 		noSection: vscode.l10n.t('Remove from section'),
 		newSectionMenu: vscode.l10n.t('New section…'),

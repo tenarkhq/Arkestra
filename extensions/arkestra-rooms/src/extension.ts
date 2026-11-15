@@ -37,6 +37,7 @@ import { TemplateRun } from './templates/run';
 import type { Role } from './templates/signals';
 import type { CodeState, ReviewState, TemplateState } from './templates/types';
 import { ROOM_ID_KEY, ROOM_SCHEME, historyTurns, projectName, roomIdFromHistory, roomIdFromSessionPath, summarize, titleFrom, type ProjectThreads, type ThreadSummary } from './threads';
+import { rowState, type RowState } from './leftBar';
 import { ThreadViews } from './threadView';
 import { DetailsView } from './detailsView';
 import { LiveTurns, machineOf as machineOfAgent } from './threadModel';
@@ -905,6 +906,55 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	const allThreads = async (): Promise<ThreadSummary[]> => (await store.list()).map(state => summarize(loaded.get(state.id)?.state ?? state));
 	const busy = (roomId: string) => (loaded.get(roomId)?.roster ?? []).some(id => activity.get(roomId, id).state !== 'idle');
 
+	// The left bar's status dots: what each thread was last seen at here (a thread seen in the Claude
+	// app counts there; its account says). Answers from before the first run count as seen.
+	const VIEWED = 'arkestra.viewed';
+	const viewedStore = (): { since: string; threads: Record<string, string> } => {
+		const stored = context.globalState.get<{ since: string; threads: Record<string, string> }>(VIEWED);
+		if (stored?.since) {
+			return stored;
+		}
+		const fresh = { since: new Date().toISOString(), threads: {} };
+		void context.globalState.update(VIEWED, fresh);
+		return fresh;
+	};
+	const markViewed = async (roomId: string): Promise<void> => {
+		const v = viewedStore();
+		await context.globalState.update(VIEWED, { since: v.since, threads: { ...v.threads, [roomId]: new Date().toISOString() } });
+		const state = loaded.get(roomId)?.state ?? (await store.list()).find(s => s.id === roomId);
+		for (const b of state ? roomBridges(state) : []) {
+			const row = cloudRows.get(b);
+			if (row?.unread && cloud) {
+				cloudRows.set(b, { ...row, unread: false });
+				void cloud.markRead(b).catch(() => undefined);
+			}
+		}
+	};
+	let viewing: string | undefined;
+	context.subscriptions.push(currentChanged.event(() => {
+		// The thread left was seen up to now, and so is the one opened.
+		if (viewing && viewing !== current?.id) {
+			void markViewed(viewing);
+		}
+		viewing = current?.id;
+		if (viewing) {
+			void markViewed(viewing);
+		}
+	}));
+	const threadState = (t: ThreadSummary, running: boolean, selected: boolean): RowState | undefined => {
+		const state = loaded.get(t.id)?.state;
+		const bridges = state ? roomBridges(state) : (t.adopted ?? []).map(a => bridgeOf.get(a.session)).filter((b): b is string => !!b);
+		const row = bridges.map(b => cloudRows.get(b)).find(Boolean);
+		const failed = t.failed || (state?.roster ?? []).some(id => !!activity.get(t.id, id).error && activity.get(t.id, id).state === 'idle');
+		const v = viewedStore();
+		const viewedAt = v.threads[t.id] ?? v.since;
+		return rowState({ running, failed, ...(t.planWaiting ? { planWaiting: true } : {}), ...(row ? { cloud: row } : {}), ...(t.answeredAt ? { answeredAt: t.answeredAt } : {}), viewedAt, selected });
+	};
+	const sessionState = (session: ListedSession, running: boolean): RowState | undefined => {
+		const row = session.bridge ? cloudRows.get(session.bridge) : undefined;
+		return rowState({ running, ...(row ? { cloud: row } : {}) });
+	};
+
 	const controller = vscode.chat.createChatSessionItemController(ROOM_SCHEME, async () => {
 		const threads = await allThreads();
 		controller.items.replace(threads.map(t => {
@@ -1091,6 +1141,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		new SidebarView(context, {
 			threads: allThreads,
 			busy,
+			threadState,
+			sessionState,
 			currentThread: () => current?.id,
 			boards: () => github?.boards() ?? [],
 			pinnedArtifacts: () => gallery.pinnedArtifacts(),

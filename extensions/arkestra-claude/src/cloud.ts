@@ -36,12 +36,15 @@ export function parseCredentials(text: string): Credentials | undefined {
 
 /** One row of the account's list, as Arkestra uses it. */
 export function cloudSession(row: unknown): CloudSession | undefined {
-	const r = row as { id?: unknown; title?: unknown; status?: unknown; last_event_at?: unknown; updated_at?: unknown } | undefined;
+	const r = row as { id?: unknown; title?: unknown; status?: unknown; last_event_at?: unknown; updated_at?: unknown; worker_status?: unknown; unread?: unknown } | undefined;
 	if (typeof r?.id !== 'string' || !r.id.startsWith('cse_')) {
 		return undefined;
 	}
 	const at = typeof r.last_event_at === 'string' ? r.last_event_at : typeof r.updated_at === 'string' ? r.updated_at : undefined;
-	return { id: r.id, title: typeof r.title === 'string' ? r.title.trim() : '', archived: r.status === 'archived', ...(at ? { at } : {}) };
+	return {
+		id: r.id, title: typeof r.title === 'string' ? r.title.trim() : '', archived: r.status === 'archived', ...(at ? { at } : {}),
+		...(typeof r.worker_status === 'string' ? { worker: r.worker_status } : {}), ...(r.unread === true ? { unread: true } : {}),
+	};
 }
 
 type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{ status: number; json(): Promise<unknown>; text(): Promise<string> }>;
@@ -93,6 +96,10 @@ export class CloudClient implements CloudSessions {
 
 	async unarchive(id: string): Promise<void> {
 		await this.call('POST', `/v1/code/sessions/${session(id)}/unarchive`, {}, [409]);
+	}
+
+	async markRead(id: string): Promise<void> {
+		await this.call('POST', `/v1/code/sessions/${session(id)}/mark_read`, {});
 	}
 
 	async rename(id: string, title: string): Promise<void> {

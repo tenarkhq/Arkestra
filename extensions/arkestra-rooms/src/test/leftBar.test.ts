@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { agentGroups, groupOrder, machineCount, sessionRowId, threadGroup, uniqueSessions, type AgentListing, type GroupItem } from '../leftBar';
+import { agentGroups, groupOrder, machineCount, sessionRowId, threadGroup, uniqueSessions, type AgentListing, type GroupItem, rowState } from '../leftBar';
 import { layoutThreads } from '../sections';
 import type { ListedSession } from '../sessionHome';
 import type { ThreadSummary } from '../threads';
@@ -109,4 +109,16 @@ test('a thread outside the agent groups knows its agent and machine: its continu
 	assert.deepEqual([threadGroup(t(['claude@tenark-claude'], [{ agent: 'claude@tenark-claude', session: 's' }])), threadMachine(t(['claude@tenark-claude'], [{ agent: 'claude@tenark-claude', session: 's' }]))], ['claude', 'tenark-claude']);
 	assert.deepEqual([threadGroup(t(['codex'])), threadMachine(t(['codex']))], ['codex', 'local']);
 	assert.deepEqual([threadGroup(t(['claude', 'codex'])), threadMachine(t(['claude', 'codex']))], ['several', undefined]);
+});
+
+test('the status dot: waiting for you beats stuck, stuck beats running; done only for an answer not seen', () => {
+	assert.equal(rowState({ running: true, cloud: { worker: 'requires_action' } }), 'wait');
+	assert.equal(rowState({ running: false, planWaiting: true }), 'wait');
+	assert.equal(rowState({ running: true, failed: true }), 'err');
+	assert.equal(rowState({ running: false, cloud: { worker: 'running' } }), 'run');
+	assert.equal(rowState({ running: false, cloud: { worker: 'idle', unread: true } }), 'done');
+	assert.equal(rowState({ running: false, cloud: { worker: 'idle', unread: true }, selected: true }), undefined, 'the open thread is being seen');
+	assert.equal(rowState({ running: false, answeredAt: '2026-11-15T14:00:00Z', viewedAt: '2026-11-15T13:00:00Z' }), 'done');
+	assert.equal(rowState({ running: false, answeredAt: '2026-11-15T12:00:00Z', viewedAt: '2026-11-15T13:00:00Z' }), undefined);
+	assert.equal(rowState({ running: false, cloud: { worker: 'idle' }, answeredAt: '2026-11-15T14:00:00Z', viewedAt: '2026-11-15T13:00:00Z' }), undefined, 'the Claude app\'s account knows its sessions');
 });

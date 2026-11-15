@@ -233,6 +233,10 @@ export interface CloudSession {
 	readonly archived: boolean;
 	/** ISO time of its last activity, when known. */
 	readonly at?: string;
+	/** What its Claude does now: `running`, `idle`, or `requires_action` (it waits for the user). */
+	readonly worker?: string;
+	/** It has an answer the user has not seen in any app. */
+	readonly unread?: boolean;
 }
 
 /** The claude.ai account's sessions: archiving, restoring or renaming one there shows in every app. */
@@ -241,4 +245,6 @@ export interface CloudSessions {
 	archive(id: string): Promise<void>;
 	unarchive(id: string): Promise<void>;
 	rename(id: string, title: string): Promise<void>;
+	/** Seen here: no app shows it as unread any more. */
+	markRead(id: string): Promise<void>;
 }

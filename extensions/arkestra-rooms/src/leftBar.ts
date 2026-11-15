@@ -150,3 +150,36 @@ export function agentGroups(input: {
 export function machineCount(groups: readonly AgentGroup[]): number {
 	return new Set(groups.flatMap(g => [...g.items, ...g.older].map(i => i.machine).filter((m): m is string => !!m))).size;
 }
+
+/** A chat row's status dot: runs, waits for the user, stuck, or done with an answer not seen yet. */
+export type RowState = 'run' | 'wait' | 'err' | 'done';
+
+/**
+ * The dot of one row. Waiting for the user beats everything (a question, a permission, a plan to
+ * execute), then a stuck turn, then running; "done" only for an answer not seen yet, which the
+ * Claude app's account knows for its sessions and Arkestra for its own threads.
+ */
+export function rowState(input: {
+	readonly running: boolean;
+	readonly failed?: boolean;
+	readonly planWaiting?: boolean;
+	readonly cloud?: { readonly worker?: string; readonly unread?: boolean };
+	readonly answeredAt?: string;
+	readonly viewedAt?: string;
+	readonly selected?: boolean;
+}): RowState | undefined {
+	if (input.cloud?.worker === 'requires_action' || input.planWaiting) {
+		return 'wait';
+	}
+	if (input.failed) {
+		return 'err';
+	}
+	if (input.running || input.cloud?.worker === 'running') {
+		return 'run';
+	}
+	if (input.selected) {
+		return undefined;
+	}
+	const unseen = input.cloud ? !!input.cloud.unread : !!input.answeredAt && (!input.viewedAt || input.answeredAt > input.viewedAt);
+	return unseen ? 'done' : undefined;
+}
