@@ -40,6 +40,8 @@ export interface DetailsHost {
 	quota(agentId: string): Usage['limits'] | undefined;
 	/** How full the context of the agent's session is, as the claude.ai account reports it (a session the Claude app runs). */
 	cloudContext(room: Room, agentId: string): { readonly used: number; readonly max: number } | undefined;
+	/** The agent's session in this room works on a turn now, as its file shows live (driven from its own app too). */
+	liveRunning?(room: Room, agentId: string): boolean;
 }
 
 export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -175,6 +177,8 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 		}
 		const roster = room.roster.map(id => ({ id, name: this.host.registry.get(id)?.name ?? id, activity: this.host.activity.get(room.id, id) }));
 		const model = detailsModel(roster, Date.now());
+		// A turn driven from the agent's own app (the Codex app, a terminal) works here too.
+		const agents = model.agents.map(a => (a.turn === 'idle' || a.turn === 'done') && this.host.liveRunning?.(room, a.id) ? { ...a, turn: 'working' as const } : a);
 		const changes = await this.changesOf(room.id);
 		this.shownChanges = changes;
 		const empty = (text: string) => `<div class="empty">${escapeHtml(text)}</div>`;
@@ -182,8 +186,8 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 		const parts: string[] = [];
 
 		parts.push(head(vscode.l10n.t('Agents in this thread')));
-		parts.push(model.agents.length
-			? model.agents.map(a => `<div class="rr"><span class="dot ${a.turn}"></span><span class="n">${escapeHtml(a.name)}</span><span class="k">${escapeHtml(vscode.l10n.t(TURN_TEXT[a.turn]))}</span></div>`).join('')
+		parts.push(agents.length
+			? agents.map(a => `<div class="rr"><span class="dot ${a.turn}"></span><span class="n">${escapeHtml(a.name)}</span><span class="k">${escapeHtml(vscode.l10n.t(TURN_TEXT[a.turn]))}</span></div>`).join('')
 			: empty(vscode.l10n.t('Nobody in this thread yet.')));
 
 		parts.push('<div class="hr"></div>', head(vscode.l10n.t('Background tasks')));

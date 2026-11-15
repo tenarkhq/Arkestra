@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 import * as path from 'node:path';
 import type { Agent, AgentChoices, AgentEvent, ExistingSession, Message, PermissionRequest, Readiness, SessionEntry, SessionHistory, SessionMeta, TurnInput, Usage, WorkUpdate } from './rooms';
 import { RpcClient, type Notification } from './rpc';
+import { watchLocal as watchLocalStates, watchRemote as watchRemoteStates, type LiveState } from './liveStates';
 import { LineSplitter, followLocal, followRemote } from './follow';
 import { RolloutHistory, checkThreadId, codexImages, codexMeta, codexPiece, codexToolLine, codexUserText, latestTokenCountScript, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript, rolloutLimits, type RolloutRead } from './codexFollow';
 
@@ -306,6 +307,11 @@ export class CodexAgent implements Agent {
 		const script = latestTokenCountScript(['~/.codex', this.options.apiKeyHome]);
 		const out = this.options.spawn ? await this.shell(script, 20_000) : await localShell(script, 20_000);
 		return rolloutLimits(out.trim(), windowLabel);
+	}
+
+	/** Each thread's turn on this agent's machine, live, from its rollout file (the left bar's dots). */
+	watchStates(onState: (s: LiveState) => void): { dispose(): void } {
+		return this.options.spawn ? watchRemoteStates(this.options.spawn, ['~/.codex', this.options.apiKeyHome], onState) : watchLocalStates(this.localHomes(), onState);
 	}
 
 	/** The threads Codex has on this agent's machine (AR39). */

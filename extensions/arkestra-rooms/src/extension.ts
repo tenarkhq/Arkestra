@@ -936,6 +936,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			const bridge = link ? link.bridge ?? bridgeOf.get(link.session) : undefined;
 			return bridge ? cloudRows.get(bridge)?.context : undefined;
 		},
+		liveRunning: (room, agentId) => {
+			const link = room.state.adopted?.[agentId];
+			return !!link && liveSessions.get(link.session)?.state === 'run';
+		},
 	}));
 
 	// ---- Threads as native chat sessions: history, session list, the left column ----------
@@ -990,7 +994,7 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			void markViewed(viewing);
 		}
 	}));
-	// Live: each Claude session's turn as its file is written, on every machine (the left bar's dots).
+	// Live: each Claude session's and Codex thread's turn as its file is written, on every machine (the left bar's dots).
 	const liveSessions = new Map<string, { state: 'run' | 'idle'; at: number }>();
 	const liveWatches = new Map<string, { dispose(): void }>();
 	const syncLiveWatches = () => {
@@ -1008,6 +1012,10 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 					liveSessions.set(s.id, { state: s.state, at: s.at });
 					if (was?.state !== s.state) {
 						refreshThreadsLater();
+						const roomId = threads.activeRoomId();
+						if (roomId) {
+							threadChanged.fire(roomId); // the right panel's agent line
+						}
 					}
 				}));
 			}
