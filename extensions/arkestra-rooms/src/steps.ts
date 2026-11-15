@@ -55,9 +55,12 @@ export function stepsLabel(steps: readonly Step[]): string {
 		const kind = STEP_WORDS[s.kind] ? s.kind : 'other';
 		counts.set(kind, (counts.get(kind) ?? 0) + 1);
 	}
-	const parts = [...counts].map(([kind, n], i) => {
+	// One verb for the kinds that share it: "Ran 3 commands and 1 agent".
+	const byVerb = new Map<string, string[]>();
+	for (const [kind, n] of counts) {
 		const [verb, one, many] = STEP_WORDS[kind];
-		return `${i ? verb.toLowerCase() : verb} ${n} ${n === 1 ? one : many}`;
-	});
+		byVerb.set(verb, [...(byVerb.get(verb) ?? []), `${n} ${n === 1 ? one : many}`]);
+	}
+	const parts = [...byVerb].map(([verb, things], i) => `${i ? verb.toLowerCase() : verb} ${things.join(things.length > 1 ? ' and ' : '')}`);
 	return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0];
 }

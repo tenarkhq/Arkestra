@@ -23,6 +23,7 @@ test('a run of steps as one line: one step by its name, more by what they were',
 	assert.equal(stepsLabel([{ kind: 'command', label: 'Checked the test' }]), 'Checked the test');
 	assert.equal(stepsLabel([{ kind: 'command', label: 'a' }, { kind: 'edit', label: 'b' }, { kind: 'command', label: 'c' }]), 'Ran 2 commands and edited 1 file');
 	assert.equal(stepsLabel([{ kind: 'read', label: 'a' }, { kind: 'search', label: 'b' }, { kind: 'zzz', label: 'c' }]), 'Read 1 file, ran 1 search and used 1 tool');
+	assert.equal(stepsLabel([{ kind: 'command', label: 'a' }, { kind: 'agent', label: 'b' }, { kind: 'command', label: 'c' }, { kind: 'command', label: 'd' }]), 'Ran 3 commands and 1 agent');
 });
 
 test('the agents and the clipboard get the words without the steps', () => {
