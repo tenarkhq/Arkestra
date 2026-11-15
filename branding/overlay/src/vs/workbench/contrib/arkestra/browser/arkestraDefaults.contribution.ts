@@ -84,8 +84,13 @@ const LAYOUT_VERSION = 3;
 /** The left bar: Arkestra's own view container (Pinned, Projects, Boards, Chats, Agents, Machines). */
 const LEFT_CONTAINER = 'workbench.view.extension.arkestra';
 const LAYOUT_KEY = 'arkestra.layout.version';
+/** Per window: its bars were set up once (a new or not-restored window gets them; a bar closed by hand stays closed). */
+const WINDOW_KEY = 'arkestra.layout.window';
 /** The right side: the active thread's details (arkestra-rooms). */
 const DETAILS_CONTAINER = 'workbench.view.extension.arkestra-details';
+/** The views the two bars show: the left bar page and the thread's details (arkestra-rooms). */
+const LEFT_VIEW = 'arkestra.sidebar';
+const DETAILS_VIEW = 'arkestra.details';
 /** Bottom panel: only the terminals. */
 export const ARKESTRA_HIDDEN_PANEL_TABS: readonly string[] = [
 	'workbench.panel.markers', 'workbench.panel.output', 'workbench.panel.repl',
@@ -127,6 +132,18 @@ class ArkestraLayout extends Disposable implements IWorkbenchContribution {
 		@IWorkbenchLayoutService private readonly layout: IWorkbenchLayoutService,
 	) {
 		super();
+		// Every window that has not been set up shows the left bar and the details (a new window,
+		// one that was not restored): without it the left side stays an empty "Drag a view here".
+		if (!storage.getBoolean(WINDOW_KEY, StorageScope.WORKSPACE, false)) {
+			const registry = Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry);
+			if (!this.showBars(registry)) {
+				const listener = this._register(registry.onViewsRegistered(() => {
+					if (this.showBars(registry)) {
+						listener.dispose();
+					}
+				}));
+			}
+		}
 		if (storage.getNumber(LAYOUT_KEY, StorageScope.PROFILE, 0) >= LAYOUT_VERSION) {
 			return;
 		}
@@ -148,6 +165,19 @@ class ArkestraLayout extends Disposable implements IWorkbenchContribution {
 				}
 			}));
 		}
+	}
+
+	/** Shows the left bar and the details panel in this window once; false while their views are not registered yet. */
+	private showBars(registry: IViewsRegistry): boolean {
+		if (!registry.getView(LEFT_VIEW) || !registry.getView(DETAILS_VIEW)) {
+			return false;
+		}
+		this.layout.setPartHidden(false, Parts.SIDEBAR_PART);
+		void this.panes.openPaneComposite(LEFT_CONTAINER, ViewContainerLocation.Sidebar);
+		this.layout.setPartHidden(false, Parts.AUXILIARYBAR_PART);
+		void this.panes.openPaneComposite(DETAILS_CONTAINER, ViewContainerLocation.AuxiliaryBar);
+		this.storage.store(WINDOW_KEY, true, StorageScope.WORKSPACE, StorageTarget.MACHINE);
+		return true;
 	}
 
 	/** Puts Arkestra's tool views together on the right; false while they are not registered yet. */
