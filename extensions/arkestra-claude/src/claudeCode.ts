@@ -193,12 +193,15 @@ export function startProblem(product: string, error: { code?: unknown; exitCode?
 	return undefined;
 }
 
-/** Claude Code's models (aliases for the latest of each) and its efforts, as `claude --help` lists them. */
+/**
+ * Claude Code's models (aliases for the latest of each) and its efforts, as `claude --help` lists them,
+ * plus `ultracode` (`--effort ultracode`: a workflow on every task), which help does not list; not on Haiku.
+ */
 export const CLAUDE_CHOICES: AgentChoices = {
 	models: [
-		{ id: 'opus', label: 'Opus', detail: 'the latest Opus', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
-		{ id: 'sonnet', label: 'Sonnet', detail: 'the latest Sonnet', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
-		{ id: 'fable', label: 'Fable', detail: 'the latest Fable', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
+		{ id: 'opus', label: 'Opus', detail: 'the latest Opus', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] },
+		{ id: 'sonnet', label: 'Sonnet', detail: 'the latest Sonnet', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] },
+		{ id: 'fable', label: 'Fable', detail: 'the latest Fable', efforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] },
 		{ id: 'haiku', label: 'Haiku', detail: 'the latest Haiku', efforts: ['low', 'medium', 'high', 'xhigh', 'max'] },
 	],
 };

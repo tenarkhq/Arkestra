@@ -46,6 +46,7 @@ test('the composer chip: model and effort as the vendors\' apps name them, Defau
 	assert.equal(modelName('o3'), 'o3');
 	assert.equal(effortName('high'), 'High');
 	assert.equal(effortName('xhigh'), 'Extra high');
+	assert.equal(effortName('ultracode'), 'Ultracode');
 	assert.equal(chipLabel({ model: 'claude-opus-5-5', effort: 'high' }, undefined, 'Default'), 'Opus 5.5 · High');
 	assert.equal(chipLabel({ model: 'opus' }, choices, 'Default'), 'Opus');
 	assert.equal(chipLabel({ effort: 'max' }, choices, 'Default'), 'Default · Max');

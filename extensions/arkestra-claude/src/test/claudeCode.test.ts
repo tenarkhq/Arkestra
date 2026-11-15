@@ -168,3 +168,13 @@ test('the thread\'s model and effort go to the CLI; without a choice the setting
 	const models = (await agent.choices()).models.map(m => m.id);
 	assert.deepEqual(models, ['opus', 'sonnet', 'fable', 'haiku']);
 });
+
+test('Ultracode is an effort of Opus, Sonnet and Fable and goes to the CLI as --effort ultracode', async () => {
+	const { agent, calls } = await setup();
+	const efforts = Object.fromEntries((await agent.choices()).models.map(m => [m.id, m.efforts ?? []]));
+	assert.ok(efforts.opus.includes('ultracode') && efforts.sonnet.includes('ultracode') && efforts.fable.includes('ultracode'));
+	assert.ok(!efforts.haiku.includes('ultracode'));
+	await agent.turn({ roomId: 'u', transcript: [msg('user', 'user', 'hi')], model: 'opus', effort: 'ultracode' }, () => { }, new AbortController().signal);
+	const [call] = await calls();
+	assert.equal(call.args[call.args.indexOf('--effort') + 1], 'ultracode');
+});
