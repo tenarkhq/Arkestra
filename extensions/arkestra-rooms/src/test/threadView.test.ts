@@ -6,7 +6,8 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { LiveTurns, agentChip, agentLabel, agentTitle, backgroundNoise, composerRight, detailsModel, elapsed, folderLabel, foldLabel, machineOf, parseSlash, providerOf, threadRows, userWords } from '../threadModel';
-import { escapeHtml, liveHtml, menuHtml, renderMarkdown, rowHtml, threadPage, type ThreadStrings } from '../threadHtml';
+import { Script } from 'node:vm';
+import { detailsPage, escapeHtml, liveHtml, menuHtml, renderMarkdown, rowHtml, threadPage, type ThreadStrings } from '../threadHtml';
 import type { Message } from '../room';
 import type { AgentActivity } from '../activity';
 import { EMPTY_WORK } from '../work';
@@ -234,8 +235,41 @@ test('the popover: rows escaped, the chosen one checked, each choice carries its
 	assert.ok(!html.split('</button>')[1].includes('<svg'), 'an unchosen row has no check');
 	const page = threadPage({ nonce: 'n', cspSource: 'c', mode: 'thread', roomId: 'r', placeholder: 'p', heading: 'h' });
 	assert.ok(page.includes('.pop {'));
-	assert.ok(page.includes("vscode.postMessage({ type: 'menu', anchor: c.key, ...c.menu })"));
+	assert.ok(page.includes('openMenu(c.key, c.menu)'));
+	assert.ok(page.includes("vscode.postMessage({ type: 'menu', anchor: key, ...req })"));
 	assert.ok(page.includes("m.type === 'menu'"));
+});
+
+test('the thread page: + agent, + and a not-ready agent open popovers where they are; a form in one answers in place', () => {
+	const page = threadPage({ nonce: 'n', cspSource: 'c', mode: 'thread', roomId: 'r', placeholder: 'p', heading: 'h', attach: 'Attach <x>' });
+	const script = /<script nonce="n">([\s\S]*?)<\/script>/.exec(page)![1];
+	assert.doesNotThrow(() => new Script(script));
+	// + is a labelled button whose popover lists what can be attached (no list at the top of the window).
+	assert.ok(page.includes('id="attach" data-chip="attach" aria-haspopup="menu" title="Attach &lt;x&gt;" aria-label="Attach &lt;x&gt;"'));
+	assert.ok(script.includes("openMenu('attach', { menu: 'attach' })"));
+	// A not-ready card opens what makes it ready, at the card; the ACP card opens its form.
+	assert.ok(script.includes("openMenu('card:' + c.id, { menu: 'fix', agentId: c.id })"));
+	assert.ok(script.includes("openMenu('card:+add', { menu: 'acp' })"));
+	// A command (the palette's Invite, an Agents tile) opens the popover once its chip shows.
+	assert.ok(script.includes("m.type === 'openMenu'") && script.includes('pendingOpen'));
+	// Forms in a popover: wired, their errors shown in place, closed when done; closing one cancels it.
+	assert.ok(script.includes('wireForm(form, m => vscode.postMessage(m))'));
+	assert.ok(script.includes("m.type === 'formError'") && script.includes("m.type === 'formDone'"));
+	assert.ok(script.includes("vscode.postMessage({ type: 'formCancel', form: form.dataset.form })"));
+	assert.ok(!script.includes("type: 'attach' }"), 'the + no longer asks the extension for a quick pick');
+});
+
+test('the right panel: the shared rules and memory open from their rows, and a line for every agent is typed in place', () => {
+	const form = { id: 'remember', fields: [{ kind: 'textarea' as const, id: 'text', label: 'What <every> agent should know' }], submit: 'Remember', cancel: 'Cancel' };
+	const page = detailsPage('n', undefined, { heading: 'Rules and memory', projectRules: 'Project rules', agentsMd: 'AGENTS.md', userRules: 'My rules', projectMemory: 'Project memory', userMemory: 'My memory', remember: 'Remember for every agent…', form });
+	assert.ok(page.includes('data-shared="projectRules" data-project') && page.includes('data-shared="userRules">'));
+	assert.ok(page.includes('data-remember') && page.includes('What &lt;every&gt; agent should know'));
+	assert.ok(page.includes('<div id="rememberBox" hidden><form class="pf" data-form="remember"'));
+	const script = /<script nonce="n">([\s\S]*?)<\/script>/.exec(page)![1];
+	assert.doesNotThrow(() => new Script(script));
+	assert.ok(script.includes("type: 'shared', file: s.dataset.shared") && script.includes("m.type === 'rememberOpen'"));
+	// Without the strings the panel is as before.
+	assert.ok(!detailsPage('n').includes('id="shared"'));
 });
 
 test('a table cell keeps the <br> line breaks agents write, and nothing else becomes HTML', () => {

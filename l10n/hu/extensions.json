@@ -161,7 +161,6 @@
 			"command.openThread": "Szál megnyitása",
 			"command.pin": "Szál kitűzése",
 			"command.rename": "Szál átnevezése…",
-			"command.setCategory": "Kategória beállítása…",
 			"command.unpin": "Kitűzés megszüntetése",
 			"description": "Egy szál, amelyen bármennyi ügynök osztozik, és amelyhez bármikor csatlakozhatnak.",
 			"displayName": "Arkestra · Szobák",

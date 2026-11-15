@@ -1,146 +1,123 @@
 /*---------------------------------------------------------------------------------------------
- *  Arkestra. The new-room form of the 2ARK templates: type, the two agents, and what each
- *  type asks for, with 2ARK's defaults.
+ *  Arkestra. The new-room form of the 2ARK templates as a page of its own (the left bar's
+ *  template button, /template, a board's "coding room"): type, the two agents, and what each
+ *  type asks for, with 2ARK's defaults. Start builds the room; a problem shows on the form.
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import { randomBytes } from 'node:crypto';
 import type { AgentRegistry } from './agent';
+import { FormRequests, formPage } from './pageForm';
 import { git, repoRoot } from './templates/gitio';
-import type { Role } from './templates/signals';
-import { DEFAULT_MAX, type AuditState, type Member, type TemplateType } from './templates/types';
+import type { TemplateType } from './templates/types';
+import { templateFormSpec, templateRequest, type TemplateContext, type TemplateFormStrings, type TemplateRequest } from './templateSpec';
+import { FONT_ROOT, pageFonts } from './webviewFonts';
 
-export interface TemplateRequest {
-	readonly type: TemplateType;
-	readonly members: Record<Role, Member>;
-	readonly title: string;
-	readonly max: number;
-	readonly review?: { reviewer: Role; prompt: string; source?: string; strict: 'all' | 'major' | 'critical' };
-	readonly code?: { repo: string; base: string; coordinator: Role; prompt: string; issue?: string; plan: 'approve' | 'none'; test?: string; verify: boolean };
-	readonly audit?: Pick<AuditState, 'auditors' | 'lead' | 'since' | 'focus' | 'goal' | 'fix' | 'levels'>;
-}
+export type { TemplateRequest } from './templateSpec';
 
-/** A brief that is a reference the agents read themselves: an issue or PR link, #123, or a task number. */
-export function briefReference(text: string): { issue?: string; prompt: string } {
-	const [first, ...rest] = text.trim().split('\n');
-	const ref = first.trim();
-	if (/^(https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/(issues|pull)\/\d+|#\d+|T\d+(·\d+)?)$/.test(ref)) {
-		return { issue: ref, prompt: rest.join('\n').trim() };
-	}
-	return { prompt: text.trim() };
-}
+const VIEW_TYPE = 'arkestra.templateRoom';
 
-type Choice<T> = vscode.QuickPickItem & { value: T };
-
-async function pick<T>(title: string, items: Choice<T>[], placeHolder?: string): Promise<T | undefined> {
-	return (await vscode.window.showQuickPick(items, { title, placeHolder, ignoreFocusOut: true }))?.value;
-}
-
-async function text(title: string, prompt: string, value = '', optional = false): Promise<string | undefined> {
-	const v = await vscode.window.showInputBox({ title, prompt, value, ignoreFocusOut: true, validateInput: s => optional || s.trim() ? undefined : vscode.l10n.t('Required') });
-	return v === undefined ? undefined : v.trim();
-}
-
-export async function templateForm(registry: AgentRegistry, preset?: readonly string[], task?: { type?: TemplateType; brief?: string }): Promise<TemplateRequest | undefined> {
-	const type = task?.type ?? await pick<TemplateType>(vscode.l10n.t('New room from a 2ARK template'), [
-		{ label: vscode.l10n.t('Coding'), detail: vscode.l10n.t('The coordinator splits the brief into slices; both agents work in parallel on their own branches, and the coordinator merges.'), value: 'coding' },
-		{ label: vscode.l10n.t('Code audit'), detail: vscode.l10n.t('A complete audit of the repository with evidence, by one agent or by both independently and merged; fixes optional.'), value: 'audit' },
-		{ label: vscode.l10n.t('Brief check'), detail: vscode.l10n.t('One agent reviews a document (a brief), the other fixes it, round after round, until the reviewer says PASS.'), value: 'review' },
-	]);
-	if (!type) {
-		return undefined;
-	}
-	const entries = (await registry.inviteList()).filter(e => e.readiness.ready);
-	if (entries.length < 2) {
-		void vscode.window.showWarningMessage(vscode.l10n.t('A template room needs two ready agents. Connect another agent first.'));
-		return undefined;
-	}
-	const agentItems = (exclude?: string) => entries.filter(e => e.agent.id !== exclude).map(e => ({ label: e.agent.name, description: e.agent.detail, value: { id: e.agent.id, name: e.agent.name } as Member, picked: false }));
-	const first = preset?.[0] && entries.some(e => e.agent.id === preset[0]) ? agentItems().find(i => i.value.id === preset[0])!.value : await pick(vscode.l10n.t('First agent'), agentItems());
-	if (!first) {
-		return undefined;
-	}
-	const second = preset?.[1] && preset[1] !== first.id && entries.some(e => e.agent.id === preset[1]) ? agentItems().find(i => i.value.id === preset[1])!.value : await pick(vscode.l10n.t('Second agent'), agentItems(first.id));
-	if (!second) {
-		return undefined;
-	}
-	const members: Record<Role, Member> = { A: first, B: second };
-	const whoItems = (label: (name: string) => string): Choice<Role>[] => (['A', 'B'] as Role[]).map(r => ({ label: label(members[r].name), value: r }));
-
-	if (type === 'review') {
-		const prompt = await text(vscode.l10n.t('Brief check'), vscode.l10n.t('What should be checked, and against what?'));
-		if (!prompt) {
-			return undefined;
-		}
-		const source = await text(vscode.l10n.t('Brief check'), vscode.l10n.t('The document: a file path, or a GitHub file, issue or PR link. Empty: the task names it, or the fixer writes it.'), task?.brief ?? '', true);
-		if (source === undefined) {
-			return undefined;
-		}
-		const reviewer = await pick(vscode.l10n.t('Who reviews?'), whoItems(n => vscode.l10n.t('{0} reviews, the other fixes', n)));
-		const strict = reviewer && await pick<'all' | 'major' | 'critical'>(vscode.l10n.t('What blocks a PASS?'), [
-			{ label: vscode.l10n.t('Every open finding'), value: 'all' },
-			{ label: vscode.l10n.t('Only P0 and P1 findings'), value: 'major' },
-			{ label: vscode.l10n.t('Only P0 findings'), value: 'critical' },
-		]);
-		if (!reviewer || !strict) {
-			return undefined;
-		}
-		return { type, members, title: vscode.l10n.t('Brief check · {0}', prompt.split('\n')[0].slice(0, 50)), max: DEFAULT_MAX.review, review: { reviewer, prompt, ...(source ? { source } : {}), strict } };
-	}
-
-	const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-	const repo = folder && await repoRoot(folder);
-	if (!repo) {
-		void vscode.window.showWarningMessage(vscode.l10n.t('Coding and audit rooms work in a git repository: open one as the workspace first.'));
-		return undefined;
-	}
-	const current = (await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).out.trim() || 'main';
-	const base = await text(type === 'coding' ? vscode.l10n.t('Coding') : vscode.l10n.t('Code audit'), vscode.l10n.t('Base branch'), current);
-	if (!base) {
-		return undefined;
-	}
-
-	if (type === 'coding') {
-		const brief = await text(vscode.l10n.t('Coding'), vscode.l10n.t('The brief: text, or an issue or PR link, #123 or a task number on the first line (the agents read it themselves).'), task?.brief ?? '');
-		const coordinator = brief && await pick(vscode.l10n.t('Who coordinates?'), whoItems(n => vscode.l10n.t('{0} coordinates', n)));
-		const plan = coordinator && await pick<'approve' | 'none'>(vscode.l10n.t('Slice plan'), [
-			{ label: vscode.l10n.t('Start at once'), value: 'none' },
-			{ label: vscode.l10n.t('The slice plan waits for my approval'), value: 'approve' },
-		]);
-		const test = plan && await text(vscode.l10n.t('Coding'), vscode.l10n.t('Test command run after [KÉSZ] (empty: none)'), '', true);
-		const verify = test !== undefined && plan ? await pick<boolean>(vscode.l10n.t('At the end'), [
-			{ label: vscode.l10n.t('The other agent verifies the whole change'), value: true },
-			{ label: vscode.l10n.t('No verification'), value: false },
-		]) : undefined;
-		if (!brief || !coordinator || !plan || test === undefined || verify === undefined) {
-			return undefined;
-		}
-		const ref = briefReference(brief);
-		return { type, members, title: vscode.l10n.t('Coding · {0}', brief.split('\n')[0].slice(0, 50)), max: DEFAULT_MAX.coding, code: { repo, base, coordinator, prompt: ref.prompt, ...(ref.issue ? { issue: ref.issue } : {}), plan, ...(test ? { test } : {}), verify } };
-	}
-
-	const auditors = await pick<'both' | Role>(vscode.l10n.t('Who audits?'), [
-		{ label: vscode.l10n.t('Both, independently, then merged'), value: 'both' },
-		...whoItems(n => vscode.l10n.t('Only {0}', n)),
-	]);
-	const lead = auditors === 'both' ? await pick(vscode.l10n.t('Who leads (merges, then fixes)?'), whoItems(n => n)) : auditors;
-	const since = lead && await text(vscode.l10n.t('Code audit'), vscode.l10n.t('Scope: changes since a branch, tag or commit (empty: the whole repository)'), '', true);
-	const focus = since !== undefined && lead ? await text(vscode.l10n.t('Code audit'), vscode.l10n.t('Focus (optional)'), task?.brief ?? '', true) : undefined;
-	type Goal = { goal: 'doc' } | { goal: 'fix'; fix: 'approve' } | { goal: 'fix'; fix: 'auto'; levels: 'P0' | 'P1' | 'P2' | 'P3' };
-	const goal = focus !== undefined ? await pick<Goal>(vscode.l10n.t('After the audit'), [
-		{ label: vscode.l10n.t('Audit document only'), value: { goal: 'doc' } },
-		{ label: vscode.l10n.t('Fixes after my approval'), value: { goal: 'fix', fix: 'approve' } },
-		{ label: vscode.l10n.t('Fix P0 at once'), value: { goal: 'fix', fix: 'auto', levels: 'P0' } },
-		{ label: vscode.l10n.t('Fix P0–P1 at once'), value: { goal: 'fix', fix: 'auto', levels: 'P1' } },
-		{ label: vscode.l10n.t('Fix P0–P2 at once'), value: { goal: 'fix', fix: 'auto', levels: 'P2' } },
-		{ label: vscode.l10n.t('Fix everything at once'), value: { goal: 'fix', fix: 'auto', levels: 'P3' } },
-	]) : undefined;
-	const test = goal?.goal === 'fix' ? await text(vscode.l10n.t('Code audit'), vscode.l10n.t('Test command run at the end of the fix (empty: none)'), '', true) : '';
-	if (!auditors || !lead || since === undefined || focus === undefined || !goal || test === undefined) {
-		return undefined;
-	}
+function strings(): TemplateFormStrings {
 	return {
-		type, members, title: vscode.l10n.t('Code audit · {0}', since ? vscode.l10n.t('since {0}', since) : base), max: DEFAULT_MAX.audit,
-		code: { repo, base, coordinator: lead, prompt: '', plan: 'none', verify: true, ...(test ? { test } : {}) },
-		audit: { auditors, lead, ...(since ? { since } : {}), ...(focus ? { focus } : {}), ...goal },
+		formTitle: vscode.l10n.t('New room from a 2ARK template'),
+		intro: vscode.l10n.t('Two agents work on one task together; the room hands the work between them until it is done.'),
+		start: vscode.l10n.t('Start the room'),
+		cancel: vscode.l10n.t('Cancel'),
+		type: vscode.l10n.t('What kind of room'),
+		coding: vscode.l10n.t('Coding'), codingDetail: vscode.l10n.t('The coordinator splits the brief into slices; both agents work in parallel on their own branches, and the coordinator merges.'),
+		audit: vscode.l10n.t('Code audit'), auditDetail: vscode.l10n.t('A complete audit of the repository with evidence, by one agent or by both independently and merged; fixes optional.'),
+		review: vscode.l10n.t('Brief check'), reviewDetail: vscode.l10n.t('One agent reviews a document (a brief), the other fixes it, round after round, until the reviewer says PASS.'),
+		first: vscode.l10n.t('First agent'), second: vscode.l10n.t('Second agent'),
+		sameAgent: vscode.l10n.t('Pick two different agents.'),
+		reviewPrompt: vscode.l10n.t('What should be checked, and against what?'),
+		reviewSource: vscode.l10n.t('The document'),
+		reviewSourceHint: vscode.l10n.t('A file path, or a GitHub file, issue or PR link. Empty: the task names it, or the fixer writes it.'),
+		reviewer: vscode.l10n.t('Who reviews?'), firstReviews: vscode.l10n.t('The first agent reviews, the second fixes'), secondReviews: vscode.l10n.t('The second agent reviews, the first fixes'),
+		strict: vscode.l10n.t('What blocks a PASS?'), strictAll: vscode.l10n.t('Every open finding'), strictMajor: vscode.l10n.t('Only P0 and P1 findings'), strictCritical: vscode.l10n.t('Only P0 findings'),
+		base: vscode.l10n.t('Base branch'),
+		noRepo: vscode.l10n.t('Coding and audit rooms work in a git repository: open one as the workspace first.'),
+		brief: vscode.l10n.t('The brief'),
+		briefHint: vscode.l10n.t('Text, or an issue or PR link, #123 or a task number on the first line (the agents read it themselves).'),
+		coordinator: vscode.l10n.t('Who coordinates?'), firstCoordinates: vscode.l10n.t('The first agent coordinates'), secondCoordinates: vscode.l10n.t('The second agent coordinates'),
+		plan: vscode.l10n.t('Slice plan'), planNone: vscode.l10n.t('Start at once'), planApprove: vscode.l10n.t('The slice plan waits for my approval'),
+		codeTest: vscode.l10n.t('Test command run after [KÉSZ]'), testHint: vscode.l10n.t('Empty: none.'),
+		verify: vscode.l10n.t('At the end'), verifyYes: vscode.l10n.t('The other agent verifies the whole change'), verifyNo: vscode.l10n.t('No verification'),
+		auditors: vscode.l10n.t('Who audits?'), auditorsBoth: vscode.l10n.t('Both, independently, then merged'), auditorsFirst: vscode.l10n.t('Only the first agent'), auditorsSecond: vscode.l10n.t('Only the second agent'),
+		lead: vscode.l10n.t('Who leads (merges, then fixes)?'), leadFirst: vscode.l10n.t('The first agent'), leadSecond: vscode.l10n.t('The second agent'),
+		since: vscode.l10n.t('Scope: changes since a branch, tag or commit'), sinceHint: vscode.l10n.t('Empty: the whole repository.'),
+		focus: vscode.l10n.t('Focus (optional)'),
+		goal: vscode.l10n.t('After the audit'), goalDoc: vscode.l10n.t('Audit document only'), goalApprove: vscode.l10n.t('Fixes after my approval'),
+		goalP0: vscode.l10n.t('Fix P0 at once'), goalP1: vscode.l10n.t('Fix P0–P1 at once'), goalP2: vscode.l10n.t('Fix P0–P2 at once'), goalP3: vscode.l10n.t('Fix everything at once'),
+		auditTest: vscode.l10n.t('Test command run at the end of the fix'),
+		reviewTitle: vscode.l10n.t('Brief check · {0}'), codingTitle: vscode.l10n.t('Coding · {0}'), auditTitle: vscode.l10n.t('Code audit · {0}'), sinceTitle: vscode.l10n.t('since {0}'),
 	};
+}
+
+/** The template page: one at a time; opening it again shows it with the new preset. */
+export class TemplateFormPage implements vscode.Disposable {
+	private panel: vscode.WebviewPanel | undefined;
+	private forms: FormRequests | undefined;
+
+	constructor(private readonly registry: AgentRegistry, private readonly start: (req: TemplateRequest) => Promise<void>) { }
+
+	dispose(): void {
+		this.panel?.dispose();
+	}
+
+	async open(preset?: readonly string[], task?: { type?: TemplateType; brief?: string }): Promise<void> {
+		const ctx = await this.context(preset, task);
+		const t = strings();
+		if (!this.panel) {
+			this.panel = vscode.window.createWebviewPanel(VIEW_TYPE, vscode.l10n.t('New template room'), vscode.ViewColumn.Active, { enableScripts: true, localResourceRoots: [FONT_ROOT] });
+			this.panel.iconPath = new vscode.ThemeIcon('organization');
+			const panel = this.panel;
+			const forms = new FormRequests(message => void panel.webview.postMessage(message), vscode.l10n.t('Required'));
+			this.forms = forms;
+			panel.webview.onDidReceiveMessage(message => void forms.receive(message));
+			panel.onDidDispose(() => {
+				forms.cancelAll();
+				if (this.panel === panel) {
+					this.panel = undefined;
+					this.forms = undefined;
+				}
+			});
+		} else {
+			this.panel.reveal();
+		}
+		const panel = this.panel;
+		const spec = templateFormSpec(ctx, t);
+		panel.webview.html = formPage({
+			nonce: randomBytes(16).toString('base64'),
+			fonts: pageFonts(panel.webview),
+			spec,
+			...(ctx.agents.length < 2 ? { empty: vscode.l10n.t('A template room needs two ready agents. Connect another agent first.') } : {}),
+		});
+		if (ctx.agents.length < 2) {
+			return;
+		}
+		const values = await this.forms!.open(spec, async v => {
+			const req = templateRequest(v, ctx, t);
+			if ('message' in req) {
+				return req;
+			}
+			try {
+				await this.start(req);
+				return undefined;
+			} catch (error) {
+				return { message: vscode.l10n.t('The template room could not start: {0}', error instanceof Error ? error.message : String(error)) };
+			}
+		});
+		// Started (the thread opened) or cancelled: the page has done its work.
+		if (this.panel === panel && (values || !this.forms?.has(spec.id))) {
+			panel.dispose();
+		}
+	}
+
+	private async context(preset?: readonly string[], task?: { type?: TemplateType; brief?: string }): Promise<TemplateContext> {
+		const agents = (await this.registry.inviteList()).filter(e => e.readiness.ready).map(e => ({ id: e.agent.id, name: e.agent.name }));
+		const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const repo = folder ? await repoRoot(folder).catch(() => undefined) : undefined;
+		const branch = repo ? (await git(repo, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => ({ out: '' }))).out.trim() : '';
+		return { agents, ...(preset ? { preset } : {}), ...(task ? { task } : {}), ...(repo ? { repo } : {}), ...(branch ? { branch } : {}) };
+	}
 }

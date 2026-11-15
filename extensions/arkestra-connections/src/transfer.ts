@@ -71,6 +71,14 @@ export function joinRemote(dir: string, name: string): string {
 	return dir === '~' ? `~/${name}` : `${dir.replace(/\/+$/, '')}/${name}`;
 }
 
+/** The folder one up from a remote folder (`~` and `~/…` through `..`, as the shell resolves them); none above `/`. */
+export function remoteParent(dir: string): string | undefined {
+	if (dir === '/') {
+		return undefined;
+	}
+	return dir === '~' || dir.startsWith('~/') ? joinRemote(dir, '..') : path.posix.dirname(dir.replace(/\/+$/, '') || '/');
+}
+
 /** The remote side of an upload: the folder is created, the tar stream unpacked into it. */
 export function untarScript(remoteDir: string): string {
 	const dir = remotePath(remoteDir);

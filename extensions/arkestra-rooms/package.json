@@ -100,12 +100,6 @@
         "icon": "$(comment-discussion)"
       },
       {
-        "command": "arkestra.rooms.fixAgent",
-        "title": "%command.fixAgent%",
-        "category": "Arkestra",
-        "icon": "$(sign-in)"
-      },
-      {
         "command": "arkestra.rooms.open",
         "title": "%command.open%",
         "category": "Arkestra"
@@ -161,12 +155,6 @@
         "title": "%command.unpin%",
         "category": "Arkestra",
         "icon": "$(pinned)"
-      },
-      {
-        "command": "arkestra.rooms.setCategory",
-        "title": "%command.setCategory%",
-        "category": "Arkestra",
-        "icon": "$(tag)"
       },
       {
         "command": "arkestra.rooms.rename",
@@ -472,15 +460,11 @@
         },
         {
           "command": "arkestra.checkpoints.show",
-          "when": "view == arkestra.checkpoints && viewItem == checkpoint",
+          "when": "view == arkestra.checkpoints && viewItem == checkpointFile",
           "group": "1_show"
         }
       ],
       "commandPalette": [
-        {
-          "command": "arkestra.rooms.fixAgent",
-          "when": "false"
-        },
         {
           "command": "arkestra.rooms.openThread",
           "when": "false"
@@ -491,10 +475,6 @@
         },
         {
           "command": "arkestra.rooms.unpin",
-          "when": "false"
-        },
-        {
-          "command": "arkestra.rooms.setCategory",
           "when": "false"
         },
         {
@@ -648,6 +628,7 @@
   "enabledApiProposals": [
     "chatSessionsProvider",
     "chatParticipantPrivate",
-    "chatParticipantAdditions"
+    "chatParticipantAdditions",
+    "editorInsets"
   ]
 }

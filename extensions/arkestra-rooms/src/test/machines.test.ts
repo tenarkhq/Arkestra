@@ -133,7 +133,7 @@ test('the filters: agent kind, machine, and the search over title and folder', (
 });
 
 test('the page runs only its own nonce, shows its strings escaped and its script compiles', () => {
-	const keys = ['title', 'subtitle', 'search', 'refresh', 'connections', 'agent', 'machine', 'all', 'claude', 'codex', 'openThread', 'continueHere', 'loading', 'noSessions', 'noAgent', 'noMatch', 'couldNotRead', 'connected', 'connecting', 'unreachable', 'connectionError', 'unknown', 'localTip', 'reconnect', 'unreachableNote', 'connectingNote', 'checked', 'folder', 'openFolder', 'edit', 'remove', 'removeAsk', 'removeYes', 'cancel'];
+	const keys = ['title', 'subtitle', 'search', 'refresh', 'connections', 'agent', 'machine', 'all', 'claude', 'codex', 'openThread', 'continueHere', 'loading', 'noSessions', 'noAgent', 'noMatch', 'couldNotRead', 'connected', 'connecting', 'unreachable', 'connectionError', 'unknown', 'localTip', 'reconnect', 'unreachableNote', 'connectingNote', 'checked', 'folder', 'openFolder', 'edit', 'remove', 'removeAsk', 'removeYes', 'cancel', 'addConnection', 'host', 'hostHint', 'name', 'nameHint', 'folderField', 'folderHint', 'save', 'folderUp', 'terminalHere', 'readingFolders', 'noFolders', 'couldNotReadFolder'];
 	const strings = Object.fromEntries(keys.map(k => [k, k === 'title' ? 'Ma<b>chines</b> "x"' : k])) as unknown as MachinesStrings;
 	const html = machinesHtml('NONCE123', strings, { base: 'vscode-resource://fonts', cspSource: 'vscode-resource:' });
 	assert.match(html, /default-src 'none'; style-src 'nonce-NONCE123'; font-src vscode-resource:; script-src 'nonce-NONCE123';/);
@@ -147,4 +147,34 @@ test('the page runs only its own nonce, shows its strings escaped and its script
 	assert.equal(scripts.length, 1);
 	assert.doesNotThrow(() => new Script(scripts[0]));
 	assert.ok(scripts[0].includes('function sessionMatches(') && scripts[0].includes('function canList('), 'the page filters with the tested functions');
+});
+
+test('connections are added and edited in the page\'s own form, and an SSH machine\'s folders are walked in its card', () => {
+	const keys = ['addConnection', 'host', 'save', 'terminalHere', 'folderUp'];
+	const strings = new Proxy({}, { get: (_t, k) => typeof k === 'string' ? (keys.includes(k) ? `«${k}»` : k) : undefined }) as unknown as MachinesStrings;
+	const html = machinesHtml('N', strings);
+	// The header's New SSH connection and the card's Edit open the form; no command prompts at the top.
+	assert.ok(html.includes('id="addConn"') && html.includes('+ «addConnection»'));
+	const script = /<script nonce="N">([\s\S]*?)<\/script>/.exec(html)![1];
+	assert.doesNotThrow(() => new Script(script));
+	assert.ok(script.includes("type: 'saveConnection', machine: editing.id"));
+	assert.ok(script.includes("act === 'edit' && m) { openForm(id, m); }"));
+	assert.ok(!script.includes("post({ type: 'edit'"), 'Edit no longer goes to a command that asks at the top');
+	// Open a folder on an SSH machine lists its folders in the card, the terminal opens where it stands.
+	assert.ok(script.includes("type: 'browse', machine: id, dir: ''"));
+	assert.ok(script.includes("type: 'terminalAt', machine: id, dir: browsing.dir"));
+	// What is typed survives the page's redraws (the checks every half minute).
+	assert.ok(script.includes('editing[f] = e.target.value') && script.includes('setSelectionRange'));
+});
+
+test('the edit form starts from the connection as it is set, not from the resolved folder', () => {
+	const model = machinesModel({
+		machines: readMachineEntries(machines), agents: [], listings: new Map(), continued: new Map(),
+		connections: new Map([['tenark', { checking: false, result: { reachable: true, home: '/home/tenark' }, at: NOW }]]), labels, localFolder: '/Users/roland/p', now: NOW, language: 'en',
+	});
+	assert.deepEqual(model.machines.map(m => [m.id, m.host, m.folder, m.setFolder]), [
+		['local', 'roland@mac', '/Users/roland/p', ''],
+		['tenark', 'tenark@srv', '/home/tenark/tenark-dev', '~/tenark-dev'],
+		['tenark-claude', 'tenark-claude@srv:2222', '~', ''],
+	]);
 });

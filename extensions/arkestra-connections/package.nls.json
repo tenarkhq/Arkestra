@@ -13,6 +13,5 @@
   "openTerminal": "Open a terminal on a machine (drop files into it to upload)",
   "upload": "Upload files to a machine…",
   "remove": "Remove this connection",
-  "openFolder": "Open a folder of a machine in a terminal…",
-  "edit": "Edit this connection…"
+  "openFolder": "Open a folder of a machine in a terminal…"
 }

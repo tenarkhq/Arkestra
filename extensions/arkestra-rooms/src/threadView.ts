@@ -12,6 +12,7 @@ import type { ActivityBoard } from './activity';
 import type { AgentChoices, AgentRegistry, InviteEntry } from './agent';
 import { chipLabel, modelMenu, type Choice, type MenuItem } from './choice';
 import { allowedImage, attachmentName, fileReference, imageSource, type ImageResolver } from './images';
+import { FormRequests, formHtml, type FormSpec } from './pageForm';
 import type { Room } from './room';
 import { ICONS, escapeHtml, liveHtml, menuHtml, renderMarkdown, rowHtml, threadPage, type ThreadStrings } from './threadHtml';
 import { FONT_ROOT, pageFonts } from './webviewFonts';
@@ -50,7 +51,12 @@ export interface ThreadHost {
 	setChoice(room: Room, agentId: string, choice: Choice): Promise<void>;
 	/** Plan mode on or off for the thread (the mode menu; /plan and /execute do the same). */
 	setMode(room: Room, mode: 'plan' | undefined): Promise<void>;
+	/** Invites a ready agent into the room (it receives the thread from the beginning). */
+	invite(room: Room, agentId: string): Promise<unknown>;
 }
+
+/** The popovers a command may open on a thread's page (the invite list, an agent's model, whose model). */
+export type ThreadMenu = 'invite' | 'model' | 'models';
 
 interface View {
 	readonly panel: vscode.WebviewPanel;
@@ -76,6 +82,10 @@ interface View {
 	readonly saved: Set<string>;
 	/** The folders the page may load from, as last set. */
 	roots?: string;
+	/** The forms open in this page's popovers. */
+	readonly forms: FormRequests;
+	/** A popover a command asked for, sent again when the page loads. */
+	openMenu?: { readonly anchor: string; readonly menu: string; readonly agentId?: string };
 }
 
 /** A real path (symlinks resolved), or undefined when it is not there. */
@@ -225,6 +235,27 @@ export class ThreadViews implements vscode.Disposable {
 		view.preselect = opts.agents;
 	}
 
+	/**
+	 * Opens the thread and the popover a command asks for, where its chip is: the invite list
+	 * at + agent, an agent's models at its chip (or at the model chip when it is the only one).
+	 */
+	async showMenu(roomId: string, menu: ThreadMenu, agentId?: string): Promise<void> {
+		await this.open(roomId);
+		const view = [...this.views].find(v => v.roomId === roomId);
+		const room = await this.host.open(roomId);
+		if (!view || !room) {
+			return;
+		}
+		const choosers = room.roster.filter(id => this.host.registry.get(id)?.choices);
+		const only = room.roster.length === 1 && choosers.length === 1 ? choosers[0] : undefined;
+		const target = menu === 'model' && agentId && room.roster.includes(agentId) ? agentId : undefined;
+		const open = menu === 'invite' ? { anchor: 'invite', menu: 'invite' }
+			: target ? (target === only ? { anchor: 'model', menu: 'model', agentId: target } : { anchor: `agent:${target}`, menu: 'model', agentId: target })
+				: only ? { anchor: 'model', menu: 'model', agentId: only } : { anchor: 'model', menu: 'models' };
+		view.openMenu = open;
+		void view.panel.webview.postMessage({ type: 'openMenu', ...open }).then(delivered => { if (delivered && view.openMenu === open) { view.openMenu = undefined; } }, () => undefined);
+	}
+
 	/** Closes the thread's panel (the thread was deleted). */
 	close(roomId: string): void {
 		for (const view of [...this.views]) {
@@ -294,7 +325,10 @@ export class ThreadViews implements vscode.Disposable {
 	}
 
 	private adopt(panel: vscode.WebviewPanel, roomId: string | undefined): View {
-		const view: View = { panel, ...(roomId ? { roomId } : {}), roundSeen: false, notice: '', buttons: [], scroll: true, saved: new Set() };
+		const view: View = {
+			panel, ...(roomId ? { roomId } : {}), roundSeen: false, notice: '', buttons: [], scroll: true, saved: new Set(),
+			forms: new FormRequests(message => this.post(view, message), vscode.l10n.t('Required')),
+		};
 		this.views.add(view);
 		panel.iconPath = new vscode.ThemeIcon(roomId ? 'comment-discussion' : 'add');
 		this.updateRoots(view, undefined);
@@ -308,10 +342,12 @@ export class ThreadViews implements vscode.Disposable {
 			heading: vscode.l10n.t('Who do you work with?'),
 			fonts: pageFonts(panel.webview),
 			close: vscode.l10n.t('Close'),
+			attach: vscode.l10n.t('Attach a file, the changes or a terminal command'),
 		});
 		panel.onDidDispose(() => {
 			// A running round goes on; the thread shows it again when reopened.
 			clearTimeout(view.timer);
+			view.forms.cancelAll();
 			this.views.delete(view);
 			if (this.active === view) {
 				this.active = undefined;
@@ -437,7 +473,7 @@ export class ThreadViews implements vscode.Disposable {
 				...(agent?.choices ? { menu: { menu: 'model', agentId: id } } : {}),
 			};
 		});
-		chips.push({ label: vscode.l10n.t('+ agent'), cls: 'add', action: { type: 'invite' } });
+		chips.push({ key: 'invite', label: vscode.l10n.t('+ agent'), cls: 'add', title: vscode.l10n.t('Invite an agent into this thread'), menu: { menu: 'invite' } });
 		const right = composerRight(room, id => !!this.host.registry.get(id)?.choices, id => this.modelLabel(view, room, id), {
 			models: vscode.l10n.t('Models'), auto: vscode.l10n.t('Auto'), plan: vscode.l10n.t('Plan'),
 			modelTitle: vscode.l10n.t('Model and effort'), modeTitle: vscode.l10n.t('Permission mode'),
@@ -468,15 +504,87 @@ export class ThreadViews implements vscode.Disposable {
 		return plain;
 	}
 
-	/** A chip's popover: the agent's models and efforts, whose model to set, or the thread's mode. */
-	private async menu(view: View, anchor: string, kind: string, agentId: string | undefined): Promise<void> {
+	/**
+	 * A popover of the page: an agent's models and efforts, whose model to set, the thread's
+	 * mode, who to invite, what to attach, what makes an agent ready (a key typed in its own
+	 * field), or a new ACP agent's form. Forms answer through `view.forms`.
+	 */
+	private async menu(view: View, anchor: string, kind: string, agentId: string | undefined, index?: number): Promise<void> {
+		const reply = (html: string) => this.post(view, { type: 'menu', anchor, html });
+		const name = (id: string) => agentChip(this.host.registry.get(id)?.name ?? id, id);
+		if (kind === 'attach') {
+			reply(menuHtml([
+				{ kind: 'header', label: vscode.l10n.t('Attach to the message') },
+				{ label: vscode.l10n.t('File…'), detail: vscode.l10n.t('Pick files; they go in as @file references'), action: { type: 'attachRef', ref: 'file' } },
+				{ label: vscode.l10n.t('Changes in the working tree'), detail: vscode.l10n.t('The uncommitted diff (@diff)'), action: { type: 'attachRef', ref: 'diff' } },
+				{ label: vscode.l10n.t('Last terminal command'), detail: vscode.l10n.t('Its command and output (@terminal)'), action: { type: 'attachRef', ref: 'terminal' } },
+			]));
+			return;
+		}
+		if (kind === 'fix' || kind === 'secret') {
+			const entry = agentId ? (await this.host.registry.inviteList([])).find(e => e.agent.id === agentId) : undefined;
+			if (!entry || entry.readiness.ready) {
+				reply(menuHtml([{ kind: 'header', label: entry ? vscode.l10n.t('{0} is ready.', agentTitle(entry.agent.name)) : vscode.l10n.t('This agent is no longer known.') }]));
+				this.schedule(view);
+				return;
+			}
+			const actions = entry.readiness.actions ?? [];
+			const secret = kind === 'secret' && index !== undefined ? actions[index]?.secret : undefined;
+			if (secret) {
+				const spec: FormSpec = {
+					id: `secret:${entry.agent.id}`,
+					title: actions[index!].title,
+					fields: [{ kind: 'password', id: 'key', label: secret.label, ...(secret.placeholder ? { placeholder: secret.placeholder } : {}), hint: vscode.l10n.t('Kept in the system\'s secret storage, never in a file or a log.') }],
+					submit: vscode.l10n.t('Save'),
+					cancel: vscode.l10n.t('Cancel'),
+				};
+				reply(formHtml(spec));
+				if (await view.forms.open(spec, async values => { await secret.save(values.key); return undefined; })) {
+					this.schedule(view);
+				}
+				return;
+			}
+			reply(menuHtml([
+				{ kind: 'header', label: `${agentTitle(entry.agent.name)}: ${entry.readiness.reason ?? vscode.l10n.t('not ready')}` },
+				...actions.map((a, i) => ({ label: a.title, ...(a.detail ? { detail: a.detail } : {}), action: a.secret ? { type: 'menu', menu: 'secret', agentId: entry.agent.id, index: i } : { type: 'fixRun', agentId: entry.agent.id, index: i } })),
+				...(actions.length ? [] : [{ label: vscode.l10n.t('Nothing to do here; it may be ready later.'), action: {} }]),
+			]));
+			return;
+		}
+		if (kind === 'acp') {
+			let spec: FormSpec | undefined;
+			try {
+				spec = await vscode.commands.executeCommand<FormSpec | undefined>('arkestra.acp.addForm');
+			} catch {
+				spec = undefined;
+			}
+			if (!spec?.fields?.length) {
+				reply(menuHtml([{ kind: 'header', label: vscode.l10n.t('Other agents (ACP) are not available in this build.') }]));
+				return;
+			}
+			reply(formHtml(spec));
+			const added = await view.forms.open(spec, values => vscode.commands.executeCommand<{ field?: string; message: string } | undefined>('arkestra.acp.add', values));
+			if (added) {
+				this.schedule(view);
+			}
+			return;
+		}
 		const room = view.roomId ? await this.host.open(view.roomId) : undefined;
 		if (!room) {
 			return;
 		}
 		let items: MenuItem[] = [];
-		const name = (id: string) => agentChip(this.host.registry.get(id)?.name ?? id, id);
-		if (kind === 'model' && agentId && room.roster.includes(agentId)) {
+		if (kind === 'invite') {
+			const entries = await this.host.registry.inviteList(room.roster);
+			items = [
+				{ kind: 'header', label: entries.length ? vscode.l10n.t('Invite into this thread · it reads the thread from the beginning') : vscode.l10n.t('No other agent is known yet.') },
+				...entries.map(e => e.readiness.ready
+					? { label: agentTitle(e.agent.name), detail: e.agent.name.split(' · ')[1] ? `${e.agent.name.split(' · ')[1]} · SSH` : vscode.l10n.t('this machine'), action: { type: 'inviteAgent', agentId: e.agent.id } }
+					: { label: agentTitle(e.agent.name), detail: `${e.readiness.reason ?? vscode.l10n.t('not ready')}${e.readiness.actions?.length ? ` · ${e.readiness.actions.map(a => a.title).join(' / ')}` : ''}`, action: { type: 'menu', menu: 'fix', agentId: e.agent.id } }),
+				{ kind: 'sep' },
+				{ label: vscode.l10n.t('Add another agent (ACP)…'), detail: vscode.l10n.t('From the ACP Registry or a command of your own'), action: { type: 'menu', menu: 'acp' } },
+			];
+		} else if (kind === 'model' && agentId && room.roster.includes(agentId)) {
 			const choices = await this.host.agentChoices(agentId);
 			items = choices?.models.length
 				? modelMenu(agentId, room.state.choices?.[agentId], choices, {
@@ -496,7 +604,7 @@ export class ThreadViews implements vscode.Disposable {
 				{ label: vscode.l10n.t('Plan'), detail: vscode.l10n.t('Read and plan, change nothing'), checked: room.state.mode === 'plan', action: { type: 'mode', mode: 'plan' } },
 			];
 		}
-		this.post(view, { type: 'menu', anchor, html: menuHtml(items) });
+		reply(menuHtml(items));
 	}
 
 	private cardHtml(entry: InviteEntry): string {
@@ -528,6 +636,7 @@ export class ThreadViews implements vscode.Disposable {
 		this.post(view, {
 			type: 'new',
 			cards: entries.map(e => ({ id: e.agent.id, label: e.agent.name, ready: e.readiness.ready, html: this.cardHtml(e) })),
+			addCard: { label: vscode.l10n.t('+ Another agent (ACP)'), detail: vscode.l10n.t('From the ACP Registry or a command of your own') },
 			selected: view.preselect ?? last,
 			reset: !!reset,
 			right: project ? [{ label: projectName(project), cls: 'ghost', title: project }] : [],
@@ -537,11 +646,36 @@ export class ThreadViews implements vscode.Disposable {
 		});
 	}
 
-	private async receive(view: View, message: { type?: string; text?: unknown; agents?: unknown; agentId?: unknown; id?: unknown; index?: unknown; name?: unknown; mime?: unknown; data?: unknown; path?: unknown; uris?: unknown; anchor?: unknown; menu?: unknown; model?: unknown; effort?: unknown; mode?: unknown }): Promise<void> {
+	private async receive(view: View, message: { type?: string; text?: unknown; agents?: unknown; agentId?: unknown; id?: unknown; index?: unknown; name?: unknown; mime?: unknown; data?: unknown; path?: unknown; uris?: unknown; anchor?: unknown; menu?: unknown; model?: unknown; effort?: unknown; mode?: unknown; ref?: unknown; form?: unknown; values?: unknown }): Promise<void> {
+		if (await view.forms.receive(message)) {
+			return;
+		}
 		switch (message.type) {
 			case 'menu':
 				if (typeof message.anchor === 'string' && typeof message.menu === 'string') {
-					await this.menu(view, message.anchor, message.menu, typeof message.agentId === 'string' ? message.agentId : undefined);
+					await this.menu(view, message.anchor, message.menu, typeof message.agentId === 'string' ? message.agentId : undefined, typeof message.index === 'number' ? message.index : undefined);
+				}
+				break;
+			case 'inviteAgent': {
+				const room = view.roomId ? await this.host.open(view.roomId) : undefined;
+				if (room && typeof message.agentId === 'string' && !room.roster.includes(message.agentId)) {
+					await this.host.invite(room, message.agentId);
+					this.schedule(view);
+				}
+				break;
+			}
+			case 'fixRun': {
+				const entry = typeof message.agentId === 'string' ? (await this.host.registry.inviteList([])).find(e => e.agent.id === message.agentId) : undefined;
+				const action = typeof message.index === 'number' ? entry?.readiness.actions?.[message.index] : undefined;
+				if (action) {
+					await action.run();
+				}
+				this.schedule(view);
+				break;
+			}
+			case 'attachRef':
+				if (message.ref === 'file' || message.ref === 'diff' || message.ref === 'terminal') {
+					await this.attach(view, message.ref);
 				}
 				break;
 			case 'choose': {
@@ -590,6 +724,10 @@ export class ThreadViews implements vscode.Disposable {
 					void view.panel.webview.postMessage({ type: 'insert', text: view.insert });
 					view.insert = undefined;
 				}
+				if (view.openMenu) {
+					void view.panel.webview.postMessage({ type: 'openMenu', ...view.openMenu });
+					view.openMenu = undefined;
+				}
 				break;
 			case 'send':
 				if (typeof message.text === 'string') {
@@ -606,30 +744,6 @@ export class ThreadViews implements vscode.Disposable {
 				if (view.roomId) {
 					await this.host.stop(view.roomId);
 				}
-				break;
-			case 'invite':
-				if (view.roomId) {
-					await vscode.commands.executeCommand('arkestra.rooms.invite', view.roomId);
-					this.schedule(view);
-				}
-				break;
-			case 'model':
-				if (view.roomId) {
-					await vscode.commands.executeCommand('arkestra.rooms.chooseModel', view.roomId, typeof message.agentId === 'string' ? message.agentId : undefined);
-					this.schedule(view);
-				}
-				break;
-			case 'fix':
-				if (typeof message.agentId === 'string') {
-					const entry = (await this.host.registry.inviteList([])).find(e => e.agent.id === message.agentId);
-					if (entry) {
-						await vscode.commands.executeCommand('arkestra.rooms.fixAgent', { entry });
-					}
-					this.schedule(view);
-				}
-				break;
-			case 'attach':
-				await this.attach(view);
 				break;
 			case 'copy':
 				if (view.roomId && typeof message.id === 'string') {
@@ -788,19 +902,10 @@ export class ThreadViews implements vscode.Disposable {
 		}
 	}
 
-	/** + in the composer: a file, the working tree's diff or the last terminal command as an @-reference. */
-	private async attach(view: View): Promise<void> {
-		type Item = vscode.QuickPickItem & { ref: 'file' | 'diff' | 'terminal' };
-		const pick = await vscode.window.showQuickPick<Item>([
-			{ label: `$(file) ${vscode.l10n.t('File…')}`, ref: 'file' },
-			{ label: `$(diff) ${vscode.l10n.t('Changes in the working tree')}`, description: '@diff', ref: 'diff' },
-			{ label: `$(terminal) ${vscode.l10n.t('Last terminal command')}`, description: '@terminal', ref: 'terminal' },
-		], { title: vscode.l10n.t('Attach to the message') });
-		if (!pick) {
-			return;
-		}
-		let text = `@${pick.ref}`;
-		if (pick.ref === 'file') {
+	/** The + popover's choice: a file (the system's file dialog), the working tree's diff or the last terminal command as an @-reference. */
+	private async attach(view: View, ref: 'file' | 'diff' | 'terminal'): Promise<void> {
+		let text = `@${ref}`;
+		if (ref === 'file') {
 			const files = await vscode.window.showOpenDialog({ canSelectMany: true, ...(vscode.workspace.workspaceFolders?.[0] ? { defaultUri: vscode.workspace.workspaceFolders[0].uri } : {}) });
 			if (!files?.length) {
 				return;

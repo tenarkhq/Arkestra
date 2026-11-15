@@ -8,6 +8,7 @@ import { fontFaces, fontSrc, TYPE_CSS, type PageFonts } from './fonts';
 import { imageName, imageRefs, imageSource, userImages, type ImageResolver } from './images';
 import { agentLabel, foldLabel, providerOf, type FoldItem, type LivePart, type Row } from './threadModel';
 import type { MenuItem } from './choice';
+import { FORM_CLIENT, FORM_CSS, formHtml, type FormSpec } from './pageForm';
 
 export function escapeHtml(value: string): string {
 	return value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' }[c]!));
@@ -333,12 +334,12 @@ svg { display: block; }
 `;
 
 /** The thread panel's page: rows, running turns, notices, and the composer or the new-chat cards. */
-export function threadPage(opts: { nonce: string; cspSource: string; mode: 'thread' | 'new'; roomId?: string; placeholder: string; heading: string; fonts?: PageFonts; close?: string }): string {
+export function threadPage(opts: { nonce: string; cspSource: string; mode: 'thread' | 'new'; roomId?: string; placeholder: string; heading: string; fonts?: PageFonts; close?: string; attach?: string }): string {
 	const { nonce } = opts;
 	return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${opts.cspSource} https: data:; style-src 'nonce-${nonce}';${fontSrc(opts.fonts)} script-src 'nonce-${nonce}';">
-<style nonce="${nonce}">${fontFaces(opts.fonts)}${BASE_CSS}
+<style nonce="${nonce}">${fontFaces(opts.fonts)}${BASE_CSS}${FORM_CSS}
 body { background: var(--vscode-editor-background); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 #conv { flex: 1; overflow-y: auto; padding: 26px 0 8px; }
 .col { max-width: 740px; margin: 0 auto; padding: 0 28px; display: flex; flex-direction: column; gap: 14px; }
@@ -451,6 +452,10 @@ button.chip:hover { background: var(--hover); }
 .pop .ml small { color: var(--mute); font-size: 11.5px; overflow-wrap: anywhere; }
 .pop .mc { width: 14px; height: 14px; color: var(--accent); flex: none; }
 .pop .mc svg { width: 14px; height: 14px; }
+.pop.wide { width: 380px; max-width: calc(100vw - 16px); padding: 2px; }
+.card.addc { border-style: dashed; color: var(--mute); justify-content: center; align-items: center; min-height: 92px; }
+.card.addc .top { justify-content: center; font-weight: 500; color: var(--fg); }
+.card.addc .sub2 { text-align: center; }
 .sp { flex: 1; }
 .round { width: 26px; height: 26px; display: grid; place-items: center; color: var(--mute); border-radius: 7px; }
 .round:hover { background: var(--hover); color: var(--fg); }
@@ -495,7 +500,7 @@ button.chip:hover { background: var(--hover); }
 	<div id="atts"></div>
 	<textarea id="input" rows="1" placeholder="${escapeHtml(opts.placeholder)}"></textarea>
 	<div class="brow">
-		<button class="round" id="attach">${ICONS.plus}</button>
+		<button class="round" id="attach" data-chip="attach" aria-haspopup="menu" title="${escapeHtml(opts.attach ?? 'Attach')}" aria-label="${escapeHtml(opts.attach ?? 'Attach')}">${ICONS.plus}</button>
 		<span id="chips"></span>
 		<span class="sp"></span>
 		<span id="right"></span>
@@ -510,6 +515,7 @@ button.chip:hover { background: var(--hover); }
 /** The page's script: keyed rows (an unchanged row keeps its node, so an open fold stays open), the composer, the cards. */
 const CLIENT = `
 const vscode = acquireVsCodeApi();
+${FORM_CLIENT}
 const $ = id => document.getElementById(id);
 const conv = $('conv'), rowsEl = $('rows'), liveEl = $('live'), noticeEl = $('notice'), input = $('input'), send = $('send');
 let mode = document.body.dataset.mode, busy = false, selected = null, cards = [], strings = {};
@@ -554,23 +560,33 @@ function chip(c) {
 	if (c.key) { b.dataset.chip = c.key; }
 	if (c.menu) {
 		b.setAttribute('aria-haspopup', 'menu');
-		b.addEventListener('click', () => {
-			if (popKey === c.key) { closeMenu(); return; }
-			showMenu(c.key, '<div class="mh"></div>');
-			pop.firstChild.textContent = strings.loading || '…';
-			vscode.postMessage({ type: 'menu', anchor: c.key, ...c.menu });
-		});
+		b.addEventListener('click', () => openMenu(c.key, c.menu));
 	} else if (c.action) { b.addEventListener('click', () => vscode.postMessage(c.action)); }
 	return b;
 }
 function renderChips(left, right) {
 	$('chips').replaceChildren(...left.map(chip));
 	$('right').replaceChildren(...right.map(chip));
+	keepMenu();
+}
+// A popover stays on its anchor when the page redraws and closes when the anchor is gone; one the extension asked for opens once its anchor shows.
+let pendingOpen = null;
+function keepMenu() {
 	if (pop) { if (!document.querySelector('[data-chip="' + CSS.escape(popKey) + '"]')) { closeMenu(); } else { placeMenu(); } }
+	if (pendingOpen && document.querySelector('[data-chip="' + CSS.escape(pendingOpen.anchor) + '"]')) { const p = pendingOpen; pendingOpen = null; if (popKey !== p.anchor) { openMenu(p.anchor, p.req); } }
+}
+function openMenu(key, req) {
+	if (popKey === key) { closeMenu(); return; }
+	showMenu(key, '<div class="mh"></div>');
+	if (!pop) { return; }
+	pop.firstChild.textContent = strings.loading || '…';
+	vscode.postMessage({ type: 'menu', anchor: key, ...req });
 }
 // The composer's popover menus (model and effort, mode), anchored above their chip.
 let pop = null, popKey = null;
 function closeMenu() {
+	const form = pop && pop.querySelector('form.pf');
+	if (form && !form.dataset.done) { vscode.postMessage({ type: 'formCancel', form: form.dataset.form }); }
 	if (pop) { pop.remove(); }
 	const open = popKey && document.querySelector('[data-chip="' + CSS.escape(popKey) + '"]');
 	if (open) { open.classList.remove('open'); }
@@ -593,8 +609,13 @@ function showMenu(key, html) {
 	if (!pop) { pop = document.createElement('div'); pop.className = 'pop'; pop.setAttribute('role', 'menu'); document.body.appendChild(pop); }
 	popKey = key;
 	anchor.classList.add('open');
+	const old = pop.querySelector('form.pf');
+	if (old && !old.dataset.done) { vscode.postMessage({ type: 'formCancel', form: old.dataset.form }); }
 	pop.innerHTML = html;
+	const form = pop.querySelector('form.pf');
+	pop.classList.toggle('wide', !!form);
 	placeMenu();
+	if (form) { wireForm(form, m => vscode.postMessage(m)); placeMenu(); return; }
 	const first = pop.querySelector('.mi.on') || pop.querySelector('.mi');
 	if (first) { first.focus(); }
 }
@@ -603,7 +624,7 @@ window.addEventListener('resize', () => { if (pop) { placeMenu(); } });
 document.addEventListener('keydown', e => {
 	if (!pop) { return; }
 	if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); const key = popKey; closeMenu(); const a = document.querySelector('[data-chip="' + CSS.escape(key) + '"]'); if (a) { a.focus(); } return; }
-	if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+	if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !(e.target.closest && e.target.closest('.pf'))) {
 		e.preventDefault();
 		const items = [...pop.querySelectorAll('.mi')];
 		const i = items.indexOf(document.activeElement);
@@ -611,15 +632,16 @@ document.addEventListener('keydown', e => {
 		if (next) { next.focus(); }
 	}
 }, true);
+let addCard = null;
 function renderCards() {
 	const el = $('cards');
 	el.replaceChildren(...cards.map(c => {
 		const b = document.createElement('button');
 		b.className = 'card' + (selected.includes(c.id) ? ' on' : '') + (c.ready ? '' : ' off');
+		b.dataset.chip = 'card:' + c.id;
 		b.innerHTML = c.html;
 		b.addEventListener('click', e => {
-			if (e.target.closest('[data-fix]')) { vscode.postMessage({ type: 'fix', agentId: c.id }); return; }
-			if (!c.ready) { vscode.postMessage({ type: 'fix', agentId: c.id }); return; }
+			if (e.target.closest('[data-fix]') || !c.ready) { openMenu('card:' + c.id, { menu: 'fix', agentId: c.id }); return; }
 			selected = selected.includes(c.id) ? selected.filter(x => x !== c.id) : [...selected, c.id];
 			vscode.setState({ ...(vscode.getState() || {}), selected });
 			renderCards();
@@ -628,6 +650,18 @@ function renderCards() {
 		return b;
 	}));
 	if (!cards.length) { const p = document.createElement('p'); p.className = 'empty'; p.textContent = strings.noAgents || ''; el.replaceChildren(p); }
+	if (addCard) {
+		const b = document.createElement('button');
+		b.className = 'card addc';
+		b.dataset.chip = 'card:+add';
+		b.setAttribute('aria-haspopup', 'menu');
+		const t = document.createElement('div'); t.className = 'top'; t.textContent = addCard.label;
+		const s = document.createElement('div'); s.className = 'sub2'; s.textContent = addCard.detail || '';
+		b.append(t, s);
+		b.addEventListener('click', () => openMenu('card:+add', { menu: 'acp' }));
+		el.appendChild(b);
+	}
+	keepMenu();
 }
 let newRight = [];
 function renderNewChips() {
@@ -740,7 +774,7 @@ input.addEventListener('keydown', e => {
 });
 input.addEventListener('input', () => { grow(); vscode.setState({ ...(vscode.getState() || {}), draft: input.value }); });
 send.addEventListener('click', submit);
-$('attach').addEventListener('click', () => vscode.postMessage({ type: 'attach' }));
+$('attach').addEventListener('click', () => openMenu('attach', { menu: 'attach' }));
 document.addEventListener('click', e => {
 	const item = e.target.closest('.pop .mi[data-action]');
 	if (item) {
@@ -752,6 +786,7 @@ document.addEventListener('click', e => {
 		input.focus();
 		return;
 	}
+	if (e.target.closest('.pop')) { return; }
 	const thumb = e.target.closest('img.thumb');
 	if (thumb) { openImage(thumb.currentSrc || thumb.src, thumb.alt); return; }
 	const code = e.target.closest('[data-copycode]');
@@ -787,6 +822,7 @@ window.addEventListener('message', e => {
 		if (mode !== 'new') { setMode('new'); }
 		strings = m.strings || strings;
 		cards = m.cards;
+		addCard = m.addCard || null;
 		const kept = (vscode.getState() || {}).selected;
 		if (selected === null || m.reset) { selected = (m.reset ? m.selected : kept || m.selected).filter(id => cards.some(c => c.id === id && c.ready)); }
 		newRight = m.right || [];
@@ -808,6 +844,16 @@ window.addEventListener('message', e => {
 		input.focus();
 	} else if (m.type === 'menu') {
 		if (popKey === m.anchor) { showMenu(m.anchor, m.html || ''); }
+	} else if (m.type === 'openMenu') {
+		pendingOpen = { anchor: m.anchor, req: { menu: m.menu, ...(m.agentId ? { agentId: m.agentId } : {}) } };
+		if (popKey === m.anchor) { closeMenu(); }
+		keepMenu();
+	} else if (m.type === 'formError') {
+		const form = pop && pop.querySelector('form.pf[data-form="' + CSS.escape(m.form) + '"]');
+		if (form) { formError(form, m.field, m.message); }
+	} else if (m.type === 'formDone') {
+		const form = pop && pop.querySelector('form.pf[data-form="' + CSS.escape(m.form) + '"]');
+		if (form) { form.dataset.done = '1'; closeMenu(); input.focus(); }
 	} else if (m.type === 'attached') {
 		const a = atts.find(x => x.id === m.id);
 		if (a && m.path) { a.path = m.path; a.url = m.url || ''; a.name = m.name || a.name; if (a.url) { a.preview = undefined; } }
@@ -826,11 +872,36 @@ vscode.postMessage({ type: 'ready' });
 input.focus();
 `;
 
+/** The right panel's words for the project's shared rules and memory, already translated. */
+export interface SharedStrings {
+	readonly heading: string;
+	readonly projectRules: string;
+	readonly agentsMd: string;
+	readonly userRules: string;
+	readonly projectMemory: string;
+	readonly userMemory: string;
+	readonly remember: string;
+	/** The remember form (a textarea, Remember and Cancel). */
+	readonly form: FormSpec;
+}
+
+/** The shared rules and memory under the thread's sections: files to open, and a line every agent should know. Built once, so a half-written line survives the redraws. */
+function sharedHtml(s: SharedStrings): string {
+	const row = (key: string, label: string, project: boolean) => `<button class="rr" data-shared="${key}"${project ? ' data-project' : ''}>${ICONS.file}<span class="n">${escapeHtml(label)}</span></button>`;
+	return `<div id="shared"><div class="hr"></div><div class="rh">${escapeHtml(s.heading)}</div>`
+		+ row('projectRules', s.projectRules, true) + row('agentsMd', s.agentsMd, true) + row('userRules', s.userRules, false)
+		+ row('projectMemory', s.projectMemory, true) + row('userMemory', s.userMemory, false)
+		+ `<button class="rr" data-remember>${ICONS.plus}<span class="n">${escapeHtml(s.remember)}</span></button>`
+		+ `<div id="rememberBox" hidden>${formHtml(s.form)}</div><div id="sharedNote" class="empty" hidden></div></div>`;
+}
+
 /** The right panel's page: sections filled by messages, so its scroll stays. */
-export function detailsPage(nonce: string, fonts?: PageFonts): string {
+export function detailsPage(nonce: string, fonts?: PageFonts, shared?: SharedStrings): string {
 	return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}';${fontSrc(fonts)} script-src 'nonce-${nonce}';">
-<style nonce="${nonce}">${fontFaces(fonts)}${BASE_CSS}
+<style nonce="${nonce}">${fontFaces(fonts)}${BASE_CSS}${FORM_CSS}
+#rememberBox .pf { padding: 4px 4px 8px; min-width: 0; }
+[hidden] { display: none !important; }
 body { padding: 6px 10px 16px; }
 .rh { color: var(--mute); font-size: 12.5px; font-weight: 500; padding: 10px 4px 6px; }
 .rr { display: flex; align-items: center; gap: 10px; min-height: 30px; padding: 0 4px; font-size: 13px; white-space: nowrap; border-radius: 6px; }
@@ -853,16 +924,42 @@ button.rr:hover { background: var(--hover); }
 .st { font-size: 12px; font-weight: 600; width: 14px; text-align: center; flex: none; }
 .st.A { color: var(--ok); } .st.M { color: var(--warn); } .st.D { color: var(--err); }
 .empty { color: var(--mute); padding: 4px; font-size: 12.5px; }
-</style></head><body><div id="root"></div>
+</style></head><body><div id="root"></div>${shared ? sharedHtml(shared) : ''}
 <script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
+${FORM_CLIENT}
+const box = document.getElementById('rememberBox'), note = document.getElementById('sharedNote');
+const form = box && box.querySelector('form.pf');
+let wired = false;
+function openRemember() {
+	if (!box) { return; }
+	box.hidden = false;
+	note.hidden = true;
+	if (!wired) { wired = true; wireForm(form, m => { if (m.type === 'formCancel') { box.hidden = true; return; } vscode.postMessage(m); }); }
+	const t = form.querySelector('textarea'); if (t) { t.focus(); }
+}
 window.addEventListener('message', e => {
-	if (e.data.type === 'render') {
-		document.getElementById('root').innerHTML = e.data.html;
+	const m = e.data;
+	if (m.type === 'render') {
+		document.getElementById('root').innerHTML = m.html;
 		for (const b of document.querySelectorAll('[data-w]')) { b.style.width = b.dataset.w + '%'; }
+		for (const b of document.querySelectorAll('[data-project]')) { b.hidden = !m.project; }
+	} else if (m.type === 'rememberOpen') {
+		openRemember();
+	} else if (m.type === 'formError' && form) {
+		formError(form, m.field, m.message);
+	} else if (m.type === 'formDone' && form) {
+		form.reset();
+		form.dataset.busy = '';
+		box.hidden = true;
+		if (m.note) { note.textContent = m.note; note.hidden = false; }
 	}
 });
-document.addEventListener('click', e => { const b = e.target.closest('[data-change]'); if (b) { vscode.postMessage({ type: 'change', index: Number(b.dataset.change) }); } });
+document.addEventListener('click', e => {
+	const b = e.target.closest('[data-change]'); if (b) { vscode.postMessage({ type: 'change', index: Number(b.dataset.change) }); return; }
+	const s = e.target.closest('[data-shared]'); if (s) { vscode.postMessage({ type: 'shared', file: s.dataset.shared }); return; }
+	if (e.target.closest('[data-remember]')) { if (box.hidden) { openRemember(); } else { box.hidden = true; } }
+});
 vscode.postMessage({ type: 'ready' });
 </script></body></html>`;
 }

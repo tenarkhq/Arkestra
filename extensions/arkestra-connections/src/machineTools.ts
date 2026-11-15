@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import type { Machine } from './ssh';
-import { droppedPaths, joinRemote, listRemote, shellArgs, upload, uploadedPaths } from './transfer';
+import { droppedPaths, joinRemote, listRemote, remoteParent, shellArgs, upload, uploadedPaths } from './transfer';
 
 /** A folder on an SSH machine. */
 interface Place {
@@ -22,9 +22,11 @@ export class MachineTools implements vscode.Disposable {
 
 	constructor(private readonly machines: () => Machine[], private readonly ssh: () => { ssh: string }) {
 		this.disposables.push(
-			// The Machines page's "Open a folder": 'local' or an SSH machine's id.
+			// The Machines page's "Open a folder": this computer through the folder dialog; an SSH machine's folders are walked in the page itself.
 			vscode.commands.registerCommand('arkestra.connections.openFolder', (machineId?: string) => this.openFolder(machineId)),
-			vscode.commands.registerCommand('arkestra.connections.openTerminal', (machineId?: string) => this.openTerminal(machineId)),
+			vscode.commands.registerCommand('arkestra.connections.listFolders', (machineId?: unknown, dir?: unknown) => this.listFolders(machineId, dir)),
+			// With a folder: the page's "Open a terminal here"; without: the palette's, in the machine's default folder.
+			vscode.commands.registerCommand('arkestra.connections.openTerminal', (machineId?: string, dir?: unknown) => this.openTerminal(machineId, typeof dir === 'string' && dir ? dir : undefined)),
 			vscode.commands.registerCommand('arkestra.connections.upload', (machineId?: string) => this.pickAndUpload(machineId)),
 		);
 	}
@@ -49,8 +51,8 @@ export class MachineTools implements vscode.Disposable {
 	}
 
 	/**
-	 * Picks a folder on the machine and opens a terminal in it: this computer through the
-	 * folder dialog, an SSH machine by walking its folders from its default folder.
+	 * Opens a folder of a machine in a terminal: this computer through the folder dialog. An SSH
+	 * machine's folders are walked on the Machines page (listFolders); the palette goes there.
 	 */
 	private async openFolder(machineId?: string): Promise<void> {
 		if (machineId === 'local') {
@@ -60,52 +62,22 @@ export class MachineTools implements vscode.Disposable {
 			}
 			return;
 		}
-		const machine = await this.machine(machineId);
+		await vscode.commands.executeCommand('arkestra.machines.open');
+	}
+
+	/** The subfolders of a folder on an SSH machine (default: its default folder), for the Machines page's folder list. */
+	private async listFolders(machineId: unknown, dir: unknown): Promise<{ dir: string; parent?: string; folders: string[]; error?: string } | undefined> {
+		const machine = typeof machineId === 'string' ? this.machines().find(m => m.id === machineId) : undefined;
 		if (!machine) {
-			return;
+			return undefined;
 		}
-		type Item = vscode.QuickPickItem & { go?: string; here?: boolean };
-		const named = (dir: string) => dir === '~' ? vscode.l10n.t('the home folder') : dir;
-		let dir = this.home(machine).path;
-		const qp = vscode.window.createQuickPick<Item>();
-		qp.title = vscode.l10n.t('Open a folder on {0} in a terminal', machine.name);
-		const show = async () => {
-			qp.placeholder = vscode.l10n.t('Now in {0}. Pick a folder to go into it, or open a terminal here.', named(dir));
-			const here: Item = { label: vscode.l10n.t('Open a terminal in this folder'), description: named(dir), here: true };
-			qp.busy = true;
-			qp.items = [here];
-			try {
-				const folders = (await listRemote(machine, dir, this.ssh())).filter(e => e.folder);
-				qp.items = [
-					here,
-					...(dir !== '/' ? [{ label: '..', description: vscode.l10n.t('one folder up'), go: dir === '~' || dir.startsWith('~/') ? joinRemote(dir, '..') : path.posix.dirname(dir) }] : []),
-					...folders.map(f => ({ label: f.name, go: joinRemote(dir, f.name) })),
-				];
-			} catch (error) {
-				qp.items = [here, { label: vscode.l10n.t('The folder could not be read: {0}', error instanceof Error ? error.message : String(error)) }];
-			} finally {
-				qp.busy = false;
-			}
-		};
-		const picked = await new Promise<string | undefined>(resolve => {
-			qp.onDidAccept(() => {
-				const item = qp.selectedItems[0];
-				if (item?.here) {
-					resolve(dir);
-					qp.hide();
-				} else if (item?.go) {
-					dir = item.go;
-					qp.value = '';
-					void show();
-				}
-			});
-			qp.onDidHide(() => resolve(undefined));
-			qp.show();
-			void show();
-		});
-		qp.dispose();
-		if (picked) {
-			this.terminal({ machine, path: picked });
+		const at = typeof dir === 'string' && dir.trim() ? dir.trim() : this.home(machine).path;
+		const parent = remoteParent(at);
+		try {
+			const folders = (await listRemote(machine, at, this.ssh())).filter(e => e.folder).map(e => joinRemote(at, e.name));
+			return { dir: at, ...(parent ? { parent } : {}), folders };
+		} catch (error) {
+			return { dir: at, ...(parent ? { parent } : {}), folders: [], error: error instanceof Error ? error.message : String(error) };
 		}
 	}
 
@@ -134,10 +106,10 @@ export class MachineTools implements vscode.Disposable {
 		}
 	}
 
-	private async openTerminal(machineId?: string): Promise<void> {
+	private async openTerminal(machineId?: string, dir?: string): Promise<void> {
 		const machine = await this.machine(machineId);
 		if (machine) {
-			this.terminal(this.home(machine));
+			this.terminal(dir ? { machine, path: dir } : this.home(machine));
 		}
 	}
 

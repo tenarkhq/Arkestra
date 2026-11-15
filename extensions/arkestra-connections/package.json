@@ -88,11 +88,6 @@
         "category": "Arkestra"
       },
       {
-        "command": "arkestra.connections.edit",
-        "title": "%edit%",
-        "category": "Arkestra"
-      },
-      {
         "command": "arkestra.connections.openTerminal",
         "title": "%openTerminal%",
         "category": "Arkestra"
@@ -107,10 +102,6 @@
       "commandPalette": [
         {
           "command": "arkestra.connections.remove",
-          "when": "false"
-        },
-        {
-          "command": "arkestra.connections.edit",
           "when": "false"
         }
       ]

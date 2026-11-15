@@ -13,7 +13,8 @@ import type { ActivityBoard } from './activity';
 import type { AgentRegistry } from './agent';
 import type { Change } from './checkpoints';
 import type { Room } from './room';
-import { ICONS, detailsPage, escapeHtml } from './threadHtml';
+import { ICONS, detailsPage, escapeHtml, type SharedStrings } from './threadHtml';
+import { readForm } from './pageForm';
 import { detailsModel, folderLabel, machineOf } from './threadModel';
 import { DetailsFollow, type Surface } from './surface';
 import { formatTokens, tone } from './usage';
@@ -47,10 +48,20 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 	private changes: { roomId: string; at: number; list: readonly Change[] } | undefined;
 	private shownChanges: readonly Change[] = [];
 	private readonly follow = new DetailsFollow();
+	/** The palette's Remember asked for the form before the panel had loaded. */
+	private rememberAsked = false;
 
 	constructor(private readonly host: DetailsHost) {
 		this.disposables.push(
 			vscode.window.registerWebviewViewProvider(DETAILS_VIEW_ID, this),
+			// The palette's "Remember for every agent": the panel's own field, not an input box at the top.
+			vscode.commands.registerCommand('arkestra.details.remember', async () => {
+				this.rememberAsked = true;
+				await vscode.commands.executeCommand(`${DETAILS_VIEW_ID}.focus`);
+				if (this.view) {
+					void this.view.webview.postMessage({ type: 'rememberOpen' }).then(delivered => { if (delivered) { this.rememberAsked = false; } });
+				}
+			}),
 			host.threads.onDidChangeActive(() => this.schedule()),
 			host.threads.onDidChangeSurface(surface => this.surfaceChanged(surface)),
 			host.onDidChangeThread(roomId => { if (roomId === host.threads.activeRoomId()) { this.schedule(); } }),
@@ -79,10 +90,26 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 	resolveWebviewView(view: vscode.WebviewView): void {
 		this.view = view;
 		view.webview.options = { enableScripts: true, localResourceRoots: [FONT_ROOT] };
-		view.webview.html = detailsPage(randomBytes(16).toString('base64'), pageFonts(view.webview));
-		view.webview.onDidReceiveMessage(async (message: { type?: string; index?: unknown }) => {
+		const shared = sharedStrings();
+		view.webview.html = detailsPage(randomBytes(16).toString('base64'), pageFonts(view.webview), shared);
+		view.webview.onDidReceiveMessage(async (message: { type?: string; index?: unknown; file?: unknown; form?: unknown; values?: unknown }) => {
 			if (message.type === 'ready') {
 				this.schedule(0);
+				if (this.rememberAsked) {
+					this.rememberAsked = false;
+					void view.webview.postMessage({ type: 'rememberOpen' });
+				}
+			} else if (message.type === 'shared' && typeof message.file === 'string') {
+				const rules = ['projectRules', 'agentsMd', 'userRules'].includes(message.file);
+				await vscode.commands.executeCommand(rules ? 'arkestra.shared.openRules' : 'arkestra.shared.openMemory', message.file);
+			} else if (message.type === 'form' && message.form === shared.form.id) {
+				const read = readForm(shared.form, message.values, vscode.l10n.t('Required'));
+				if (!read.ok) {
+					void view.webview.postMessage({ type: 'formError', form: shared.form.id, field: read.field, message: read.message });
+					return;
+				}
+				const added = await vscode.commands.executeCommand<boolean>('arkestra.shared.remember', read.values.text);
+				void view.webview.postMessage({ type: 'formDone', form: shared.form.id, note: added ? vscode.l10n.t('Added to the shared memory.') : vscode.l10n.t('The shared memory already has this.') });
 			} else if (message.type === 'change' && typeof message.index === 'number') {
 				const change = this.shownChanges[message.index];
 				if (change) {
@@ -137,9 +164,10 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 		const roomId = this.follow.showsThread() ? this.host.threads.activeRoomId() : undefined;
 		const room = roomId ? await this.host.open(roomId) : undefined;
 		view.description = room?.state.title;
+		const project = !!vscode.workspace.workspaceFolders?.length;
 		if (!room) {
 			this.shownChanges = [];
-			void view.webview.postMessage({ type: 'render', html: `<div class="empty">${escapeHtml(vscode.l10n.t('Open a thread to see its agents, tasks and changes.'))}</div>` });
+			void view.webview.postMessage({ type: 'render', project, html: `<div class="empty">${escapeHtml(vscode.l10n.t('Open a thread to see its agents, tasks and changes.'))}</div>` });
 			return;
 		}
 		const roster = room.roster.map(id => ({ id, name: this.host.registry.get(id)?.name ?? id, activity: this.host.activity.get(room.id, id) }));
@@ -195,6 +223,24 @@ export class DetailsView implements vscode.WebviewViewProvider, vscode.Disposabl
 			: sessionTokens !== undefined
 				? `<div class="rr"><span class="n">${escapeHtml(vscode.l10n.t('Context'))}</span><span class="k">${escapeHtml(vscode.l10n.t('{0} tokens', formatTokens(sessionTokens)))}</span></div>`
 				: `<div class="rr mut"><span class="n">${escapeHtml(vscode.l10n.t('Context'))}</span><span class="k">${escapeHtml(vscode.l10n.t('not reported yet'))}</span></div>`);
-		void view.webview.postMessage({ type: 'render', html: parts.join('') });
+		void view.webview.postMessage({ type: 'render', project, html: parts.join('') });
 	}
+}
+
+function sharedStrings(): SharedStrings {
+	return {
+		heading: vscode.l10n.t('Rules and memory for every agent'),
+		projectRules: vscode.l10n.t('Project rules (.arkestra/rules.md)'),
+		agentsMd: vscode.l10n.t('Project rules (AGENTS.md)'),
+		userRules: vscode.l10n.t('My rules (every project)'),
+		projectMemory: vscode.l10n.t('Project memory'),
+		userMemory: vscode.l10n.t('My memory (every project)'),
+		remember: vscode.l10n.t('Remember for every agent…'),
+		form: {
+			id: 'remember',
+			fields: [{ kind: 'textarea', id: 'text', label: vscode.l10n.t('A decision, convention or pitfall every agent should know in this project') }],
+			submit: vscode.l10n.t('Remember'),
+			cancel: vscode.l10n.t('Cancel'),
+		},
+	};
 }

@@ -15,14 +15,16 @@ export class SharedContext implements vscode.Disposable {
 
 	constructor(private readonly storageDir: string) {
 		this.disposables.push(
-			vscode.commands.registerCommand('arkestra.shared.openRules', () => this.open('rules')),
-			vscode.commands.registerCommand('arkestra.shared.openMemory', () => this.open('memory')),
-			vscode.commands.registerCommand('arkestra.shared.remember', async () => {
-				const text = (await vscode.window.showInputBox({ title: vscode.l10n.t('Remember for every agent'), prompt: vscode.l10n.t('A decision, convention or pitfall every agent should know in this project') }))?.trim();
-				if (text) {
-					const added = await this.remember([text], vscode.l10n.t('You'));
-					void vscode.window.showInformationMessage(added.length ? vscode.l10n.t('Added to the shared memory.') : vscode.l10n.t('The shared memory already has this.'));
+			// The right panel's rows pass the file; the palette picks it.
+			vscode.commands.registerCommand('arkestra.shared.openRules', (file?: unknown) => this.open('rules', typeof file === 'string' ? file : undefined)),
+			vscode.commands.registerCommand('arkestra.shared.openMemory', (file?: unknown) => this.open('memory', typeof file === 'string' ? file : undefined)),
+			// The right panel's field passes the line (true: it was new); the palette opens that field.
+			vscode.commands.registerCommand('arkestra.shared.remember', async (text?: unknown) => {
+				if (typeof text !== 'string') {
+					await vscode.commands.executeCommand('arkestra.details.remember');
+					return undefined;
 				}
+				return text.trim() ? (await this.remember([text.trim()], vscode.l10n.t('You'))).length > 0 : false;
 			}),
 		);
 	}
@@ -93,19 +95,22 @@ export class SharedContext implements vscode.Disposable {
 		}
 	}
 
-	private async open(kind: 'rules' | 'memory'): Promise<void> {
+	/** Opens a rules or memory file: the one named (the right panel's rows), else the palette's pick. */
+	private async open(kind: 'rules' | 'memory', key?: string): Promise<void> {
 		const f = this.files();
 		const items = kind === 'rules'
 			? [
-				...(f.projectRules ? [{ label: vscode.l10n.t('Project rules (.arkestra/rules.md)'), detail: vscode.l10n.t('Only on this machine'), file: f.projectRules }] : []),
-				...(f.agentsMd ? [{ label: vscode.l10n.t('Project rules (AGENTS.md)'), detail: vscode.l10n.t('In the repository, shared with the team'), file: f.agentsMd }] : []),
-				{ label: vscode.l10n.t('My rules'), detail: vscode.l10n.t('Every project'), file: f.userRules },
+				...(f.projectRules ? [{ key: 'projectRules', label: vscode.l10n.t('Project rules (.arkestra/rules.md)'), detail: vscode.l10n.t('Only on this machine'), file: f.projectRules }] : []),
+				...(f.agentsMd ? [{ key: 'agentsMd', label: vscode.l10n.t('Project rules (AGENTS.md)'), detail: vscode.l10n.t('In the repository, shared with the team'), file: f.agentsMd }] : []),
+				{ key: 'userRules', label: vscode.l10n.t('My rules'), detail: vscode.l10n.t('Every project'), file: f.userRules },
 			]
 			: [
-				...(f.projectMemory ? [{ label: vscode.l10n.t('Project memory'), detail: f.projectMemory, file: f.projectMemory }] : []),
-				{ label: vscode.l10n.t('My memory'), detail: vscode.l10n.t('Every project'), file: f.userMemory },
+				...(f.projectMemory ? [{ key: 'projectMemory', label: vscode.l10n.t('Project memory'), detail: f.projectMemory, file: f.projectMemory }] : []),
+				{ key: 'userMemory', label: vscode.l10n.t('My memory'), detail: vscode.l10n.t('Every project'), file: f.userMemory },
 			];
-		const pick = items.length === 1 ? items[0] : await vscode.window.showQuickPick(items, { title: kind === 'rules' ? vscode.l10n.t('Shared rules') : vscode.l10n.t('Shared memory') });
+		const pick = key !== undefined
+			? items.find(i => i.key === key)
+			: items.length === 1 ? items[0] : await vscode.window.showQuickPick(items, { title: kind === 'rules' ? vscode.l10n.t('Shared rules') : vscode.l10n.t('Shared memory') });
 		if (!pick) {
 			return;
 		}

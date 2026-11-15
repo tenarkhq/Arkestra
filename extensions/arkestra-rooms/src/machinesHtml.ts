@@ -43,6 +43,21 @@ export interface MachinesStrings {
 	readonly removeAsk: string;
 	readonly removeYes: string;
 	readonly cancel: string;
+	/** The connection form (a new one from the header, an edit in the machine's card). */
+	readonly addConnection: string;
+	readonly host: string;
+	readonly hostHint: string;
+	readonly name: string;
+	readonly nameHint: string;
+	readonly folderField: string;
+	readonly folderHint: string;
+	readonly save: string;
+	/** The folder list of Open a folder on an SSH machine. */
+	readonly folderUp: string;
+	readonly terminalHere: string;
+	readonly readingFolders: string;
+	readonly noFolders: string;
+	readonly couldNotReadFolder: string;
 }
 
 /** What the page sends back. */
@@ -53,9 +68,14 @@ export type MachinesMessage =
 	| { type: 'refresh' }
 	| { type: 'reconnect'; machine: string }
 	| { type: 'openFolder'; machine: string }
-	| { type: 'edit'; machine: string }
 	| { type: 'remove'; machine: string }
-	| { type: 'connections' };
+	| { type: 'connections' }
+	/** The connection form: `machine` empty for a new one. */
+	| { type: 'saveConnection'; machine: string; host: string; name: string; folder: string }
+	| { type: 'hosts' }
+	/** The folder list: a folder's subfolders (empty `dir`: the default folder), a terminal in one. */
+	| { type: 'browse'; machine: string; dir: string }
+	| { type: 'terminalAt'; machine: string; dir: string };
 
 const ICONS = {
 	search: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg>',
@@ -172,6 +192,27 @@ export function machinesHtml(nonce: string, s: MachinesStrings, fonts?: PageFont
 	.go { font-size: 12px; color: var(--dim); white-space: nowrap; visibility: hidden; }
 	.row:hover .go, .row:focus-visible .go { visibility: visible; }
 	.empty { color: var(--mute); padding: 24px 2px; }
+	.cf { display: grid; gap: 10px; padding: 12px 14px; border-radius: 9px; border: 1px solid var(--line); background: var(--vscode-editorWidget-background, transparent); max-width: 560px; }
+	.cf label { display: grid; gap: 4px; }
+	.cf label > span { font-size: 12px; font-weight: 500; color: var(--mute); }
+	.cf small { color: var(--mute); font-size: 11.5px; line-height: 1.4; }
+	.cf input { font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--vscode-input-border, var(--line)); background: var(--vscode-input-background); color: var(--vscode-input-foreground, var(--fg)); outline: none; }
+	.cf input:focus { border-color: var(--vscode-focusBorder); }
+	.cf .bad input { border-color: var(--bad); }
+	.cf .ferr { color: var(--bad); font-size: 12px; }
+	.cf .row2 { display: flex; gap: 6px; justify-content: flex-end; }
+	.btn.pri { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: transparent; }
+	.btn.pri:hover { background: var(--vscode-button-hoverBackground, var(--vscode-button-background)); }
+	.m.adding { border-style: dashed; padding: 12px 14px; }
+	.m.adding h2 { font-size: 13.5px; font-weight: 600; margin: 0 0 10px; }
+	.fl { display: grid; gap: 2px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--line); max-width: 560px; }
+	.fl .here { display: flex; align-items: center; gap: 8px; padding: 2px 2px 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; min-width: 0; }
+	.fl .here code { flex: 1; min-width: 0; font-family: var(--vscode-editor-font-family, ui-monospace, monospace); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+	.fl .fo { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 5px 6px; border: 0; border-radius: 6px; background: transparent; cursor: pointer; font-size: 12.5px; color: var(--fg); }
+	.fl .fo:hover, .fl .fo:focus-visible { background: var(--hover); outline: none; }
+	.fl .fo svg { width: 13px; height: 13px; color: var(--dim); flex: none; }
+	.fl .fn { color: var(--mute); font-size: 12px; padding: 6px; }
+	.fl .fn.bad { color: var(--bad); }
 	@media (max-width: 560px) { .page { padding: 18px 16px 28px; } .row, .err, .note, .mi { padding-left: 14px; } .row .go { display: none; } .mh .host { display: none; } }
 </style></head><body>
 <div class="page">
@@ -179,6 +220,7 @@ export function machinesHtml(nonce: string, s: MachinesStrings, fonts?: PageFont
 		<div class="hd"><h1>${esc(s.title)}</h1><div class="sub">${esc(s.subtitle)}</div></div>
 		<div class="tools">
 			<button class="btn" id="refresh" title="${esc(s.refresh)}">${ICONS.refresh}<span>${esc(s.refresh)}</span></button>
+			<button class="btn" id="addConn"><span>+ ${esc(s.addConnection)}</span></button>
 			<button class="btn" id="connections">${ICONS.plug}<span>${esc(s.connections)}</span></button>
 		</div>
 	</header>
@@ -199,6 +241,11 @@ export function machinesHtml(nonce: string, s: MachinesStrings, fonts?: PageFont
 	const st = Object.assign({ agent: '', machine: '', query: '', folded: [] }, vscode.getState() || {});
 	// The machine whose Remove waits for its Yes; not kept across reloads.
 	let confirming = '';
+	// The connection form open (machine '' : a new one) with what is typed so far, kept across redraws.
+	let editing = null;
+	// The folder list of Open a folder on an SSH machine.
+	let browsing = null;
+	let hosts = [];
 	const list = document.getElementById('list');
 	const filters = document.getElementById('filters');
 	const q = document.getElementById('q');
@@ -246,6 +293,55 @@ export function machinesHtml(nonce: string, s: MachinesStrings, fonts?: PageFont
 		return r;
 	}
 
+	function connForm(id, title) {
+		const f = el('form', 'cf');
+		f.dataset.form = id;
+		f.noValidate = true;
+		if (title) { f.append(el('h2', '', title)); }
+		const field = (key, label, hint, placeholder, list) => {
+			const l = el('label', editing.field === key ? 'bad' : '');
+			l.append(el('span', '', label));
+			const i = el('input');
+			i.dataset.f = key;
+			i.value = editing[key] || '';
+			i.autocomplete = 'off';
+			i.spellcheck = false;
+			if (placeholder) { i.placeholder = placeholder; }
+			if (list) { i.setAttribute('list', 'sshHosts'); }
+			l.append(i, el('small', '', hint));
+			if (editing.field === key && editing.error) { l.append(el('small', 'ferr', editing.error)); }
+			return l;
+		};
+		f.append(field('host', S.host, S.hostHint, 'dev@server.example.com', true), field('name', S.name, S.nameHint), field('folder', S.folderField, S.folderHint, '~/projects/app'));
+		const dl = el('datalist'); dl.id = 'sshHosts';
+		for (const h of hosts) { const o = el('option'); o.value = h; dl.append(o); }
+		f.append(dl);
+		if (editing.error && !editing.field) { f.append(el('div', 'ferr', editing.error)); }
+		const row = el('div', 'row2');
+		const cancel = el('button', 'btn', S.cancel); cancel.type = 'button'; cancel.dataset.act = 'formCancel'; cancel.dataset.id = id;
+		const save = el('button', 'btn pri', S.save); save.type = 'submit'; save.disabled = !!editing.busy;
+		row.append(cancel, save);
+		f.append(row);
+		return f;
+	}
+
+	function folderList(m) {
+		const box = el('div', 'fl');
+		const here = el('div', 'here');
+		here.append(icon('folder'), el('code', '', browsing.dir || m.folder));
+		const go = el('button', 'btn pri', S.terminalHere); go.dataset.act = 'terminalHere'; go.dataset.id = m.id; go.disabled = !browsing.dir;
+		const cancel = el('button', 'btn', S.cancel); cancel.dataset.act = 'browseCancel'; cancel.dataset.id = m.id;
+		here.append(go, cancel);
+		box.append(here);
+		const item = (dir, label) => { const b = el('button', 'fo'); b.dataset.act = 'browseTo'; b.dataset.id = m.id; b.dataset.dir = dir; b.append(icon('folder'), el('span', '', label)); return b; };
+		if (browsing.loading) { box.append(el('div', 'fn', S.readingFolders)); return box; }
+		if (browsing.parent) { box.append(item(browsing.parent, S.folderUp)); }
+		if (browsing.error) { box.append(el('div', 'fn bad', S.couldNotReadFolder.replace('{0}', browsing.error))); }
+		else if (!browsing.folders.length) { box.append(el('div', 'fn', S.noFolders)); }
+		for (const d of browsing.folders) { box.append(item(d, d.replace(/\\/+$/, '').split('/').pop() || d)); }
+		return box;
+	}
+
 	function machine(m) {
 		const open = !st.folded.includes(m.id);
 		const box = el('section', 'm' + (open ? ' open' : ''));
@@ -284,7 +380,11 @@ export function machinesHtml(nonce: string, s: MachinesStrings, fonts?: PageFont
 		}
 		info.append(facts);
 		const button = (act, label, cls) => { const b = el('button', 'btn' + (cls ? ' ' + cls : ''), label); b.dataset.act = act; b.dataset.id = m.id; return b; };
-		if (confirming === m.id) {
+		if (editing && editing.id === m.id) {
+			info.append(connForm(m.id));
+		} else if (browsing && browsing.id === m.id) {
+			info.append(folderList(m));
+		} else if (confirming === m.id) {
 			const ask = el('div', 'confirm');
 			ask.append(el('span', '', S.removeAsk.replace('{0}', m.name)), button('removeYes', S.removeYes, 'danger'), button('cancel', S.cancel));
 			info.append(ask);
@@ -321,10 +421,41 @@ export function machinesHtml(nonce: string, s: MachinesStrings, fonts?: PageFont
 			if (m.state === 'idle' && canList(m.connection) && !st.folded.includes(m.id) && !asked.has(m.id)) { asked.add(m.id); post({ type: 'load', machine: m.id }); }
 		}
 		const a = document.activeElement;
-		const focused = a && a.dataset ? (a.dataset.act ? '[data-act="' + CSS.escape(a.dataset.act) + '"][data-id="' + CSS.escape(a.dataset.id) + '"]' : a.dataset.key ? '[data-key="' + CSS.escape(a.dataset.key) + '"]' : a.dataset.machine ? '[data-machine="' + CSS.escape(a.dataset.machine) + '"]' : '') : '';
-		list.replaceChildren(...visible.map(machine));
-		if (focused) { list.querySelector(focused)?.focus(); }
+		const inForm = a && a.dataset && a.dataset.f && a.closest('[data-form]');
+		const focused = inForm ? '[data-form="' + CSS.escape(inForm.dataset.form) + '"] [data-f="' + CSS.escape(a.dataset.f) + '"]'
+			: a && a.dataset ? (a.dataset.act ? '[data-act="' + CSS.escape(a.dataset.act) + '"][data-id="' + CSS.escape(a.dataset.id) + '"]' + (a.dataset.dir ? '[data-dir="' + CSS.escape(a.dataset.dir) + '"]' : '') : a.dataset.key ? '[data-key="' + CSS.escape(a.dataset.key) + '"]' : a.dataset.machine ? '[data-machine="' + CSS.escape(a.dataset.machine) + '"]' : '') : '';
+		const caret = inForm ? [a.selectionStart, a.selectionEnd] : null;
+		const cards = visible.map(machine);
+		if (editing && editing.id === '') {
+			const add = el('section', 'm adding');
+			add.append(connForm('', S.addConnection));
+			cards.unshift(add);
+		}
+		list.replaceChildren(...cards);
+		if (focused) { const n = list.querySelector(focused); if (n) { n.focus(); if (caret && n.setSelectionRange) { try { n.setSelectionRange(caret[0], caret[1]); } catch { /* not a text field */ } } } }
 	}
+
+	function openForm(id, m) {
+		editing = id ? { id, host: m.host, name: m.name, folder: m.setFolder || '' } : { id: '', host: '', name: '', folder: '' };
+		confirming = '';
+		browsing = null;
+		if (!hosts.length) { post({ type: 'hosts' }); }
+		draw();
+		const first = list.querySelector('[data-form="' + CSS.escape(id) + '"] input');
+		if (first) { first.focus(); }
+	}
+
+	list.addEventListener('input', e => { const f = e.target.dataset && e.target.dataset.f; if (f && editing) { editing[f] = e.target.value; } });
+	list.addEventListener('submit', e => {
+		e.preventDefault();
+		if (!editing || editing.busy) { return; }
+		editing.busy = true;
+		editing.error = '';
+		editing.field = '';
+		draw();
+		post({ type: 'saveConnection', machine: editing.id, host: editing.host || '', name: editing.name || '', folder: editing.folder || '' });
+	});
+	list.addEventListener('keydown', e => { if (e.key === 'Escape' && editing && e.target.closest('[data-form]')) { e.preventDefault(); editing = null; draw(); } });
 
 	function toggle(id) {
 		const i = st.folded.indexOf(id);
@@ -334,17 +465,25 @@ export function machinesHtml(nonce: string, s: MachinesStrings, fonts?: PageFont
 	}
 
 	document.addEventListener('click', e => {
-		const t = e.target.closest('[data-act], [data-group], [data-machine], [data-key], #refresh, #connections');
+		const t = e.target.closest('[data-act], [data-group], [data-machine], [data-key], #refresh, #connections, #addConn');
 		if (!t) { return; }
 		if (t.dataset.act) {
 			const id = t.dataset.id, act = t.dataset.act;
+			const m = model.machines.find(x => x.id === id);
 			if (act === 'reconnect') { asked.delete(id); post({ type: 'reconnect', machine: id }); }
-			else if (act === 'remove') { confirming = id; draw(); list.querySelector('[data-act="cancel"]')?.focus(); }
+			else if (act === 'remove') { confirming = id; editing = null; browsing = null; draw(); list.querySelector('[data-act="cancel"]')?.focus(); }
 			else if (act === 'cancel') { confirming = ''; draw(); }
 			else if (act === 'removeYes') { confirming = ''; draw(); post({ type: 'remove', machine: id }); }
+			else if (act === 'edit' && m) { openForm(id, m); }
+			else if (act === 'formCancel') { editing = null; draw(); }
+			else if (act === 'openFolder' && m && !m.local) { browsing = { id, dir: '', folders: [], loading: true }; editing = null; confirming = ''; draw(); post({ type: 'browse', machine: id, dir: '' }); }
+			else if (act === 'browseTo') { browsing = { id, dir: t.dataset.dir, folders: [], loading: true }; draw(); list.querySelector('[data-act="browseCancel"]')?.focus(); post({ type: 'browse', machine: id, dir: t.dataset.dir }); }
+			else if (act === 'browseCancel') { browsing = null; draw(); }
+			else if (act === 'terminalHere' && browsing && browsing.dir) { post({ type: 'terminalAt', machine: id, dir: browsing.dir }); browsing = null; draw(); }
 			else { post({ type: act, machine: id }); }
 			return;
 		}
+		if (t.id === 'addConn') { openForm('', null); return; }
 		if (t.id === 'refresh') { asked.clear(); post({ type: 'refresh' }); return; }
 		if (t.id === 'connections') { post({ type: 'connections' }); return; }
 		if (t.dataset.group) { st[t.dataset.group] = t.dataset.value; save(); draw(); return; }
@@ -361,8 +500,19 @@ export function machinesHtml(nonce: string, s: MachinesStrings, fonts?: PageFont
 		if (m && m.type === 'model') {
 			model = m.model;
 			if (confirming && !model.machines.some(x => x.id === confirming && x.configured)) { confirming = ''; }
+			if (editing && editing.id && !model.machines.some(x => x.id === editing.id && x.configured)) { editing = null; }
+			if (browsing && !model.machines.some(x => x.id === browsing.id)) { browsing = null; }
 			if (m.reset) { asked.clear(); }
 			if (st.machine && !model.machines.some(x => x.id === st.machine)) { st.machine = ''; save(); }
+			draw();
+		} else if (m && m.type === 'saved' && editing && editing.id === m.machine) {
+			if (m.error) { editing.busy = false; editing.error = m.error; editing.field = m.field || ''; draw(); }
+			else { editing = null; draw(); }
+		} else if (m && m.type === 'hosts') {
+			hosts = m.hosts || [];
+			if (editing) { draw(); }
+		} else if (m && m.type === 'folders' && browsing && browsing.id === m.machine && (!browsing.dir || browsing.dir === m.dir)) {
+			browsing = { id: m.machine, dir: m.dir, parent: m.parent || '', folders: m.folders || [], error: m.error || '', loading: false };
 			draw();
 		}
 	});

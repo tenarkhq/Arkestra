@@ -132,6 +132,8 @@ export interface PageMachine {
 	readonly configured: boolean;
 	/** Its default folder, resolved on its home once a check told it. */
 	readonly folder: string;
+	/** The folder as the connection has it (empty: the home folder), for the page's edit form. */
+	readonly setFolder: string;
 	readonly connection: PageConnection;
 	/** When it was checked last (relative); empty for this machine and before the first answer. */
 	readonly checked: string;
@@ -286,6 +288,7 @@ export function machinesModel(input: {
 			return {
 				id: m.id, name: m.name, host: m.host, local, configured: m.configured,
 				folder: local ? input.localFolder : defaultFolder(m.folder, home),
+				setFolder: m.folder ?? '',
 				connection: connectionState(local, check),
 				checked: !local && check?.at ? relativeTime(new Date(check.at).toISOString(), input.now, input.language) : '',
 				counts, state, errors, sessions,

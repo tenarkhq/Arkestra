@@ -18,7 +18,19 @@ export interface Readiness {
 
 export interface ReadinessAction {
 	readonly title: string;
+	/** A line under the title in the page's popover. */
+	readonly detail?: string;
+	/** The palette's way (and the way for an action without `secret`). */
 	run(): Thenable<unknown> | Promise<unknown>;
+	/**
+	 * The action needs one secret (an API key): the page asks for it in its own password field
+	 * and hands it here, instead of `run` prompting at the top of the window.
+	 */
+	readonly secret?: {
+		readonly label: string;
+		readonly placeholder?: string;
+		save(value: string): Thenable<unknown> | Promise<unknown>;
+	};
 }
 
 export type AgentEvent =
