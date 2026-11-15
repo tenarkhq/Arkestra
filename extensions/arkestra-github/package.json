@@ -13,7 +13,8 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onWebviewPanel:arkestra.project"
+    "onWebviewPanel:arkestra.project",
+    "onWebviewPanel:arkestra.boards"
   ],
   "main": "./out/extension",
   "capabilities": {
@@ -69,6 +70,12 @@
       {
         "command": "arkestra.github.openBoard",
         "title": "%openBoard%",
+        "category": "Arkestra",
+        "icon": "$(project)"
+      },
+      {
+        "command": "arkestra.github.openBoards",
+        "title": "%openBoards%",
         "category": "Arkestra",
         "icon": "$(project)"
       },
