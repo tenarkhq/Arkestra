@@ -945,10 +945,13 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		const state = loaded.get(t.id)?.state;
 		const bridges = state ? roomBridges(state) : (t.adopted ?? []).map(a => bridgeOf.get(a.session)).filter((b): b is string => !!b);
 		const row = bridges.map(b => cloudRows.get(b)).find(Boolean);
-		const failed = t.failed || (state?.roster ?? []).some(id => !!activity.get(t.id, id).error && activity.get(t.id, id).state === 'idle');
+		const roster = state?.roster ?? [];
+		const failed = t.failed || roster.some(id => !!activity.get(t.id, id).error && activity.get(t.id, id).state === 'idle');
+		// Mid-turn and asking (a question, a permission): it waits for the user.
+		const asking = roster.some(id => activity.get(t.id, id).state === 'answering' && !!activity.get(t.id, id).work?.waiting);
 		const v = viewedStore();
 		const viewedAt = v.threads[t.id] ?? v.since;
-		return rowState({ running, failed, ...(t.planWaiting ? { planWaiting: true } : {}), ...(row ? { cloud: row } : {}), ...(t.answeredAt ? { answeredAt: t.answeredAt } : {}), viewedAt, selected });
+		return rowState({ running, failed, ...(t.planWaiting || asking ? { planWaiting: true } : {}), ...(row ? { cloud: row } : {}), ...(t.answeredAt ? { answeredAt: t.answeredAt } : {}), viewedAt, selected });
 	};
 	const sessionState = (session: ListedSession, running: boolean): RowState | undefined => {
 		const row = session.bridge ? cloudRows.get(session.bridge) : undefined;

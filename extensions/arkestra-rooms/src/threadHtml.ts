@@ -939,11 +939,17 @@ button.rr:hover { background: var(--hover); }
 .rr .n { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .rr .k { color: var(--dim); font-size: 12px; }
 .rr.mut { color: var(--mute); }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
-.dot.working { background: var(--accent); }
-.dot.waiting, .dot.queued { background: var(--warn); }
-.dot.error { background: var(--err); }
-.dot.done, .dot.idle { background: var(--ok); }
+/* The agents' dots, the same as the left bar's: runs (pulses), waits for you, stuck; idle and done are quiet. */
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; position: relative; opacity: .55; }
+.dot.working, .dot.waiting, .dot.error, .dot.queued { opacity: 1; }
+.dot.working { background: var(--vscode-charts-yellow, #d99a1e); }
+.dot.working::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: inherit; animation: dotpulse 1.6s ease-out infinite; }
+@keyframes dotpulse { from { transform: scale(1); opacity: .55; } to { transform: scale(2.4); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .dot.working::after { animation: none; } }
+.dot.queued { background: color-mix(in srgb, var(--vscode-charts-yellow, #d99a1e) 45%, transparent); }
+.dot.waiting { background: var(--vscode-charts-red, #d64545); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-charts-red, #d64545) 22%, transparent); }
+.dot.error { width: 11px; height: 11px; background: var(--vscode-charts-red, #d64545); }
+.dot.error::before { content: "!"; position: absolute; inset: 0; display: grid; place-items: center; font-size: 8.5px; font-weight: 700; color: var(--vscode-sideBar-background, #fff); line-height: 1; }
 .hr { height: 1px; background: var(--line); margin: 8px 0; }
 .bar { width: 44px; height: 5px; border-radius: 3px; background: var(--line2); overflow: hidden; flex: none; }
 .bar b { display: block; height: 100%; background: var(--accent); }
