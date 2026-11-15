@@ -9,6 +9,7 @@ import type { Agent, AgentChoices, AgentEvent, ExistingSession, Usage, Message, 
 import { ClaudeHistory, LIST_SCRIPT, claudeMeta, claudePiece, claudeToolLine, localHistory, localListing, localSessionPath, locateScript, parseListing, readScript } from './sessions';
 import { followLocal, followRemote } from './follow';
 import { CloudClient, CREDENTIALS_SCRIPT } from './cloud';
+import { watchLocal, watchRemote, type LiveState } from './liveStates';
 import { readFile as readFileAsync } from 'node:fs/promises';
 import * as nodePath from 'node:path';
 
@@ -288,6 +289,11 @@ export class ClaudeCodeAgent implements Agent {
 	}
 
 	/** The sessions Claude Code has on this agent's machine (AR39). */
+	/** Each session on this agent's machine as it starts and ends a turn, live. */
+	watchStates(onState: (s: LiveState) => void): { dispose(): void } {
+		return this.options.spawn ? watchRemote(this.options.spawn, onState) : watchLocal(homedir(), onState);
+	}
+
 	/** The claude.ai account's quota windows now, the ones the Claude app shows. */
 	quota(): Promise<readonly { readonly label: string; readonly usedPercent: number; readonly resetsAt?: string }[]> {
 		return this.cloud.usage();

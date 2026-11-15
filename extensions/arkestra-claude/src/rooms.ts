@@ -106,6 +106,8 @@ export interface Agent {
 	watchSession?(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string, meta?: SessionMeta, lines?: readonly string[]) => void, cursor?: string): { dispose(): void };
 	/** The account's quota windows now (the share used of a week, of five hours), as its vendor's app shows them; none: not known. */
 	quota?(): Promise<readonly { readonly label: string; readonly usedPercent: number; readonly resetsAt?: string }[]>;
+	/** Live: each session on its machine as it starts and ends a turn (its file's writes); none: not known live. */
+	watchStates?(onState: (s: { readonly id: string; readonly state: 'run' | 'idle'; readonly at: number }) => void): { dispose(): void };
 }
 
 /** What an agent can run with: its models, each with the reasoning efforts it knows (none: no effort choice). */

@@ -989,10 +989,47 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			void markViewed(viewing);
 		}
 	}));
+	// Live: each Claude session's turn as its file is written, on every machine (the left bar's dots).
+	const liveSessions = new Map<string, { state: 'run' | 'idle'; at: number }>();
+	const liveWatches = new Map<string, { dispose(): void }>();
+	const syncLiveWatches = () => {
+		const agents = registry.all().filter(a => a.watchStates);
+		for (const [id, w] of liveWatches) {
+			if (!agents.some(a => a.id === id)) {
+				w.dispose();
+				liveWatches.delete(id);
+			}
+		}
+		for (const agent of agents) {
+			if (!liveWatches.has(agent.id)) {
+				liveWatches.set(agent.id, agent.watchStates!(s => {
+					const was = liveSessions.get(s.id);
+					liveSessions.set(s.id, { state: s.state, at: s.at });
+					if (was?.state !== s.state) {
+						refreshThreadsLater();
+					}
+				}));
+			}
+		}
+	};
+	context.subscriptions.push(registry.onDidChange(syncLiveWatches), { dispose: () => liveWatches.forEach(w => w.dispose()) });
+	setTimeout(syncLiveWatches, 3000);
+	/** The cloud row as the dots read it: what the file shows live wins over the account's slower `running`. */
+	const withLive = (row: CloudSession | undefined, sessions: readonly string[]): { running: boolean; cloud?: CloudSession } => {
+		const known = sessions.map(id => liveSessions.get(id)).filter((l): l is { state: 'run' | 'idle'; at: number } => !!l);
+		const running = known.some(l => l.state === 'run');
+		if (!row) {
+			return { running };
+		}
+		return { running, cloud: known.length && row.worker === 'running' ? { ...row, worker: 'idle' } : row };
+	};
 	const threadState = (t: ThreadSummary, running: boolean, selected: boolean): RowState | undefined => {
 		const state = loaded.get(t.id)?.state;
 		const bridges = state ? roomBridges(state) : (t.adopted ?? []).map(a => bridgeOf.get(a.session)).filter((b): b is string => !!b);
-		const row = bridges.map(b => cloudRows.get(b)).find(Boolean);
+		const sessions = state ? Object.values(state.adopted ?? {}).map(a => a.session) : (t.adopted ?? []).map(a => a.session);
+		const seen = withLive(bridges.map(b => cloudRows.get(b)).find(Boolean), sessions);
+		const row = seen.cloud;
+		running ||= seen.running;
 		const roster = state?.roster ?? [];
 		const failed = t.failed || roster.some(id => !!activity.get(t.id, id).error && activity.get(t.id, id).state === 'idle');
 		// Mid-turn and asking (a question, a permission): it waits for the user.
@@ -1002,8 +1039,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		return rowState({ running, failed, ...(t.planWaiting || asking ? { planWaiting: true } : {}), ...(row ? { cloud: row } : {}), ...(t.answeredAt ? { answeredAt: t.answeredAt } : {}), viewedAt, selected });
 	};
 	const sessionState = (session: ListedSession, running: boolean): RowState | undefined => {
-		const row = session.bridge ? cloudRows.get(session.bridge) : undefined;
-		return rowState({ running, ...(row ? { cloud: row } : {}) });
+		const seen = withLive(session.bridge ? cloudRows.get(session.bridge) : undefined, [session.id]);
+		return rowState({ running: running || seen.running, ...(seen.cloud ? { cloud: seen.cloud } : {}) });
 	};
 
 	const controller = vscode.chat.createChatSessionItemController(ROOM_SCHEME, async () => {
