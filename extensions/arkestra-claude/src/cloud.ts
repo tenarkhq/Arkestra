@@ -7,6 +7,7 @@
  *  (a refresh would sign the CLI out), and waits while it is out of date.
  *--------------------------------------------------------------------------------------------*/
 
+import { randomUUID } from 'node:crypto';
 import type { CloudSession, CloudSessions } from './rooms';
 
 const BASE = 'https://api.anthropic.com';
@@ -77,6 +78,15 @@ export class CloudClient implements CloudSessions {
 		return out;
 	}
 
+	/**
+	 * A message into a session the Claude app runs now, as the phone sends it: that app's Claude
+	 * answers it there, and the answer reaches Arkestra through the session file like any other.
+	 */
+	async send(id: string, text: string): Promise<void> {
+		const payload = { uuid: randomUUID(), session_id: session(id), type: 'user', parent_tool_use_id: null, message: { role: 'user', content: text } };
+		await this.call('POST', `/v1/code/sessions/${session(id)}/events`, { events: [{ payload }] });
+	}
+
 	async archive(id: string): Promise<void> {
 		await this.call('POST', `/v1/code/sessions/${session(id)}/archive`, {}, [409]);
 	}
@@ -119,8 +129,11 @@ export class CloudClient implements CloudSessions {
 				return r;
 			}
 			const text = await r.text().catch(() => '');
-			const message = (() => { try { return (JSON.parse(text) as { error?: { message?: string } }).error?.message; } catch { return undefined; } })();
-			throw new Error(message ? `claude.ai: ${message}` : `claude.ai answered ${r.status}`);
+			const error = (() => { try { return (JSON.parse(text) as { error?: { message?: string; type?: string } }).error; } catch { return undefined; } })();
+			if (error?.type === 'session_not_active') {
+				throw new Error('The session is archived in the Claude app. Restore it there (or here) to go on.');
+			}
+			throw new Error(error?.message ? `claude.ai: ${error.message}` : `claude.ai answered ${r.status}`);
 		}
 	}
 }

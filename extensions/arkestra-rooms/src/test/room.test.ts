@@ -8,7 +8,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { AgentRegistry, type Agent, type Readiness, type TurnInput } from '../agent';
-import { AgentNotReadyError, Room, RoomOpener, followSessionName, newRoomState, type Message, type RoomState } from '../room';
+import { AgentNotReadyError, Room, RoomOpener, followSessionName, newRoomState, sentHere, type Message, type RoomState } from '../room';
 import { RoomStore } from '../store';
 
 function fakeAgent(id: string, opts: { readiness?: Readiness; gate?: Promise<void>; seen?: Message[][] } = {}): Agent & { aborted: boolean } {
@@ -143,4 +143,16 @@ test('a thread that continues a session carries the session\'s name until the us
 	state.renamed = true;
 	assert.equal(followSessionName(state, [{ id: sid, title: 'Renamed in the CLI' }]), false);
 	assert.equal(state.title, 'Arkestra');
+});
+
+test('a message sent into the session through the Claude app comes back once: tied to the one typed here', () => {
+	const at = '2026-11-15T14:00:00Z';
+	const msgs: Message[] = [
+		{ id: 'a', at, author: { kind: 'user', id: 'user', name: 'You' }, text: 'old' },
+		{ id: 'b', at, author: { kind: 'agent', id: 'claude', name: 'Claude' }, text: 'ok' },
+		{ id: 'c', at, author: { kind: 'user', id: 'user', name: 'You' }, text: 'mehet a build ' },
+	];
+	assert.equal(sentHere(msgs, 'mehet a build'), 2);
+	assert.equal(sentHere(msgs, 'something else'), -1);
+	assert.equal(sentHere([...msgs.slice(0, 2), { ...msgs[2], source: { agent: 'claude', entry: 'e1' } }], 'mehet a build'), -1, 'already tied');
 });

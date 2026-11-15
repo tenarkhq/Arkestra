@@ -379,6 +379,32 @@ export class ClaudeCodeAgent implements Agent {
 		});
 	}
 
+	/** The session's id in the claude.ai account (`cse_…`), from its file's end; none: the Claude app does not have it. */
+	private async bridgeOf(sessionId: string): Promise<string | undefined> {
+		const pick = (text: string) => [...text.matchAll(/"bridgeSessionId":"(cse_[A-Za-z0-9]+)"/g)].at(-1)?.[1];
+		try {
+			if (this.options.spawn) {
+				return pick(await this.shell(`${locateScript(sessionId)}\n[ -n "$f" ] && tail -c 131072 "$f" | grep -o -E '"bridgeSessionId":"cse_[A-Za-z0-9]+"' | tail -n 1; exit 0`, 15_000));
+			}
+			const file = await localSessionPath(homedir(), sessionId);
+			if (!file) {
+				return undefined;
+			}
+			const handle = await import('node:fs/promises').then(fs => fs.open(file, 'r'));
+			try {
+				const size = (await handle.stat()).size;
+				const from = Math.max(0, size - 131_072);
+				const buf = Buffer.alloc(size - from);
+				const { bytesRead } = await handle.read(buf, 0, buf.length, from);
+				return pick(buf.subarray(0, bytesRead).toString('utf8'));
+			} finally {
+				await handle.close();
+			}
+		} catch {
+			return undefined;
+		}
+	}
+
 	/** Which other app runs this session on the agent's machine now, if any (a failed check says none). */
 	private async runningApp(sessionId: string): Promise<string | undefined> {
 		if (process.platform === 'win32' && !this.options.spawn) {
@@ -423,10 +449,21 @@ export class ClaudeCodeAgent implements Agent {
 		}
 
 		// A session another app runs now (the desktop app, a terminal): a second process would fork it.
+		// One the Claude app has (its claude.ai id) gets the message through the account, as the phone
+		// sends it; the app's Claude answers, and the answer comes back through the session file.
 		if (session.sessionId) {
 			const app = await this.runningApp(session.sessionId);
 			if (app) {
-				throw openElsewhere(app, this.options.spawn ? this.where : undefined);
+				const bridge = await this.bridgeOf(session.sessionId);
+				if (!bridge) {
+					throw openElsewhere(app, this.options.spawn ? this.where : undefined);
+				}
+				for (const m of fresh.filter(m => m.author.kind === 'user' && m.text.trim())) {
+					await this.cloud.send(bridge, m.text.trim());
+				}
+				input.transcript.forEach(m => session.seen.add(m.id));
+				this.sessions.set(input.roomId, session);
+				return;
 			}
 		}
 

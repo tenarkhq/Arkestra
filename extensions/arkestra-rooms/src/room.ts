@@ -80,6 +80,18 @@ export function followSessionName(state: RoomState, sessions: readonly { readonl
 	return true;
 }
 
+/** The latest of the last few messages typed here (no session entry yet) with this text; -1: none. */
+export function sentHere(messages: readonly Message[], text: string): number {
+	const want = text.trim();
+	for (let i = messages.length - 1; i >= 0 && i >= messages.length - 12; i--) {
+		const m = messages[i];
+		if (m.author.kind === 'user' && !m.source && m.text.trim() === want) {
+			return i;
+		}
+	}
+	return -1;
+}
+
 /** An existing CLI session a thread continues (AR39). */
 export interface AdoptedSession {
 	readonly session: string;
@@ -226,6 +238,15 @@ export class Room {
 					this.state.messages[at] = { ...old, text: e.text };
 					changed = true;
 				}
+				continue;
+			}
+			// A message typed here and sent into the session through the Claude app's account comes
+			// back from the session file: it is the one already here, now tied to its entry.
+			const typed = e.role === 'user' && e.id ? sentHere(this.state.messages, e.text) : -1;
+			if (typed >= 0) {
+				this.state.messages[typed] = { ...this.state.messages[typed], source: { agent: agentId, entry: e.id! } };
+				index.set(e.id!, typed);
+				changed = true;
 				continue;
 			}
 			const message = sessionMessage({ id: agentId, name }, e, this.now);
