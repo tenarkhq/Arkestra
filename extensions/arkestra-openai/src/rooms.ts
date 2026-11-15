@@ -15,7 +15,13 @@ export interface Readiness {
 	readonly ready: boolean;
 	readonly reason?: string;
 	readonly fix?: 'install' | 'signIn' | 'quota' | 'retry';
-	readonly actions?: readonly { readonly title: string; run(): Thenable<unknown> | Promise<unknown> }[];
+	readonly actions?: readonly {
+		readonly title: string;
+		readonly detail?: string;
+		run(): Thenable<unknown> | Promise<unknown>;
+		/** One secret the page asks for in its own password field (an API key), handed to `save` instead of `run` prompting. */
+		readonly secret?: { readonly label: string; readonly placeholder?: string; save(value: string): Thenable<unknown> | Promise<unknown> };
+	}[];
 }
 
 export type AgentEvent =

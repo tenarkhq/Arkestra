@@ -158,10 +158,12 @@ export class ThreadViews implements vscode.Disposable {
 				}
 			}),
 			vscode.commands.registerCommand('arkestra.rooms.newChat', (arg?: unknown) => {
-				const opts = arg && typeof arg === 'object' ? arg as { project?: unknown; agents?: unknown } : {};
+				const opts = arg && typeof arg === 'object' ? arg as { project?: unknown; agents?: unknown; menu?: unknown } : {};
 				this.openNew({
 					...(typeof opts.project === 'string' ? { project: opts.project } : {}),
 					...(Array.isArray(opts.agents) ? { agents: opts.agents.filter((a): a is string => typeof a === 'string') } : {}),
+					// The palette's "Add an ACP agent": the page's own form above its card.
+					...(opts.menu === 'acp' ? { menu: 'acp' as const } : {}),
 				});
 			}),
 			host.onDidChangeThread(roomId => this.refreshRoom(roomId)),
@@ -219,20 +221,26 @@ export class ThreadViews implements vscode.Disposable {
 		this.activate(this.adopt(this.createPanel(column), roomId));
 	}
 
-	/** The new-chat page (one at a time): who works in the thread, then its first message. */
-	openNew(opts: { project?: string; agents?: readonly string[] } = {}): void {
-		const existing = [...this.views].find(v => !v.roomId);
-		if (existing) {
-			existing.project = opts.project;
-			existing.preselect = opts.agents;
-			existing.reset = !!opts.agents;
-			existing.panel.reveal();
-			this.schedule(existing);
-			return;
+	/** The new-chat page (one at a time): who works in the thread, then its first message; `menu`: with the new ACP agent's form open. */
+	openNew(opts: { project?: string; agents?: readonly string[]; menu?: 'acp' } = {}): void {
+		let view = [...this.views].find(v => !v.roomId);
+		if (view) {
+			view.project = opts.project;
+			view.preselect = opts.agents;
+			view.reset = !!opts.agents;
+			view.panel.reveal();
+			this.schedule(view);
+		} else {
+			view = this.adopt(this.createPanel(), undefined);
+			view.project = opts.project;
+			view.preselect = opts.agents;
 		}
-		const view = this.adopt(this.createPanel(), undefined);
-		view.project = opts.project;
-		view.preselect = opts.agents;
+		if (opts.menu === 'acp') {
+			const open = { anchor: 'card:+add', menu: 'acp' };
+			const target = view;
+			target.openMenu = open;
+			void target.panel.webview.postMessage({ type: 'openMenu', ...open }).then(delivered => { if (delivered && target.openMenu === open) { target.openMenu = undefined; } }, () => undefined);
+		}
 	}
 
 	/**
