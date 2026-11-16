@@ -35,6 +35,7 @@ export interface RemoteStrings {
 	readonly newLinkYes: string;
 	readonly cancel: string;
 	readonly linkNote: string;
+	readonly scan: string;
 	readonly threads: string;
 	readonly every: string;
 	readonly chosen: string;
@@ -51,6 +52,8 @@ export interface RemoteModel {
 	readonly threads: readonly { readonly id: string; readonly title: string; readonly on: boolean }[];
 	/** A line under the status (the link was copied, the relay is needed first). */
 	readonly note?: string;
+	/** The pairing link as a QR code (an SVG path, one unit per module) while it is on. */
+	readonly qr?: { readonly d: string; readonly size: number };
 }
 
 /** What is wrong with the relay fields: an address that is not http(s), no token when none is saved. */
@@ -126,6 +129,11 @@ export function remotePage(nonce: string, cspSource: string, t: RemoteStrings, f
 	.err:empty { display: none; }
 	.confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--bad) 9%, transparent); }
 	.confirm span { flex: 1 1 260px; }
+	/* The pairing QR: dark modules on white whatever the theme, so every phone camera reads it. */
+	.qr { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+	.qr svg { width: 168px; height: 168px; background: #fff; border-radius: 8px; flex: none; }
+	.qr svg path { fill: #000; }
+	.qr span { flex: 1 1 200px; color: var(--mute); font-size: 12.5px; line-height: 1.5; }
 	.opt { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 	.list { display: flex; flex-direction: column; gap: 2px; max-height: 40vh; overflow-y: auto; padding-left: 24px; }
 	.list label { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 12.5px; cursor: pointer; }
@@ -172,7 +180,14 @@ export function remotePage(nonce: string, cspSource: string, t: RemoteStrings, f
 		} else {
 			acts.append(button('start', S.turnOn, 'pri'));
 		}
-		phone.replaceChildren(el('h2', '', S.phone), state, acts, el('div', 'note', model.note || (model.on ? S.linkNote : '')));
+		const parts = [el('h2', '', S.phone), state];
+		if (model.on && model.qr) {
+			const NS = 'http://www.w3.org/2000/svg';
+			const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('viewBox', '0 0 ' + model.qr.size + ' ' + model.qr.size); svg.setAttribute('shape-rendering', 'crispEdges'); svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', S.scan);
+			const p = document.createElementNS(NS, 'path'); p.setAttribute('d', model.qr.d); svg.append(p);
+			const q = el('div', 'qr'); q.append(svg, el('span', '', S.scan)); parts.push(q);
+		}
+		phone.replaceChildren(...parts, acts, el('div', 'note', model.note || (model.on ? S.linkNote : '')));
 		const scope = $('scope');
 		const opt = (value, label) => { const l = el('label', 'opt'); const r = el('input'); r.type = 'radio'; r.name = 'scope'; r.value = value; r.checked = model.all === (value === 'all'); l.append(r, el('span', '', label)); return l; };
 		scope.replaceChildren(el('h2', '', S.threads), opt('all', S.every), opt('chosen', S.chosen.replace('{0}', String(model.threads.filter(x => x.on).length))));

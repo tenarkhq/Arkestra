@@ -105,3 +105,17 @@ test('the buffer keeps the newest events within its size', () => {
 	}
 	assert.deepEqual(relay.buffer.map(e => e.id), [4, 5]);
 });
+
+test('webhooks without a secret: refused with 503 (no GitHub App yet), the relay still serves', async () => {
+	const relay = createRelay({ secret: undefined, clients: () => readClients({ [TOKEN_A]: { repos: ['*'] } }) });
+	const server = createServer(relay.handler);
+	await new Promise(r => server.listen(0, '127.0.0.1', r));
+	try {
+		const base = `http://127.0.0.1:${server.address().port}`;
+		const res = await fetch(`${base}/github/webhook`, { method: 'POST', headers: { 'x-github-event': 'ping', 'x-hub-signature-256': 'sha256=00' }, body: '{}' });
+		assert.equal(res.status, 503);
+		assert.equal((await fetch(`${base}/healthz`)).status, 200);
+	} finally {
+		server.close();
+	}
+});

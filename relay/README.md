@@ -25,7 +25,20 @@ No dependencies: Node 18 or newer, three files (`server.mjs`, `remote.mjs`, and 
 | `POST /remote/<channel>/cmd` | An encrypted command from the phone; 503 while the IDE is offline. |
 | `GET /remote/app` | The phone page. |
 
-## Deploying on the edge server (owner step)
+## How Arkestra finds the relay
+
+The server that runs the relay leaves `~/.config/arkestra/relay.json` (mode 600) for the account
+Arkestra connects to over SSH: `{ "url": "https://tenark.dev/arkestra", "token": "<client token>" }`.
+Arkestra reads it on this machine and over every SSH machine it has, stores the token in the
+system's secret storage and connects; nobody copies a token by hand. The Remote Control page's
+relay form is only for a relay somewhere else. Without `WEBHOOK_SECRET` (no GitHub App yet) the
+relay still serves Remote Control; `POST /github/webhook` answers 503.
+
+On tenarkprd the relay runs as tenark-claude's user service `arkestra-relay` (127.0.0.1:8787,
+`~/.local/share/arkestra-relay`, clients in `~/.config/arkestra-relay/clients.json`), and the
+edge reaches it through `arkestra-relay` (csorbar/tenark-edge-site) at `tenark.dev/arkestra/`.
+
+## Deploying on another edge server
 
 1. **Create the GitHub App** from `github-app.json`: replace `EDGE_HOST` with the edge
    server's name, then create the app (organization settings → Developer settings → GitHub
