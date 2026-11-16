@@ -133,3 +133,21 @@ test('the logic runs from its own source, as the page embeds it', () => {
 	const m = JSON.parse(JSON.stringify(model())) as BoardModel;
 	assert.deepEqual(again.groups(m, again.filter(again.rows(m), { status: '!done' }, ''), again.defaultGroup(m)).map(g => g.value), ['3.2.n', 'Binance', 'release candidate', '']);
 });
+
+test('the Table view shows GitHub\'s own table view columns in its order, the grouped Line too; sub-issue progress has its column', () => {
+	const T = tableLogic();
+	const withView: ProjectSnapshot = {
+		...snap,
+		items: snap.items.map((it, i) => i === 0 ? { ...it, subIssues: { done: 1, total: 2 } } : it),
+		tableView: [
+			{ id: 'T', dataType: 'TITLE' }, { id: 'LB', dataType: 'LABELS' }, { id: 'S', dataType: 'SINGLE_SELECT' }, { id: 'SP', dataType: 'SUB_ISSUES_PROGRESS' },
+			{ id: 'PR', dataType: 'LINKED_PULL_REQUESTS' }, { id: 'L', dataType: 'SINGLE_SELECT' }, { id: 'V', dataType: 'SINGLE_SELECT' }, { id: 'R', dataType: 'SINGLE_SELECT' },
+			{ id: 'EM', dataType: 'TEXT' }, { id: 'E', dataType: 'TEXT' }, { id: 'X', dataType: 'TRACKS' },
+		],
+	};
+	const m = model({ snapshot: withView });
+	assert.deepEqual(m.viewColumns, ['title', 'labels', 'status', 'subissues', 'pr', 'f:L', 'f:V', 'f:R', 'f:EM', 'f:E']);
+	assert.deepEqual(T.visible(m, null, 'f:L').map(c => c.name), ['#', 'Title', 'Labels', 'Status', 'Sub-issues', 'PR', 'Line', 'Végrehajtó', 'Reviewer agent', 'Executor modell', 'Előfeltétel']);
+	const row = T.rows(m).find(r => r.card.subIssues)!;
+	assert.equal(T.cell(m, row, 'subissues').text, '1/2 · 50%');
+});

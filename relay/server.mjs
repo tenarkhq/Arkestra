@@ -121,6 +121,10 @@ export function createRelay(options) {
 					return;
 				}
 				const body = Buffer.concat(chunks);
+				if (!options.secret) {
+					// No GitHub App yet: Remote Control works without one, its webhooks wait.
+					return json(res, 503, { error: 'no webhook secret' });
+				}
 				if (!validSignature(options.secret, body, req.headers['x-hub-signature-256'])) {
 					return json(res, 401, { error: 'bad signature' });
 				}
@@ -182,8 +186,8 @@ export function createRelay(options) {
 function main() {
 	const secret = process.env.WEBHOOK_SECRET;
 	const file = process.env.RELAY_CLIENTS_FILE;
-	if (!secret || !file) {
-		console.error('WEBHOOK_SECRET and RELAY_CLIENTS_FILE are required');
+	if (!file) {
+		console.error('RELAY_CLIENTS_FILE is required (WEBHOOK_SECRET too, once the GitHub App exists)');
 		process.exit(2);
 	}
 	let clients = readClients(JSON.parse(readFileSync(file, 'utf8')));

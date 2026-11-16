@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { agentGroups, groupOrder, machineCount, sessionRowId, threadGroup, uniqueSessions, type AgentListing, type GroupItem } from '../leftBar';
+import { agentGroups, groupOrder, machineCount, sessionRowId, threadGroup, uniqueSessions, type AgentListing, type GroupItem, rowState } from '../leftBar';
 import { layoutThreads } from '../sections';
 import type { ListedSession } from '../sessionHome';
 import type { ThreadSummary } from '../threads';
@@ -101,4 +101,90 @@ test('running: a busy thread, or a session whose file changed in the last two mi
 	const listings: AgentListing[] = [{ agentId: 'codex@tenark-codex', sessions: [session('live', 'Live', 1), session('idle', 'Idle', 3)] }];
 	const out = groups([thread('Busy', { roster: ['codex'] })], listings, { busy: id => id === 'Busy' });
 	assert.deepEqual(out[0].items.map(i => [titles([i])[0], i.running]), [['Live', true], ['Idle', false], ['Busy', true]]);
+});
+
+test('a thread outside the agent groups knows its agent and machine: its continued session first, else its only agent', async () => {
+	const { threadMachine } = await import('../leftBar');
+	const t = (roster: string[], adopted?: { agent: string; session: string }[]) => ({ id: 'x', title: 'x', pinned: false, archived: false, lastAt: '', agents: roster.length, roster, ...(adopted ? { adopted } : {}) });
+	assert.deepEqual([threadGroup(t(['claude@tenark-claude'], [{ agent: 'claude@tenark-claude', session: 's' }])), threadMachine(t(['claude@tenark-claude'], [{ agent: 'claude@tenark-claude', session: 's' }]))], ['claude', 'tenark-claude']);
+	assert.deepEqual([threadGroup(t(['codex'])), threadMachine(t(['codex']))], ['codex', 'local']);
+	assert.deepEqual([threadGroup(t(['claude', 'codex'])), threadMachine(t(['claude', 'codex']))], ['several', undefined]);
+});
+
+test('the status dot: waiting for you beats stuck, stuck beats running; done only for an answer not seen', () => {
+	assert.equal(rowState({ running: true, cloud: { worker: 'requires_action' } }), 'wait');
+	assert.equal(rowState({ running: false, planWaiting: true }), 'wait');
+	assert.equal(rowState({ running: true, failed: true }), 'err');
+	assert.equal(rowState({ running: false, cloud: { worker: 'running' } }), 'run');
+	assert.equal(rowState({ running: false, cloud: { worker: 'idle', unread: true } }), 'done');
+	assert.equal(rowState({ running: false, cloud: { worker: 'idle', unread: true }, selected: true }), undefined, 'the open thread is being seen');
+	assert.equal(rowState({ running: false, answeredAt: '2026-11-15T14:00:00Z', viewedAt: '2026-11-15T13:00:00Z' }), 'done');
+	assert.equal(rowState({ running: false, answeredAt: '2026-11-15T12:00:00Z', viewedAt: '2026-11-15T13:00:00Z' }), undefined);
+	assert.equal(rowState({ running: false, cloud: { worker: 'idle' }, answeredAt: '2026-11-15T14:00:00Z', viewedAt: '2026-11-15T13:00:00Z' }), undefined, 'the Claude app\'s account knows its sessions');
+});
+
+// ---- sub-threads ----------------------------------------------------------------------------
+import { learnHosts, nestRows, parentOf, sessionFamily, starters, threadFamily, type Family } from '../leftBar';
+
+interface Row { readonly key: string; readonly children?: readonly Row[] }
+const r = (key: string): Row => ({ key });
+const shape = (rows: readonly Row[]): string[] => rows.map(x => x.children?.length ? `${x.key}[${shape(x.children).join(',')}]` : x.key);
+const fam = (map: Record<string, { self: string; parent?: string }>) => (row: Row): Family | undefined => {
+	const f = map[row.key];
+	return f ? { self: [f.self], ...(f.parent ? { parent: f.parent } : {}) } : undefined;
+};
+
+test('sub-threads: a started thread shows under its starter, in the order listed', () => {
+	const f = fam({ a: { self: 'claude\nA' }, b: { self: 'claude\nB', parent: 'claude\nA' }, c: { self: 'claude\nC', parent: 'claude\nA' }, d: { self: 'claude\nD' } });
+	const out = nestRows([{ rows: [r('b'), r('c'), r('a'), r('d')] }], f);
+	assert.deepEqual(shape(out[0]), ['a[b,c]', 'd']);
+});
+
+test('sub-threads: in a section, in Pinned and across lists alike; the starter keeps its place', () => {
+	const f = fam({ p: { self: 'claude\nP' }, k: { self: 'claude\nK', parent: 'claude\nP' }, s: { self: 'codex\nS' }, t: { self: 'codex\nT', parent: 'codex\nS' } });
+	// p is in a section, its sub-thread in the agent list; s in Pinned, its sub-thread in Archived.
+	const out = nestRows([{ rows: [r('s')] }, { rows: [r('p')] }, { rows: [r('k')] }, { rows: [r('t')] }], f);
+	assert.deepEqual(out.map(shape), [['s[t]'], ['p[k]'], [], []]);
+});
+
+test('sub-threads: nested twice, a starter that does not show leaves the row where it is, a loop stays flat', () => {
+	const f = fam({ a: { self: 'x\nA' }, b: { self: 'x\nB', parent: 'x\nA' }, c: { self: 'x\nC', parent: 'x\nB' }, o: { self: 'x\nO', parent: 'x\nGONE' }, l1: { self: 'x\nL1', parent: 'x\nL2' }, l2: { self: 'x\nL2', parent: 'x\nL1' } });
+	const out = nestRows([{ rows: [r('c'), r('b'), r('a'), r('o'), r('l1'), r('l2')] }], f);
+	assert.deepEqual(shape(out[0]), ['a[b[c]]', 'o', 'l1', 'l2']);
+});
+
+test('sub-threads: a starter under "Show older" with a recent sub-thread moves up, in that sub-thread\'s place', () => {
+	const f = fam({ new1: { self: 'x\nN1' }, kid: { self: 'x\nK', parent: 'x\nOLD' }, new2: { self: 'x\nN2' }, old: { self: 'x\nOLD' }, old2: { self: 'x\nO2' } });
+	const out = nestRows([{ rows: [r('new1'), r('kid'), r('new2')] }, { rows: [r('old'), r('old2')], recent: 0 }], f);
+	assert.deepEqual(out.map(shape), [['new1', 'old[kid]', 'new2'], ['old2']]);
+});
+
+test('sub-threads: nothing started anything: the lists as they were', () => {
+	const out = nestRows([{ rows: [r('a'), r('b')] }, { rows: [r('c')], recent: 0 }], () => undefined);
+	assert.deepEqual(out.map(shape), [['a', 'b'], ['c']]);
+});
+
+test('sub-threads: Codex names the parent thread; a Claude linked session its starter\'s desktop-app id', () => {
+	const listings: AgentListing[] = [
+		{ agentId: 'codex', sessions: [session('t1', 'main', 1), session('t2', 'explorer', 1, { parent: 't1' })] },
+		{ agentId: 'claude@tenarkprd', sessions: [session('p1', 'parent', 5, { host: 'local_aaa' }), session('c1', 'child', 2, { parentHost: 'local_aaa' }), session('c2', 'orphan', 2, { parentHost: 'local_zzz' })] },
+	];
+	assert.equal(parentOf(listings[0].sessions[1], {}, listings), 't1');
+	assert.equal(parentOf(listings[1].sessions[1], {}, listings), 'p1');
+	assert.equal(parentOf(listings[1].sessions[2], {}, listings), undefined);
+	// Learned once while the parent ran: it still resolves after the app closed it.
+	assert.equal(parentOf(listings[1].sessions[2], { local_zzz: 'p9' }, listings), 'p9');
+	const started = starters(listings, {});
+	assert.deepEqual(sessionFamily('codex', 't2', started), { self: ['codex\nt2'], parent: 'codex\nt1' });
+	assert.deepEqual(sessionFamily('claude@tenarkprd', 'c1', started), { self: ['claude\nc1'], parent: 'claude\np1' });
+	// A thread continuing a session takes that session's starter.
+	assert.deepEqual(threadFamily(thread('room', { adopted: [{ agent: 'claude@tenarkprd', session: 'c1' }] } as Partial<ThreadSummary>), started), { self: ['claude\nc1'], parent: 'claude\np1' });
+});
+
+test('sub-threads: the desktop-app ids are learned and kept, the same map when nothing is new', () => {
+	const listings: AgentListing[] = [{ agentId: 'claude', sessions: [session('p1', 'parent', 5, { host: 'local_aaa' }), session('x', 'plain', 5)] }];
+	const once = learnHosts({}, listings);
+	assert.deepEqual(once, { local_aaa: 'p1' });
+	assert.equal(learnHosts(once, listings), once);
+	assert.deepEqual(learnHosts({ local_old: 'o' }, listings), { local_old: 'o', local_aaa: 'p1' });
 });

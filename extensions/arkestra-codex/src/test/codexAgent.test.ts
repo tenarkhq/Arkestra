@@ -8,7 +8,7 @@ import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process';
 import { appendFile, chmod, copyFile, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { CodexAgent, ROOM_PREAMBLE, startProblem, codexHistory, codexSessions, codexLimits, codexModels, codexPlan, codexUsage, codexWork, describeItem, modelOverride, type CodexAuth } from '../codexAgent';
+import { CodexAgent, ROOM_PREAMBLE, startProblem, codexHistory, codexSessions, codexLimits, codexModels, codexPlan, codexUsage, codexWork, describeItem, mergeSessions, modelOverride, type CodexAuth } from '../codexAgent';
 import type { AgentEvent, Message } from '../rooms';
 
 const FAKE = `#!/usr/bin/env node
@@ -354,7 +354,7 @@ test('a paginated thread\'s history (Codex 0.163: thread/read gives no turns) co
 			const history = await agent.sessionHistory('01a1e000-0000-7000-8000-00000000c0de');
 			assert.deepEqual(history.entries.map(e => [e.role, e.text]), [
 				['user', 'Add a health check endpoint.'],
-				['agent', 'I will look at the server first.\n\nAdded GET /health to src/server.ts.'],
+				['agent', 'I will look at the server first.\n\n<arkestra-step kind="command">Ran ls src</arkestra-step>\n\nAdded GET /health to src/server.ts.'],
 				['user', 'Thanks. A test for it too.'],
 				['agent', 'Added test/health.test.ts; it passes.'],
 			], remote ? 'over SSH' : 'here');
@@ -429,14 +429,14 @@ test('a turn hands over the rollout lines it wrote that add files (what Codex pr
 
 test('history and follow: the rollout\'s model and context fill, and its patch lines; older imports read once more', async () => {
 	const { agent, dir } = await setup();
-	assert.equal(agent.historyVersion, 2);
+	assert.equal(agent.historyVersion, 3);
 	const file = path.join(dir, path.basename(FIXTURE));
 	await copyFile(FIXTURE, file);
 	await appendFile(file, patchLine('c1', 'docs/a.md') + '\n' + JSON.stringify({ timestamp: '2026-11-14T10:20:00Z', type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { total_tokens: 99999 }, last_token_usage: { input_tokens: 40000, output_tokens: 1200, total_tokens: 41200 }, model_context_window: 258400 } } }) + '\n');
 	process.env.FAKE_ROLLOUT = file;
 	try {
 		const history = await agent.sessionHistory('01a1e000-0000-7000-8000-00000000c0de');
-		assert.deepEqual(history.meta, { model: 'gpt-5.5', context: 41200 });
+		assert.deepEqual(history.meta, { model: 'gpt-5.5', context: 41200, window: 258400 });
 		assert.deepEqual(history.lines?.map(l => JSON.parse(l).payload.call_id), ['c1']);
 		const got: { meta?: unknown; lines?: readonly string[] }[] = [];
 		await new Promise<void>((resolve, reject) => {
@@ -472,4 +472,17 @@ test('Codex that cannot start says so in plain words: not installed here, or on 
 	const missing = (_c: string, _a: string[], options: SpawnOptions) => nodeSpawn('sh', ['-c', 'echo "bash: codex: command not found" >&2; exit 127'], options);
 	const remote = new CodexAgent({ command: 'codex', sandbox: 'workspace-write', cwd: () => undefined, auth: async () => ({ mode: 'subscription' }), apiKeyHome: '~/.arkestra-codex', spawn: missing, identity: { id: 'codex@tenark-codex', name: 'Codex · tenark-codex', where: 'tenark-codex' } });
 	await assert.rejects(remote.turn({ roomId: 'r', transcript: [msg('user', 'user', 'hi')] }, () => { }, never()), /Codex is not installed on tenark-codex\. Install it there or choose another machine\./);
+});
+
+test('sub-agent threads: their parent thread, named as Codex names them; listed once when both lists hold them', () => {
+	const spawned = codexSessions({ data: [
+		{ id: 's1', preview: 'Explore the board views code', parentThreadId: 't1', agentNickname: 'Darwin', agentRole: 'explorer', updatedAt: 1700000400 },
+		{ id: 's2', preview: 'Write the webhook', parentThreadId: 't1', name: 'webhook worker', updatedAt: 1700000350 },
+		{ id: 's3', preview: 'Check the tests', parentThreadId: 't1', updatedAt: 1700000340 },
+	] });
+	assert.deepEqual(spawned.map(s => [s.id, s.title, s.parent]), [['s1', 'Darwin (explorer)', 't1'], ['s2', 'webhook worker', 't1'], ['s3', 'Check the tests', 't1']]);
+	// A plain thread keeps its first words as its title, with no parent.
+	const own = codexSessions({ data: [{ id: 't1', preview: 'board live refresh', name: 'ignored here', updatedAt: 1700000300 }, { id: 's1', preview: 'Explore the board views code', updatedAt: 1700000400 }] });
+	assert.deepEqual(own.map(s => [s.id, s.title, s.parent ?? '']), [['s1', 'Explore the board views code', ''], ['t1', 'board live refresh', '']]);
+	assert.deepEqual(mergeSessions(own, spawned).map(s => [s.id, s.parent ?? '']), [['s1', 't1'], ['s2', 't1'], ['s3', 't1'], ['t1', '']]);
 });

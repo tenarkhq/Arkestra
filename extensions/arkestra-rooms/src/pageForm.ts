@@ -201,6 +201,18 @@ function whenAttr(field: FormField): string {
 	return field.when ? ` data-when="${esc(JSON.stringify(field.when))}"` : '';
 }
 
+/** A label with `{@field}` filled in with the label of that field's chosen option. */
+export function fillLabel(spec: FormSpec, label: string): string {
+	return label.replace(/\{@([\w-]+)\}/g, (all, id: string) => {
+		const f = spec.fields.find(x => x.id === id);
+		if (f?.kind !== 'choice') {
+			return all;
+		}
+		const v = initial(f);
+		return f.options.find(o => o.value === v)?.label ?? all;
+	});
+}
+
 function fieldHtml(spec: FormSpec, field: FormField): string {
 	const id = `${spec.id}-${field.id}`;
 	const hint = field.hint ? `<small class="fh">${esc(field.hint)}</small>` : '';
@@ -216,7 +228,9 @@ function fieldHtml(spec: FormSpec, field: FormField): string {
 		}
 		const rows = field.options.map(o => {
 			const on = o.value === value;
-			return `<button type="button" class="fo${on ? ' on' : ''}" role="radio" aria-checked="${on}" data-value="${esc(o.value)}"><span class="fd"></span><span class="ml"><span class="mt">${esc(o.label)}</span>${o.detail ? `<small>${esc(o.detail)}</small>` : ''}</span></button>`;
+			// `{@first}` in a label: the name chosen in that field (the page keeps it current).
+			const tpl = /\{@[\w-]+\}/.test(o.label) ? ` data-tpl="${esc(o.label)}"` : '';
+			return `<button type="button" class="fo${on ? ' on' : ''}" role="radio" aria-checked="${on}" data-value="${esc(o.value)}"><span class="fd"></span><span class="ml"><span class="mt"${tpl}>${esc(fillLabel(spec, o.label))}</span>${o.detail ? `<small>${esc(o.detail)}</small>` : ''}</span></button>`;
 		}).join('');
 		return `<div class="ff" data-field="${esc(field.id)}" data-choice="${esc(value)}"${whenAttr(field)}><span class="fl">${esc(field.label)}</span><div class="fos" role="radiogroup" aria-label="${esc(field.label)}">${rows}</div>${hint}${err}</div>`;
 	}
@@ -290,6 +304,15 @@ function formValues(el) {
 }
 function formUpdate(el) {
 	const v = formValues(el);
+	// Labels that name another field's choice ({@first}): the name chosen there now.
+	const chosen = id => {
+		const f = el.querySelector('[data-field="' + CSS.escape(id) + '"]');
+		const sel = f && f.querySelector('select');
+		if (sel) { return sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : ''; }
+		const on = f && f.querySelector('.fo.on .mt');
+		return on ? on.textContent : '';
+	};
+	for (const m of el.querySelectorAll('[data-tpl]')) { m.textContent = m.dataset.tpl.replace(/\{@([\w-]+)\}/g, (all, id) => chosen(id) || all); }
 	const shown = new Set();
 	for (const f of el.querySelectorAll('[data-field], .fn')) {
 		let ok = true;

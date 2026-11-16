@@ -44,7 +44,7 @@ test('the history hands over the tool lines it read, the same here and over SSH,
 	await mkdir(dir, { recursive: true });
 	await writeFile(path.join(dir, `${SESSION}.jsonl`), LINES.join('\n') + '\n');
 	const here = await localHistory(home, SESSION);
-	assert.deepEqual(here.entries.map(e => e.text), ['make the page', 'Done: the page is published.']);
+	assert.deepEqual(here.entries.map(e => e.text), ['make the page', ['<arkestra-step kind="edit">Wrote report.html</arkestra-step>', '<arkestra-step kind="other">Published a page</arkestra-step>', '<arkestra-step kind="read">Read big.log</arkestra-step>', 'Done: the page is published.'].join('\n\n')]);
 	assert.deepEqual(here.lines, [LINES[1], LINES[3], LINES[4], LINES[5]]);
 
 	const fakeSpawn = (command: string, args: string[], options: SpawnOptions) => spawn(command, args, { ...options, env: { ...process.env, HOME: home } });

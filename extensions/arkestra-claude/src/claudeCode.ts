@@ -8,6 +8,11 @@ import { homedir } from 'node:os';
 import type { Agent, AgentChoices, AgentEvent, ExistingSession, Usage, Message, Readiness, SessionEntry, SessionHistory, SessionMeta, TurnInput, WorkUpdate } from './rooms';
 import { ClaudeHistory, LIST_SCRIPT, claudeMeta, claudePiece, claudeToolLine, localHistory, localListing, localSessionPath, locateScript, parseListing, readScript } from './sessions';
 import { followLocal, followRemote } from './follow';
+import { CloudClient, CREDENTIALS_SCRIPT } from './cloud';
+import { watchLocal, watchRemote, type LiveState } from './liveStates';
+import { parseWorktree, worktreeScript, type WorktreeChange } from './worktree';
+import { readFile as readFileAsync } from 'node:fs/promises';
+import * as nodePath from 'node:path';
 
 export type AuthMode = 'subscription' | 'apiKey';
 
@@ -194,6 +199,33 @@ export function startProblem(product: string, error: { code?: unknown; exitCode?
 }
 
 /**
+ * The script that prints the processes running a session (the id is checked before it gets
+ * here): Claude Code started with `--resume <id>`, `--resume=<id>`, `-r <id>` or `--session-id <id>`.
+ * A follow (`tail -F` of the session file) names the file, not the flag, so it never counts.
+ */
+export function runningScript(id: string): string {
+	if (!/^[0-9a-f-]{36}$/i.test(id)) {
+		throw new Error(`not a Claude session id: ${id}`);
+	}
+	return `ps -eo pid=,args= 2>/dev/null | grep -E -- '(--resume[= ]|--session-id[= ]|-r )${id}' | grep -v -F 'grep' | head -n 3 || true`;
+}
+
+/** Who else runs a session, from `runningScript`'s output: the Claude desktop app or another Claude Code; none: undefined. */
+export function runningElsewhere(out: string, id: string): string | undefined {
+	// Only `ps` lines (a pid, then the command) that name the session count.
+	const lines = out.split('\n').map(l => l.trim()).filter(l => /^\d+\s/.test(l) && l.includes(id));
+	if (!lines.length) {
+		return undefined;
+	}
+	return lines.some(l => /ccd-cli|Claude\.app|claude-code-vm|[\\/]Claude[\\/]claude-code[\\/]/.test(l)) ? 'the Claude desktop app' : 'another Claude Code';
+}
+
+/** The refusal when the session already runs in another app: a second Claude on it would write it apart. */
+export function openElsewhere(app: string, where?: string): Error {
+	return new Error(`This session is open in ${app}${where ? ` on ${where}` : ''}. Arkestra did not start a second Claude on it: the two would write the same session apart. Continue it there, or close it there first and send again.`);
+}
+
+/**
  * Claude Code's models (aliases for the latest of each) and its efforts, as `claude --help` lists them,
  * plus `ultracode` (`--effort ultracode`: a workflow on every task), which help does not list; not on Haiku.
  */
@@ -215,10 +247,14 @@ export class ClaudeCodeAgent implements Agent {
 	 * 2: messages sent while Claude worked, compactions as one line, the model and context fill.
 	 * 3: the tool lines too, for what Claude produced (AR26): threads read before get their artifacts.
 	 */
-	readonly historyVersion = 3;
+	readonly historyVersion = 5;
+
+	/** The claude.ai account's sessions, with the sign-in Claude Code keeps on this agent's machine. */
+	readonly cloud: CloudClient;
 
 	constructor(private readonly options: ClaudeCodeOptions) {
 		({ id: this.id, name: this.name, where: this.where } = options.identity ?? { id: 'claude', name: 'Claude', where: 'local' });
+		this.cloud = new CloudClient(() => this.credentials(), this.options.spawn ? this.where : 'this computer');
 	}
 
 	get detail(): string {
@@ -254,6 +290,31 @@ export class ClaudeCodeAgent implements Agent {
 	}
 
 	/** The sessions Claude Code has on this agent's machine (AR39). */
+	/** Each session on this agent's machine as it starts and ends a turn, live. */
+	/** What a session's folder on this agent's machine has changed (git), as the Claude app counts it. */
+	async worktreeChanges(cwd: string): Promise<readonly WorktreeChange[]> {
+		const script = worktreeScript(cwd);
+		const out = this.options.spawn ? await this.shell(script, 20_000) : await new Promise<string>(resolve => {
+			const child = nodeSpawn('sh', ['-c', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+			let text = '';
+			const timer = setTimeout(() => child.kill('SIGKILL'), 20_000);
+			child.stdout?.setEncoding('utf8');
+			child.stdout?.on('data', (c: string) => { text += c; });
+			child.on('error', () => { clearTimeout(timer); resolve(''); });
+			child.on('close', () => { clearTimeout(timer); resolve(text); });
+		});
+		return parseWorktree(out);
+	}
+
+	watchStates(onState: (s: LiveState) => void): { dispose(): void } {
+		return this.options.spawn ? watchRemote(this.options.spawn, onState) : watchLocal(homedir(), onState);
+	}
+
+	/** The claude.ai account's quota windows now, the ones the Claude app shows. */
+	quota(): Promise<readonly { readonly label: string; readonly usedPercent: number; readonly resetsAt?: string }[]> {
+		return this.cloud.usage();
+	}
+
 	async existingSessions(): Promise<readonly ExistingSession[]> {
 		return parseListing(this.options.spawn ? await this.shell(LIST_SCRIPT) : await localListing(homedir()));
 	}
@@ -303,6 +364,25 @@ export class ClaudeCodeAgent implements Agent {
 			: followLocal(() => localSessionPath(homedir(), sessionId), options);
 	}
 
+	/** Claude Code's credentials on the agent's machine: its file, else (macOS) its keychain item. */
+	private async credentials(): Promise<string> {
+		if (this.options.spawn) {
+			return this.shell(CREDENTIALS_SCRIPT, 15_000);
+		}
+		const file = await readFileAsync(nodePath.join(homedir(), '.claude', '.credentials.json'), 'utf8').catch(() => undefined);
+		if (file !== undefined || process.platform !== 'darwin') {
+			return file ?? '';
+		}
+		return new Promise<string>(resolve => {
+			const child = nodeSpawn('security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { stdio: ['ignore', 'pipe', 'ignore'] });
+			let text = '';
+			child.stdout?.setEncoding('utf8');
+			child.stdout?.on('data', (c: string) => { text += c; });
+			child.on('error', () => resolve(''));
+			child.on('close', () => resolve(text));
+		});
+	}
+
 	/** A POSIX script on the agent's machine (an SSH machine); resolves to its output. */
 	private shell(script: string, timeoutMs = 60_000): Promise<string> {
 		return new Promise((resolve, reject) => {
@@ -326,6 +406,53 @@ export class ClaudeCodeAgent implements Agent {
 		});
 	}
 
+	/** The session's id in the claude.ai account (`cse_…`), from its file's end; none: the Claude app does not have it. */
+	private async bridgeOf(sessionId: string): Promise<string | undefined> {
+		const pick = (text: string) => [...text.matchAll(/"bridgeSessionId":"(cse_[A-Za-z0-9]+)"/g)].at(-1)?.[1];
+		try {
+			if (this.options.spawn) {
+				return pick(await this.shell(`${locateScript(sessionId)}\n[ -n "$f" ] && tail -c 131072 "$f" | grep -o -E '"bridgeSessionId":"cse_[A-Za-z0-9]+"' | tail -n 1; exit 0`, 15_000));
+			}
+			const file = await localSessionPath(homedir(), sessionId);
+			if (!file) {
+				return undefined;
+			}
+			const handle = await import('node:fs/promises').then(fs => fs.open(file, 'r'));
+			try {
+				const size = (await handle.stat()).size;
+				const from = Math.max(0, size - 131_072);
+				const buf = Buffer.alloc(size - from);
+				const { bytesRead } = await handle.read(buf, 0, buf.length, from);
+				return pick(buf.subarray(0, bytesRead).toString('utf8'));
+			} finally {
+				await handle.close();
+			}
+		} catch {
+			return undefined;
+		}
+	}
+
+	/** Which other app runs this session on the agent's machine now, if any (a failed check says none). */
+	private async runningApp(sessionId: string): Promise<string | undefined> {
+		if (process.platform === 'win32' && !this.options.spawn) {
+			return undefined;
+		}
+		try {
+			const script = runningScript(sessionId);
+			const out = this.options.spawn ? await this.shell(script, 15_000) : await new Promise<string>(resolve => {
+				const child = nodeSpawn('sh', ['-c', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+				let text = '';
+				child.stdout?.setEncoding('utf8');
+				child.stdout?.on('data', (c: string) => { text += c; });
+				child.on('error', () => resolve(''));
+				child.on('close', () => resolve(text));
+			});
+			return runningElsewhere(out, sessionId);
+		} catch {
+			return undefined;
+		}
+	}
+
 	async turn(input: TurnInput, onEvent: (event: AgentEvent) => void, signal: AbortSignal): Promise<void> {
 		const session = this.sessions.get(input.roomId) ?? { seen: new Set<string>() };
 		const fresh = input.transcript.filter(m => !session.seen.has(m.id));
@@ -346,6 +473,25 @@ export class ClaudeCodeAgent implements Agent {
 		}
 		if (input.model || this.options.model) {
 			args.push('--model', input.model || this.options.model!);
+		}
+
+		// A session another app runs now (the desktop app, a terminal): a second process would fork it.
+		// One the Claude app has (its claude.ai id) gets the message through the account, as the phone
+		// sends it; the app's Claude answers, and the answer comes back through the session file.
+		if (session.sessionId) {
+			const app = await this.runningApp(session.sessionId);
+			if (app) {
+				const bridge = await this.bridgeOf(session.sessionId);
+				if (!bridge) {
+					throw openElsewhere(app, this.options.spawn ? this.where : undefined);
+				}
+				for (const m of fresh.filter(m => m.author.kind === 'user' && m.text.trim())) {
+					await this.cloud.send(bridge, m.text.trim());
+				}
+				input.transcript.forEach(m => session.seen.add(m.id));
+				this.sessions.set(input.roomId, session);
+				return;
+			}
 		}
 
 		const env = { ...process.env };

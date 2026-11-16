@@ -10,6 +10,7 @@ import { randomBytes } from 'node:crypto';
 import * as path from 'node:path';
 import { RemoteHost, newPairing, pairingLink, type Pairing, type RemoteRooms, type RemoteState } from './remote';
 import { remotePage, remoteThreads, statusLine, type RemoteModel, type RemoteStrings } from './remotePage';
+import { qrPath } from './qr';
 
 const STATE = 'arkestra.remote';
 const PAIRING = 'arkestra.remote.pairing';
@@ -55,6 +56,9 @@ export class RemoteControl implements vscode.Disposable {
 			vscode.commands.registerCommand('arkestra.remote.copyLink', () => this.copyLink()),
 			vscode.commands.registerCommand('arkestra.remote.toggleAll', () => this.save({ all: !this.saved.all })),
 			vscode.commands.registerCommand('arkestra.remote.menu', () => this.show()),
+			// The thread's own switch in the right panel (as the Claude app's Remote Control switch): this thread on the phone.
+			vscode.commands.registerCommand('arkestra.remote.threadState', (id: unknown) => typeof id === 'string' ? { on: this.saved.on && this.allowed(id) } : undefined),
+			vscode.commands.registerCommand('arkestra.remote.setThread', (id: unknown, on: unknown) => typeof id === 'string' ? this.setThread(id, on === true) : undefined),
 			vscode.window.registerWebviewPanelSerializer(VIEW, { deserializeWebviewPanel: async panel => this.adopt(panel) }),
 		);
 		if (this.saved.on) {
@@ -132,9 +136,11 @@ export class RemoteControl implements vscode.Disposable {
 		const s = this.saved;
 		const rooms = await this.roomsApi();
 		const list = rooms ? await rooms.threads().catch(() => []) : [];
+		const relay = s.on ? await this.relay.get() : undefined;
 		const model: RemoteModel = {
 			relayUrl: this.relay.url(), hasToken: await this.relay.hasToken(), on: s.on, state: this.state, all: s.all,
 			threads: remoteThreads(list, s.threads), ...(this.note ? { note: this.note } : {}),
+			...(relay ? { qr: qrPath(pairingLink(relay.url, await this.pairing())) } : {}),
 		};
 		void panel.webview.postMessage({ type: 'model', model: { ...model, status: statusLine(model, strings()) } });
 	}
@@ -150,6 +156,27 @@ export class RemoteControl implements vscode.Disposable {
 	}
 
 	private allowed = (id: string): boolean => this.saved.all || this.saved.threads.includes(id);
+
+	/** One thread on or off for the phone: on starts Remote Control if it was off; off with every thread shared keeps the others shared. */
+	private async setThread(id: string, on: boolean): Promise<void> {
+		const s = this.saved;
+		if (on) {
+			if (!s.all && !s.threads.includes(id)) {
+				await this.save({ threads: [...s.threads, id] });
+			}
+			if (!s.on) {
+				await this.start(); // without the relay it shows the page's relay fields
+			}
+			return;
+		}
+		if (s.all) {
+			const rooms = await this.roomsApi();
+			const others = rooms ? (await rooms.threads().catch(() => [])).map(t => t.id).filter(t => t !== id) : [];
+			await this.save({ all: false, threads: others });
+		} else {
+			await this.save({ threads: s.threads.filter(t => t !== id) });
+		}
+	}
 
 	private async pairing(fresh = false): Promise<Pairing> {
 		const stored = fresh ? undefined : await this.context.secrets.get(PAIRING);
@@ -190,7 +217,12 @@ export class RemoteControl implements vscode.Disposable {
 			return this.render();
 		}
 		this.host?.stop();
+		// The first time there is no phone yet: the page opens with the QR code to scan.
+		const first = !await this.context.secrets.get(PAIRING);
 		const pairing = await this.pairing();
+		if (first) {
+			this.show();
+		}
 		this.host = new RemoteHost({
 			relayUrl: relay.url, token: relay.token, pairing, rooms, allowed: this.allowed,
 			onState: s => {
@@ -286,6 +318,7 @@ function strings(): RemoteStrings {
 		newLinkAsk: vscode.l10n.t('Make a new pairing link? Phones with the old link lose access.'),
 		newLinkYes: vscode.l10n.t('Yes, new link'),
 		cancel: vscode.l10n.t('Cancel'),
+		scan: vscode.l10n.t('Scan it with your phone\'s camera: your threads open on the phone. Add the page to the home screen to keep it.'),
 		linkNote: vscode.l10n.t('Open the pairing link on your phone (send it to yourself, then add the page to the home screen). The link holds the key: whoever has it can read and write the threads shown.'),
 		threads: vscode.l10n.t('Which threads the phone sees'),
 		every: vscode.l10n.t('Every thread'),

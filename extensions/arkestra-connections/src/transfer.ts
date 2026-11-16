@@ -198,6 +198,16 @@ export async function upload(machine: Machine, localPaths: readonly string[], re
 	}
 }
 
+/** The absolute path of a remote folder (made if missing): `~/…` resolved by the remote shell. */
+export async function remoteFolder(machine: Machine, remoteDir: string, options: TransferOptions): Promise<string> {
+	const r = await runRemote(machine, `mkdir -p ${remotePath(remoteDir)} && cd ${remotePath(remoteDir)} && pwd`, options);
+	const dir = r.out.trim().split('\n').at(-1) ?? '';
+	if (!r.ok || !dir.startsWith('/')) {
+		throw new Error(r.err.trim().split('\n').at(-1) || 'the folder could not be made');
+	}
+	return dir;
+}
+
 /** The remote paths of uploaded items, quoted for the remote shell. */
 export function uploadedPaths(localPaths: readonly string[], remoteDir: string): string {
 	return localPaths.map(p => {

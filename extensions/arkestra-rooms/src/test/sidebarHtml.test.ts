@@ -61,3 +61,14 @@ test('a background refresh waits while the mouse is on the list or a menu is ope
 	assert.match(html, /if \(pending && !dragging && !editing && !menu && !hovering\) \{ pending = false; render\(\); \}/);
 	assert.match(html, /if \(!reopen\) \{ flush\(\); \}/, 'closing a menu shows a held refresh');
 });
+
+test('a row outside the agent groups shows its agent as a letter badge, the machine on the right; a status dot per state', () => {
+	const html = sidebarHtml('N', Object.fromEntries(keys.map(k => [k, k])) as unknown as SidebarStrings);
+	assert.ok(html.includes("const badge = el('i', 'av ag ' + r.agentKind"));
+	assert.ok(html.includes("const side = [r.agentKind ? '' : r.agent, r.machine].filter(Boolean).join(' · ');"));
+	for (const state of ['run', 'wait', 'err', 'done']) {
+		assert.ok(html.includes(`.st.${state} i`), state);
+	}
+	assert.ok(html.includes('.proj.closed .chev'), 'a section folds');
+	assert.ok(html.includes("ui.closed = Object.assign({}, ui.closed"), 'the fold is kept');
+});

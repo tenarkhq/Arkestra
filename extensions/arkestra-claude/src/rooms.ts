@@ -87,6 +87,8 @@ export interface Agent {
 	choices?(): Promise<AgentChoices>;
 	/** The sessions its CLI already has on its machine (AR39); an agent without it has none to offer. */
 	existingSessions?(): Promise<readonly ExistingSession[]>;
+	/** The sessions of the agent's claude.ai account (the desktop app's and the phone's list); none: it has none. */
+	readonly cloud?: CloudSessions;
 	/** The messages of one of those sessions. */
 	sessionHistory?(sessionId: string): Promise<readonly SessionEntry[] | SessionHistory>;
 	/** Goes up when the agent reads more out of its session files than before: older imports read again once. */
@@ -102,6 +104,12 @@ export interface Agent {
 	 * `lines`: the session file's raw lines behind them that hold tool uses, for the artifacts (AR26).
 	 */
 	watchSession?(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string, meta?: SessionMeta, lines?: readonly string[]) => void, cursor?: string): { dispose(): void };
+	/** The account's quota windows now (the share used of a week, of five hours), as its vendor's app shows them; none: not known. */
+	quota?(): Promise<readonly { readonly label: string; readonly usedPercent: number; readonly resetsAt?: string }[]>;
+	/** What a session's folder on the agent's machine has changed in git (files, added and removed lines; `?`: new), as the apps count it. */
+	worktreeChanges?(cwd: string): Promise<readonly { readonly path: string; readonly added?: number; readonly removed?: number; readonly status: 'M' | '?' }[]>;
+	/** Live: each session on its machine as it starts and ends a turn (its file's writes); none: not known live. */
+	watchStates?(onState: (s: { readonly id: string; readonly state: 'run' | 'idle'; readonly at: number; readonly doing?: string; readonly bg?: readonly { readonly id: string; readonly name: string; readonly since: string }[]; readonly done?: number }) => void): { dispose(): void };
 }
 
 /** What an agent can run with: its models, each with the reasoning efforts it knows (none: no effort choice). */
@@ -113,6 +121,14 @@ export interface ExistingSession {
 	readonly cwd?: string;
 	/** ISO time of its last activity. */
 	readonly updatedAt: string;
+	/** Its id in the claude.ai account (`cse_…`) when the desktop app or the phone has it too. */
+	readonly bridge?: string;
+	/** The session that started this one (a Codex sub-agent thread's parent thread), same CLI. */
+	readonly parent?: string;
+	/** Its id in the Claude desktop app (`local_…`), read while the session runs. */
+	readonly host?: string;
+	/** The desktop-app id (`local_…`) of the session that started this one (a linked session). */
+	readonly parentHost?: string;
 }
 
 /** A session's messages as read, and where the live follow goes on from. */
@@ -129,8 +145,10 @@ export interface SessionHistory {
 export interface SessionMeta {
 	/** The model id of the latest answer, for example `claude-opus-5-5`. */
 	readonly model?: string;
-	/** Tokens in the context at the latest model call (its window is not in the file). */
+	/** Tokens in the context at the latest model call. */
 	readonly context?: number;
+	/** The size of that context window, when the file tells it (Codex does). */
+	readonly window?: number;
 }
 
 /** One message of an existing session, as the thread shows it. */
@@ -171,3 +189,28 @@ export interface PermissionsApi {
 	readonly onDidChange: (listener: () => void) => { dispose(): void };
 }
 
+
+/** A session of the claude.ai account, as the desktop app and the phone list it. */
+export interface CloudSession {
+	readonly id: string;
+	readonly title: string;
+	readonly archived: boolean;
+	/** ISO time of its last activity, when known. */
+	readonly at?: string;
+	/** What its Claude does now: `running`, `idle`, or `requires_action` (it waits for the user). */
+	readonly worker?: string;
+	/** It has an answer the user has not seen in any app. */
+	readonly unread?: boolean;
+	/** How full its context is, as its Claude last reported it. */
+	readonly context?: { readonly used: number; readonly max: number };
+}
+
+/** The claude.ai account's sessions: archiving, restoring or renaming one there shows in every app. */
+export interface CloudSessions {
+	list(): Promise<readonly CloudSession[]>;
+	archive(id: string): Promise<void>;
+	unarchive(id: string): Promise<void>;
+	rename(id: string, title: string): Promise<void>;
+	/** Seen here: no app shows it as unread any more. */
+	markRead(id: string): Promise<void>;
+}

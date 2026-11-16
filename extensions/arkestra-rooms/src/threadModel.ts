@@ -25,7 +25,7 @@ export interface FoldItem {
 	readonly done?: boolean;
 }
 
-const TAGS = 'system-reminder|task-notification|command-name|command-message|command-args|command-contents|local-command-stdout|local-command-stderr|local-command-caveat|bash-input|bash-stdout|bash-stderr|user-prompt-submit-hook|environment_context|user_instructions|turn_aborted|tool_use_error';
+const TAGS = 'system-reminder|task-notification|command-name|command-message|command-args|command-contents|local-command-stdout|local-command-stderr|local-command-caveat|bash-input|bash-stdout|bash-stderr|user-prompt-submit-hook|environment_context|user_instructions|turn_aborted|tool_use_error|artifact-view-context';
 const BLOCK = new RegExp(`<(${TAGS})(?:\\s[^>]*)?>[\\s\\S]*?<\\/\\1>`, 'g');
 const OPENING = new RegExp(`^<(${TAGS})(?:\\s[^>]*)?>`);
 const PREFIXES: readonly [RegExp, FoldKind][] = [
@@ -37,7 +37,7 @@ const PREFIXES: readonly [RegExp, FoldKind][] = [
 
 const KIND_OF: Record<string, FoldKind> = {
 	'task-notification': 'task', 'system-reminder': 'reminder', 'user-prompt-submit-hook': 'reminder',
-	'environment_context': 'context', 'user_instructions': 'context', 'turn_aborted': 'interrupt', 'tool_use_error': 'command',
+	'environment_context': 'context', 'user_instructions': 'context', 'artifact-view-context': 'context', 'turn_aborted': 'interrupt', 'tool_use_error': 'command',
 };
 
 const oneLine = (text: string, n = 160) => {
@@ -89,7 +89,8 @@ export function backgroundNoise(text: string): Omit<FoldItem, 'id'> | undefined 
 
 /** The user's own words: system reminders and similar blocks glued to them are cut out. */
 export function userWords(text: string): string {
-	return text.replace(BLOCK, '').trim();
+	// What the user pasted, as the Claude app wraps it: the text stays, the wrapper goes.
+	return text.replace(BLOCK, '').replace(/<\/?pasted_content(?:\s[^>]*)?>\n?/g, '').trim();
 }
 
 export type Row =
@@ -399,3 +400,5 @@ export function composerRight(room: { readonly roster: readonly string[]; readon
 	}
 	return right;
 }
+
+export { stepParts, stepsLabel, withoutSteps, type Step } from './steps';

@@ -9,7 +9,9 @@ import { homedir } from 'node:os';
 import * as path from 'node:path';
 import type { ExistingSession, SessionEntry, SessionHistory, SessionMeta } from './rooms';
 import { EntryAssembler, LineSplitter, type Piece } from './follow';
+import { pastTense, stepToken } from './steps';
 import { folderStore, withImages, type ImageStore, type SessionImage } from './sessionImages';
+import { arkestraWords } from './cloud';
 
 const MARK = '\u001eFILE ';
 /** How many sessions a machine lists, newest first. */
@@ -28,7 +30,22 @@ export const AUTOMATED = /"entrypoint":"sdk-/;
 export const TEMP_FOLDER = /^-(private-)?(tmp|var-folders)(-|$)/;
 const HEAD_BYTES = 262_144;
 const CANDIDATES = /"type":"(summary|user|custom-title)"/;
+/** How much of a session file's end the listing reads for the name: Claude Code writes it again near the end. */
+const TAIL_BYTES = 131_072;
+/** The lines that hold the name the person gave (custom-title) or the apps show (agent-name). */
+const NAMES = /"type":"(custom-title|agent-name)"/;
+/** The session's id in the claude.ai account, on its `bridge-session` lines. */
+const BRIDGE = /"bridgeSessionId":"cse_[A-Za-z0-9]+"/g;
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** A linked session's first message: the Claude app started it from another session. */
+export const STARTED_BY_SESSION = /^(Task|Background) \(from the session that started this one\)/;
+/** What the file's start says of that: the first lines carry the starting session's words. */
+const STARTED_MARK = 'from the session that started this one';
+/** How much of a linked session's start holds its instructions, which name the starting session. */
+export const PARENT_BYTES = 1_048_576;
+/** The starting session's desktop-app id in a linked session's instructions (`SendMessage` (`to`: `local_…`)). */
+const PARENT_HOST = /SendMessage. \(.to.: .(local_[0-9a-f-]{36})/;
+const HOST_MARK = '\u001eHOST ';
 
 /**
  * The listing on a POSIX machine: per session its time, file, and the lines that name it. One
@@ -48,7 +65,19 @@ export const LIST_SCRIPT = [
 	`  [ "$f" = /dev/null ] && continue`,
 	`  printf '\\036FILE %s %s\\n' "$(date -r "$f" +%s 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)" "$f"`,
 	`  head -c ${HEAD_BYTES} "$f" | grep -E '"type":"(summary|user|custom-title)"' | head -n 8`,
+	`  tail -c ${TAIL_BYTES} "$f" | grep -E '"type":"(custom-title|agent-name)"' | tail -n 4`,
+	`  tail -c ${TAIL_BYTES} "$f" | grep -o -E '"bridgeSessionId":"cse_[A-Za-z0-9]+"' | tail -n 1`,
+	// A linked session: the desktop-app id of the session that started it.
+	`  if head -c ${KIND_BYTES} "$f" | grep -q '${STARTED_MARK}'; then head -c ${PARENT_BYTES} "$f" | grep -o -m 1 -E 'SendMessage. \\(.to.: .local_[0-9a-f-]{36}' | grep -o -E 'local_[0-9a-f-]{36}' | head -n 1 | sed 's/^/"parentHost":"/; s/$/"/'; fi`,
 	'done',
+	// The desktop app's running sessions: their desktop-app ids (`local_…`), for the linked sessions.
+	'for d in "$HOME"/.claude/sessions/*.json; do',
+	'  [ -f "$d" ] || continue',
+	`  s=$(grep -o -E '"sessionId":"[0-9a-f-]{36}"' "$d" | head -n 1 | cut -d '"' -f 4)`,
+	`  h=$(grep -o -E '"hostSessionId":"local_[0-9a-f-]{36}"' "$d" | head -n 1 | cut -d '"' -f 4)`,
+	`  [ -n "$s" ] && [ -n "$h" ] && printf '\\036HOST %s %s\\n' "$s" "$h"`,
+	'done',
+	'exit 0',
 ].join('\n');
 
 /** How much of a session file the history reads: its end, where the latest messages are. */
@@ -109,12 +138,47 @@ export async function localListing(home: string): Promise<string> {
 			const buf = Buffer.alloc(HEAD_BYTES);
 			const { bytesRead } = await handle.read(buf, 0, HEAD_BYTES, 0);
 			const lines = buf.subarray(0, bytesRead).toString('utf8').split('\n').filter(l => CANDIDATES.test(l)).slice(0, 8);
+			const size = (await handle.stat()).size;
+			const from = Math.max(0, size - TAIL_BYTES);
+			const end = Buffer.alloc(size - from);
+			const read = await handle.read(end, 0, end.length, from);
+			const tail = end.subarray(0, read.bytesRead).toString('utf8');
+			lines.push(...tail.split('\n').filter(l => NAMES.test(l)).slice(-4));
+			const bridge = [...tail.matchAll(BRIDGE)].at(-1)?.[0];
+			if (bridge) {
+				lines.push(bridge);
+			}
+			if (kind.subarray(0, start.bytesRead).toString('utf8').includes(STARTED_MARK)) {
+				const head = Buffer.alloc(Math.min(PARENT_BYTES, size));
+				const got = await handle.read(head, 0, head.length, 0);
+				const starter = PARENT_HOST.exec(head.subarray(0, got.bytesRead).toString('utf8'))?.[1];
+				if (starter) {
+					lines.push(`"parentHost":"${starter}"`);
+				}
+			}
 			parts.push(`${MARK}${f.mtime} ${f.rel}\n${lines.join('\n')}`);
 		} finally {
 			await handle.close();
 		}
 	}
+	parts.push(...await localHosts(home));
 	return parts.join('\n');
+}
+
+/** The desktop app's running sessions on this machine, as the shell listing prints them. */
+async function localHosts(home: string): Promise<string[]> {
+	const dir = path.join(home, '.claude', 'sessions');
+	const names = await fs.readdir(dir).catch(() => [] as string[]);
+	const out: string[] = [];
+	for (const name of names.filter(n => n.endsWith('.json'))) {
+		try {
+			const d = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8'));
+			if (typeof d?.sessionId === 'string' && SESSION_ID.test(d.sessionId) && typeof d.hostSessionId === 'string' && /^local_[0-9a-f-]{36}$/.test(d.hostSessionId)) {
+				out.push(`${HOST_MARK}${d.sessionId} ${d.hostSessionId}`);
+			}
+		} catch { /* a file being written: next time */ }
+	}
+	return out;
 }
 
 /** Where a session file is on this machine, if anywhere. */
@@ -171,7 +235,7 @@ function readLine(line: string): any {
 		if (type === 'user') {
 			return { type, cwd: field('cwd'), message: { content: field('content') ?? (field('text') ? [{ type: 'text', text: field('text') }] : undefined) }, isMeta: /"isMeta":true/.test(line) };
 		}
-		return type ? { type, summary: field('summary'), customTitle: field('customTitle') } : undefined;
+		return type ? { type, summary: field('summary'), customTitle: field('customTitle'), agentName: field('agentName') } : undefined;
 	}
 }
 
@@ -186,7 +250,7 @@ function userText(content: unknown): string | undefined {
 		}
 		text = content.filter(b => b?.type === 'text' && typeof b.text === 'string').map(b => b.text).join('\n') || undefined;
 	}
-	text = text?.trim();
+	text = text === undefined ? undefined : arkestraWords(text).trim();
 	if (!text || /^(<command-|<local-command|<system-reminder>|Caveat: |\[Request interrupted)/.test(text)) {
 		return undefined;
 	}
@@ -198,6 +262,15 @@ const ARKESTRA_ROOM = 'You are Claude in an Arkestra room';
 /** The sessions of a listing, newest first; those Arkestra's own rooms started are left out. */
 export function parseListing(out: string): ExistingSession[] {
 	const sessions: ExistingSession[] = [];
+	// The running sessions' desktop-app ids come last, one line each.
+	const hosts = new Map<string, string>();
+	out = out.split('\n').filter(line => {
+		const m = line.startsWith(HOST_MARK) ? /^(\S+) (local_[0-9a-f-]{36})$/.exec(line.slice(HOST_MARK.length).trim()) : undefined;
+		if (m && SESSION_ID.test(m[1])) {
+			hosts.set(m[1], m[2]);
+		}
+		return !line.startsWith(HOST_MARK);
+	}).join('\n');
 	for (const record of out.split(MARK).slice(1)) {
 		const [head, ...lines] = record.split('\n');
 		const m = /^(\d+) (.+\.jsonl)$/.exec(head.trim());
@@ -206,13 +279,29 @@ export function parseListing(out: string): ExistingSession[] {
 			continue;
 		}
 		let title: string | undefined;
+		let named: string | undefined;
+		let bridge: string | undefined;
 		let summary: string | undefined;
 		let first: string | undefined;
 		let cwd: string | undefined;
+		let parentHost: string | undefined;
 		for (const line of lines) {
+			const id = /^"bridgeSessionId":"(cse_[A-Za-z0-9]+)"$/.exec(line.trim())?.[1];
+			if (id) {
+				bridge = id;
+				continue;
+			}
+			const starter = /^"parentHost":"(local_[0-9a-f-]{36})"$/.exec(line.trim())?.[1];
+			if (starter) {
+				parentHost = starter;
+				continue;
+			}
 			const data = line.trim() ? readLine(line) : undefined;
-			if (data?.type === 'custom-title' && typeof data.customTitle === 'string') {
-				title ??= data.customTitle;
+			// The latest name wins: Claude Code appends a new line on every rename.
+			if (data?.type === 'custom-title' && typeof data.customTitle === 'string' && data.customTitle.trim()) {
+				title = data.customTitle;
+			} else if (data?.type === 'agent-name' && typeof data.agentName === 'string' && data.agentName.trim()) {
+				named = data.agentName;
 			} else if (data?.type === 'summary' && typeof data.summary === 'string') {
 				summary ??= data.summary;
 			} else if (data?.type === 'user' && !data.isMeta && !data.isSidechain) {
@@ -224,7 +313,13 @@ export function parseListing(out: string): ExistingSession[] {
 			continue;
 		}
 		const line = (s: string) => { const l = s.split('\n')[0].trim(); return l.length > 80 ? l.slice(0, 79).trimEnd() + '…' : l; };
-		sessions.push({ id, title: line(title || summary || first || id.slice(0, 8)), ...(cwd ? { cwd } : {}), updatedAt: new Date(Number(m[1]) * 1000).toISOString() });
+		const host = hosts.get(id);
+		// Only a session the Claude app started from another names its starter.
+		const started = parentHost && first && STARTED_BY_SESSION.test(first) ? parentHost : undefined;
+		sessions.push({
+			id, title: line(title || named || summary || first || id.slice(0, 8)), ...(cwd ? { cwd } : {}), ...(bridge ? { bridge } : {}), updatedAt: new Date(Number(m[1]) * 1000).toISOString(),
+			...(host ? { host } : {}), ...(started && started !== host ? { parentHost: started } : {}),
+		});
 	}
 	return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
@@ -295,16 +390,36 @@ function userPiece(content: unknown, base: Base): Piece {
 
 /** One parsed line as the thread sees it. */
 function pieceOf(data: any): Piece {
+	const base: Base = { ...(typeof data?.uuid === 'string' ? { id: data.uuid } : {}), ...(typeof data?.timestamp === 'string' ? { at: data.timestamp } : {}) };
+	// A message another sender put into the session (Claude Code keeps it as a meta line): from
+	// Arkestra it is the user's own, in its place; another session's shows as the Claude app shows it.
+	const peer = data?.type === 'user' && data.isMeta && !data.isSidechain && data.origin?.kind === 'peer' ? data.origin : undefined;
+	if (peer && typeof peer.body === 'string' && peer.body.trim()) {
+		return /^arkestra(-app)?$/.test(String(peer.from)) ? { kind: 'user', text: peer.body.trim(), ...base }
+			: { kind: 'notice', text: `Message from ${String(peer.name || peer.from)}: ${peer.body.trim().replace(/\s+/g, ' ').slice(0, 300)}`, ...base };
+	}
 	if (!data || data.isSidechain || data.isMeta || data.isCompactSummary || data.isVisibleInTranscriptOnly) {
 		return undefined;
 	}
-	const base: Base = { ...(typeof data.uuid === 'string' ? { id: data.uuid } : {}), ...(typeof data.timestamp === 'string' ? { at: data.timestamp } : {}) };
 	if (data.type === 'user') {
 		return userPiece(data.message?.content, base);
 	}
 	if (data.type === 'assistant' && Array.isArray(data.message?.content)) {
-		const text = data.message.content.filter((b: any) => b?.type === 'text' && typeof b.text === 'string' && b.text.trim()).map((b: any) => b.text.trim()).join('\n\n');
-		return text ? { kind: 'agent', text, ...base } : undefined;
+		// Its texts, and what it did with its tools between them, in order.
+		const parts: string[] = [];
+		let said = false;
+		for (const b of data.message.content) {
+			if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+				parts.push(b.text.trim());
+				said = true;
+			} else if (b?.type === 'tool_use') {
+				const step = claudeStep(b);
+				if (step) {
+					parts.push(step);
+				}
+			}
+		}
+		return parts.length ? { kind: said ? 'agent' : 'step', text: parts.join('\n\n'), ...base } : undefined;
 	}
 	if (data.type === 'system' && data.subtype === 'compact_boundary') {
 		return { kind: 'notice', text: COMPACTED, ...base };
@@ -320,6 +435,49 @@ function pieceOf(data: any): Piece {
 		return a.commandMode === undefined || a.commandMode === 'prompt' ? userPiece(a.prompt, base) : undefined;
 	}
 	return undefined;
+}
+
+/** Tools that are the agent's own bookkeeping, not work the apps show. */
+const QUIET_TOOLS = /^(ToolSearch|TodoWrite|TaskCreate|TaskUpdate|TaskList|TaskGet|mcp__ccd_turn__.*|mcp__ccd_session__mark_chapter)$/;
+
+const fileName = (file: unknown) => typeof file === 'string' && file ? file.split(/[\\/]/).filter(Boolean).pop() ?? file : undefined;
+
+/** One tool use of Claude as the Claude app names it in the thread; undefined: not shown. */
+export function claudeStep(block: { name?: unknown; input?: any }): string | undefined {
+	const name = typeof block.name === 'string' ? block.name : '';
+	const input = block.input && typeof block.input === 'object' ? block.input : {};
+	if (!name || QUIET_TOOLS.test(name)) {
+		return undefined;
+	}
+	switch (name) {
+		case 'Bash':
+			return stepToken('command', typeof input.description === 'string' && input.description.trim() ? pastTense(input.description.trim()) : 'Ran a command');
+		case 'Read':
+			return stepToken('read', `Read ${fileName(input.file_path) ?? 'a file'}`);
+		case 'Edit': case 'MultiEdit': case 'NotebookEdit':
+			return stepToken('edit', `Edited ${fileName(input.file_path ?? input.notebook_path) ?? 'a file'}`);
+		case 'Write':
+			return stepToken('edit', `Wrote ${fileName(input.file_path) ?? 'a file'}`);
+		case 'Grep': case 'Glob':
+			return stepToken('search', typeof input.pattern === 'string' ? `Searched for ${input.pattern}` : 'Searched the files');
+		case 'WebSearch':
+			return stepToken('web', typeof input.query === 'string' ? `Searched the web for ${input.query}` : 'Searched the web');
+		case 'WebFetch': {
+			let host = '';
+			try { host = new URL(String(input.url)).host; } catch { /* not a URL */ }
+			return stepToken('web', host ? `Fetched ${host}` : 'Fetched a page');
+		}
+		case 'Agent': case 'Task':
+			return stepToken('agent', typeof input.description === 'string' && input.description.trim() ? `Ran an agent: ${input.description.trim()}` : 'Ran an agent');
+		case 'Monitor':
+			return stepToken('command', typeof input.description === 'string' && input.description.trim() ? `Watched: ${input.description.trim()}` : 'Watched a command');
+		case 'Artifact':
+			return stepToken('other', 'Published a page');
+		default: {
+			const tool = name.startsWith('mcp__') ? name.split('__').slice(2).join(' ').replace(/_/g, ' ') : name;
+			return stepToken('other', `Used ${tool || name}`);
+		}
+	}
 }
 
 /** What a parsed line says about the session: the model and context fill of a main-chain answer. */

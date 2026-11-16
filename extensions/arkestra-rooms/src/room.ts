@@ -7,6 +7,7 @@ import type { BestRun } from './best';
 import type { Agent, AgentEvent, AgentRegistry, ExistingSession, Readiness, SessionEntry, SessionHistory, SessionMeta } from './agent';
 import { readableAgentError } from './agentErrors';
 import { artifactsFromSessionLines, mergeProduced, type ProducedArtifact } from './produced';
+import { withoutSteps } from './steps';
 
 export type AuthorKind = 'user' | 'agent' | 'system';
 
@@ -57,11 +58,46 @@ export interface RoomState {
 	adopted?: Record<string, AdoptedSession>;
 	/** What the agents produced with their tools (AR26): files they wrote, artifacts they published. */
 	produced?: ProducedArtifact[];
+	/** The user named the thread here: the name of the session it continues no longer replaces it. */
+	renamed?: boolean;
+}
+
+/**
+ * A thread that continues a CLI session carries the session's name (the one Claude Code, the
+ * desktop app and the phone show) until the user names the thread here. True when it changed.
+ */
+export function followSessionName(state: RoomState, sessions: readonly { readonly id: string; readonly title: string }[]): boolean {
+	if (state.renamed) {
+		return false;
+	}
+	const own = new Set(Object.values(state.adopted ?? {}).map(link => link.session));
+	const session = sessions.find(s => own.has(s.id));
+	const title = session?.title.trim();
+	// A session with no name and no message shows its id's start: that is no name.
+	if (!session || !title || title === session.id.slice(0, 8) || title === state.title) {
+		return false;
+	}
+	state.title = title;
+	return true;
+}
+
+/** The latest of the last few messages typed here (no session entry yet) with this text; -1: none. */
+export function sentHere(messages: readonly Message[], text: string): number {
+	const want = text.trim();
+	for (let i = messages.length - 1; i >= 0 && i >= messages.length - 12; i--) {
+		const m = messages[i];
+		if (m.author.kind === 'user' && !m.source && m.text.trim() === want) {
+			return i;
+		}
+	}
+	return -1;
 }
 
 /** An existing CLI session a thread continues (AR39). */
 export interface AdoptedSession {
 	readonly session: string;
+	/** The session's id in the claude.ai account (`cse_…`): its name and archive follow the Claude app's. */
+	readonly bridge?: string;
 	readonly cwd?: string;
 	readonly upTo: string;
 	readonly cursor?: string;
@@ -72,6 +108,8 @@ export interface AdoptedSession {
 	readonly model?: string;
 	/** Tokens in the session's context at its latest answer, as its file tells it. */
 	readonly context?: number;
+	/** Its context window, when the file tells it (Codex). */
+	readonly window?: number;
 	/** The agent's history reader the thread was last read with (`Agent.historyVersion`). */
 	readonly version?: number;
 }
@@ -93,6 +131,8 @@ export class Room {
 	afterTurn?: (agent: Agent, reply: string) => Promise<void>;
 	/** The shared rules and memory every agent gets (AR23). */
 	shared?: () => Promise<{ text: string; version: string } | undefined>;
+	/** The thread as one agent gets it (files attached here sent to its machine first); throws when that fails. */
+	forAgent?: (agent: Agent, messages: readonly Message[]) => Promise<readonly Message[]>;
 
 	constructor(readonly state: RoomState, private readonly registry: AgentRegistry, private readonly now: () => Date = () => new Date()) { }
 
@@ -203,6 +243,15 @@ export class Room {
 				}
 				continue;
 			}
+			// A message typed here and sent into the session through the Claude app's account comes
+			// back from the session file: it is the one already here, now tied to its entry.
+			const typed = e.role === 'user' && e.id ? sentHere(this.state.messages, e.text) : -1;
+			if (typed >= 0) {
+				this.state.messages[typed] = { ...this.state.messages[typed], source: { agent: agentId, entry: e.id! } };
+				index.set(e.id!, typed);
+				changed = true;
+				continue;
+			}
 			const message = sessionMessage({ id: agentId, name }, e, this.now);
 			this.state.messages.push(message);
 			if (e.id) {
@@ -249,7 +298,10 @@ export class Room {
 			const choice = this.state.choices?.[agent.id];
 			// No model chosen here: an adopted session goes on with the model it has been running.
 			const model = choice?.model ?? adopted?.model;
-			await agent.turn({ roomId: this.id, transcript: [...this.state.messages], ...(this.state.mode === 'plan' ? { mode: 'plan' as const } : {}), ...(shared ? { shared } : {}), ...(model ? { model } : {}), ...(choice?.effort ? { effort: choice.effort } : {}) }, event => {
+			// The step lines of adopted sessions are for the eye: the agents get the answers' words.
+			const messages = this.state.messages.map(m => m.text.includes('<arkestra-step') ? { ...m, text: withoutSteps(m.text) } : m);
+			const transcript = this.forAgent ? [...await this.forAgent(agent, messages)] : [...messages];
+			await agent.turn({ roomId: this.id, transcript, ...(this.state.mode === 'plan' ? { mode: 'plan' as const } : {}), ...(shared ? { shared } : {}), ...(model ? { model } : {}), ...(choice?.effort ? { effort: choice.effort } : {}) }, event => {
 				if (event.kind === 'line') {
 					lines.push(event.line);
 					return;
@@ -311,7 +363,8 @@ function sessionMessage(agent: { id: string; name: string }, e: SessionEntry, no
 export function withMeta(adopted: AdoptedSession, meta: SessionMeta | undefined): AdoptedSession {
 	const model = meta?.model && meta.model !== adopted.model ? meta.model : undefined;
 	const context = meta?.context && meta.context !== adopted.context ? meta.context : undefined;
-	return model || context ? { ...adopted, ...(model ? { model } : {}), ...(context ? { context } : {}) } : adopted;
+	const window = meta?.window && meta.window !== adopted.window ? meta.window : undefined;
+	return model || context || window ? { ...adopted, ...(model ? { model } : {}), ...(context ? { context } : {}), ...(window ? { window } : {}) } : adopted;
 }
 
 /**
@@ -372,7 +425,7 @@ export function importedRoomState(agent: { id: string; name: string; historyVers
 	for (const e of entries) {
 		state.messages.push(sessionMessage(agent, e, now));
 	}
-	const link: AdoptedSession = { session: session.id, ...(session.cwd ? { cwd: session.cwd } : {}), upTo: state.messages.at(-1)!.id, ...(cursor !== undefined ? { cursor } : {}), ...(agent.historyVersion !== undefined ? { version: agent.historyVersion } : {}) };
+	const link: AdoptedSession = { session: session.id, ...(session.bridge ? { bridge: session.bridge } : {}), ...(session.cwd ? { cwd: session.cwd } : {}), upTo: state.messages.at(-1)!.id, ...(cursor !== undefined ? { cursor } : {}), ...(agent.historyVersion !== undefined ? { version: agent.historyVersion } : {}) };
 	state.adopted = { [agent.id]: withMeta(link, meta) };
 	const produced = lines?.length ? artifactsFromSessionLines(lines, agent.id) : [];
 	if (produced.length) {

@@ -7,7 +7,7 @@ import * as assert from 'node:assert/strict';
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { ClaudeCodeAgent, permissionArgs, ROOM_PREAMBLE, parseLine, rateLimit, workOf } from '../claudeCode';
+import { ClaudeCodeAgent, permissionArgs, ROOM_PREAMBLE, parseLine, rateLimit, workOf, openElsewhere, runningElsewhere, runningScript } from '../claudeCode';
 import type { AgentEvent, Message } from '../rooms';
 
 const FAKE = `#!/usr/bin/env node
@@ -177,4 +177,81 @@ test('Ultracode is an effort of Opus, Sonnet and Fable and goes to the CLI as --
 	await agent.turn({ roomId: 'u', transcript: [msg('user', 'user', 'hi')], model: 'opus', effort: 'ultracode' }, () => { }, new AbortController().signal);
 	const [call] = await calls();
 	assert.equal(call.args[call.args.indexOf('--effort') + 1], 'ultracode');
+});
+
+test('a session another app runs now is not started a second time; a follow of its file does not count', () => {
+	const id = 'c0a0302a-cdc7-4b63-b14f-c834efb9a027';
+	assert.match(runningScript(id), /--resume\[= \]/);
+	assert.throws(() => runningScript('x; rm -rf ~'), /not a Claude session id/);
+	assert.equal(runningElsewhere('', id), undefined);
+	assert.equal(runningElsewhere('{"type":"result"}', id), undefined);
+	assert.equal(runningElsewhere(`1340170 /home/r/.claude/remote/ccd-cli/2.1.321-3fb3 --output-format stream-json --resume=${id}\n`, id), 'the Claude desktop app');
+	assert.equal(runningElsewhere(`77 /usr/bin/node /home/r/.local/bin/claude --resume ${id}`, id), 'another Claude Code');
+	assert.match(openElsewhere('the Claude desktop app', 'tenark-claude').message, /open in the Claude desktop app on tenark-claude/);
+});
+
+test('claude.ai sessions: the sign-in is read, never refreshed; names and archive state come from the account list', async () => {
+	const { CloudClient, parseCredentials, cloudSession } = await import('../cloud');
+	assert.equal(parseCredentials('not json'), undefined);
+	assert.deepEqual(parseCredentials(JSON.stringify({ claudeAiOauth: { accessToken: 'tok', expiresAt: 5000 } })), { token: 'tok', expiresAt: 5000 });
+	assert.equal(cloudSession({ id: 'session_x' }), undefined);
+	assert.deepEqual(cloudSession({ id: 'cse_1', title: ' Arkestra ', status: 'archived', last_event_at: '2026-11-15T13:42:59Z' }), { id: 'cse_1', title: 'Arkestra', archived: true, at: '2026-11-15T13:42:59Z' });
+	const calls: { url: string; method: string; auth: string; body?: string }[] = [];
+	const answers = [
+		{ status: 200, body: { data: [{ id: 'cse_1', title: 'A', status: 'active' }], next_cursor: 'c2' } },
+		{ status: 200, body: { data: [{ id: 'cse_2', title: 'B', status: 'archived' }] } },
+		{ status: 409, body: {} },
+		{ status: 200, body: {} },
+	];
+	const fetchFn = async (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => {
+		calls.push({ url, method: init.method, auth: init.headers.Authorization, ...(init.body ? { body: init.body } : {}) });
+		const a = answers.shift()!;
+		return { status: a.status, json: async () => a.body, text: async () => JSON.stringify(a.body) };
+	};
+	let reads = 0;
+	const client = new CloudClient(async () => { reads++; return JSON.stringify({ claudeAiOauth: { accessToken: 'tok', expiresAt: 10_000_000 } }); }, 'prd', fetchFn, () => 1000);
+	assert.deepEqual((await client.list()).map(s => [s.id, s.archived]), [['cse_1', false], ['cse_2', true]]);
+	await client.archive('cse_2'); // already archived (409): fine
+	await client.rename('cse_1', 'Új név');
+	assert.equal(reads, 1, 'the sign-in is read once while it is valid');
+	assert.deepEqual(calls.map(c => `${c.method} ${c.url.replace('https://api.anthropic.com', '')}`), ['GET /v1/code/sessions?limit=100', 'GET /v1/code/sessions?limit=100&cursor=c2', 'POST /v1/code/sessions/cse_2/archive', 'PUT /v1/code/sessions/cse_1']);
+	assert.equal(calls[3].body, JSON.stringify({ title: 'Új név' }));
+	assert.equal(calls[0].auth, 'Bearer tok');
+	await assert.rejects(client.archive('cse_1; rm'), /not a claude.ai session id/);
+	const stale = new CloudClient(async () => JSON.stringify({ claudeAiOauth: { accessToken: 'old', expiresAt: 1000 } }), 'prd', fetchFn, () => 1000);
+	await assert.rejects(stale.list(), /out of date/);
+});
+
+test('the account quota: the windows the Claude app shows, read with the beta header; a session row\'s context fill', async () => {
+	const { CloudClient, cloudSession, accountLimits } = await import('../cloud');
+	assert.deepEqual(accountLimits({ five_hour: null, seven_day: { utilization: 54.0, resets_at: '2026-11-20T12:59:59Z' }, seven_day_opus: null, extra_usage: { utilization: 0 } }), [{ label: 'week', usedPercent: 54, resetsAt: '2026-11-20T12:59:59Z' }]);
+	assert.deepEqual(accountLimits({ five_hour: { utilization: 12.4 } }), [{ label: '5h', usedPercent: 12 }]);
+	assert.deepEqual(accountLimits(undefined), []);
+	assert.deepEqual(cloudSession({ id: 'cse_1', title: 'A', status: 'active', external_metadata: { context_usage: { used_tokens: 214921, max_tokens: 500000 } } })?.context, { used: 214921, max: 500000 });
+	assert.equal(cloudSession({ id: 'cse_1', title: 'A', status: 'active', external_metadata: { context_usage: { used_tokens: 5, max_tokens: 0 } } })?.context, undefined);
+	let seen: { url: string; beta?: string } | undefined;
+	const fetchFn = async (url: string, init: { method: string; headers: Record<string, string> }) => {
+		seen = { url, ...(init.headers['anthropic-beta'] ? { beta: init.headers['anthropic-beta'] } : {}) };
+		return { status: 200, json: async () => ({ seven_day: { utilization: 54, resets_at: 'x' } }), text: async () => '' };
+	};
+	const client = new CloudClient(async () => JSON.stringify({ claudeAiOauth: { accessToken: 'tok', expiresAt: 10_000_000 } }), 'prd', fetchFn, () => 1000);
+	assert.deepEqual(await client.usage(), [{ label: 'week', usedPercent: 54, resetsAt: 'x' }]);
+	assert.deepEqual(seen, { url: 'https://api.anthropic.com/api/oauth/usage', beta: 'oauth-2025-04-20' });
+});
+
+test('a message sent into a session the Claude app runs names Arkestra as its sender; the session file gives back the words alone', async () => {
+	const { fromArkestra, arkestraWords } = await import('../cloud');
+	const sent = fromArkestra('telepítve');
+	assert.equal(sent, '<cross-session-message from="arkestra-app" from-name="The user, writing in the Arkestra app">\ntelepítve\n</cross-session-message>');
+	// The first form, already in session files, reads back too.
+	assert.equal(arkestraWords('<cross-session-message from="arkestra" from-name="Arkestra">\ntelepítve az 17674\n</cross-session-message>'), 'telepítve az 17674');
+	assert.equal(arkestraWords(sent), 'telepítve');
+	// Whatever the receiving CLI put around it.
+	assert.equal(arkestraWords(`Another Claude session sent a message: ${sent} This came from another Claude session.`), 'telepítve');
+	// The envelope's own closing tag inside the words survives the round trip.
+	assert.equal(arkestraWords(fromArkestra('a </cross-session-message> b')), 'a </cross-session-message> b');
+	assert.equal(arkestraWords('sima szöveg'), 'sima szöveg');
+	// Another session's envelope is not Arkestra's: left as it is.
+	const other = '<cross-session-message from="local_1">\nhi\n</cross-session-message>';
+	assert.equal(arkestraWords(other), other);
 });

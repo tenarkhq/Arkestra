@@ -11,8 +11,10 @@ import { homedir } from 'node:os';
 import * as path from 'node:path';
 import type { Agent, AgentChoices, AgentEvent, ExistingSession, Message, PermissionRequest, Readiness, SessionEntry, SessionHistory, SessionMeta, TurnInput, Usage, WorkUpdate } from './rooms';
 import { RpcClient, type Notification } from './rpc';
+import { parseWorktree, worktreeScript, type WorktreeChange } from './worktree';
+import { watchLocal as watchLocalStates, watchRemote as watchRemoteStates, type LiveState } from './liveStates';
 import { LineSplitter, followLocal, followRemote } from './follow';
-import { RolloutHistory, checkThreadId, codexImages, codexMeta, codexPiece, codexToolLine, codexUserText, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript, type RolloutRead } from './codexFollow';
+import { RolloutHistory, checkThreadId, codexImages, codexMeta, codexPiece, codexToolLine, codexUserText, latestTokenCountScript, localRollout, locateRolloutScript, readLocalRollout, readRolloutScript, rolloutLimits, type RolloutRead } from './codexFollow';
 
 export type CodexAuth = { readonly mode: 'subscription' } | { readonly mode: 'apiKey'; readonly key: string | undefined };
 
@@ -81,9 +83,24 @@ export function codexSessions(data: unknown): ExistingSession[] {
 	const list = Array.isArray((data as any)?.data) ? (data as any).data : [];
 	return list.filter((t: any) => typeof t?.id === 'string' && !(typeof t.preview === 'string' && ARKESTRA_FIRST.test(t.preview))).map((t: any) => {
 		const first = typeof t.preview === 'string' ? t.preview.trim().split('\n')[0].trim() : '';
-		const title = first ? (first.length > 80 ? first.slice(0, 79).trimEnd() + '…' : first) : t.id.slice(0, 8);
-		return { id: t.id, title, ...(typeof t.cwd === 'string' && t.cwd ? { cwd: t.cwd } : {}), updatedAt: isoTime(t.updatedAt) ?? isoTime(t.createdAt) ?? new Date(0).toISOString() };
+		const parent = typeof t.parentThreadId === 'string' && t.parentThreadId ? t.parentThreadId : undefined;
+		// A sub-agent thread is named as Codex names it (its name, else its nickname and role), else by its task.
+		const nick = typeof t.agentNickname === 'string' && t.agentNickname.trim() ? `${t.agentNickname.trim()}${typeof t.agentRole === 'string' && t.agentRole.trim() ? ` (${t.agentRole.trim()})` : ''}` : '';
+		const named = parent ? (typeof t.name === 'string' && t.name.trim() ? t.name.trim() : nick) : '';
+		const line = named || first;
+		const title = line ? (line.length > 80 ? line.slice(0, 79).trimEnd() + '…' : line) : t.id.slice(0, 8);
+		return { id: t.id, title, ...(typeof t.cwd === 'string' && t.cwd ? { cwd: t.cwd } : {}), updatedAt: isoTime(t.updatedAt) ?? isoTime(t.createdAt) ?? new Date(0).toISOString(), ...(parent ? { parent } : {}) };
 	}).sort((a: ExistingSession, b: ExistingSession) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/** Both lists as one, each thread once, newest first (a Codex that ignores the filter lists them twice). */
+export function mergeSessions(a: readonly ExistingSession[], b: readonly ExistingSession[]): ExistingSession[] {
+	const byId = new Map<string, ExistingSession>();
+	for (const s of [...a, ...b]) {
+		const had = byId.get(s.id);
+		byId.set(s.id, had && !s.parent ? had : s);
+	}
+	return [...byId.values()].sort((x, y) => y.updatedAt.localeCompare(x.updatedAt));
 }
 
 /** A Codex thread's turns as thread messages: what the user wrote and Codex's answers. */
@@ -248,7 +265,7 @@ export class CodexAgent implements Agent {
 	 * 2: the rollout's model and context fill, and its patch lines for what Codex produced (AR26):
 	 * threads read before read their rollout once more.
 	 */
-	readonly historyVersion = 2;
+	readonly historyVersion = 3;
 
 	constructor(private readonly options: CodexOptions) {
 		({ id: this.id, name: this.name, where: this.where } = options.identity ?? { id: 'codex', name: 'Codex', where: 'local' });
@@ -301,10 +318,31 @@ export class CodexAgent implements Agent {
 		}
 	}
 
+	/** The account's quota windows, from the newest rollout on the machine (Codex writes them with every token report). */
+	async quota(): Promise<readonly { readonly label: string; readonly usedPercent: number; readonly resetsAt?: string }[]> {
+		const script = latestTokenCountScript(['~/.codex', this.options.apiKeyHome]);
+		const out = this.options.spawn ? await this.shell(script, 20_000) : await localShell(script, 20_000);
+		return rolloutLimits(out.trim(), windowLabel);
+	}
+
+	/** What a session's folder on this agent's machine has changed (git), as the Codex app counts it. */
+	async worktreeChanges(cwd: string): Promise<readonly WorktreeChange[]> {
+		const script = worktreeScript(cwd);
+		return parseWorktree(this.options.spawn ? await this.shell(script, 20_000) : await localShell(script, 20_000));
+	}
+
+	/** Each thread's turn on this agent's machine, live, from its rollout file (the left bar's dots). */
+	watchStates(onState: (s: LiveState) => void): { dispose(): void } {
+		return this.options.spawn ? watchRemoteStates(this.options.spawn, ['~/.codex', this.options.apiKeyHome], onState) : watchLocalStates(this.localHomes(), onState);
+	}
+
 	/** The threads Codex has on this agent's machine (AR39). */
 	async existingSessions(): Promise<readonly ExistingSession[]> {
 		const client = await this.ensureServer(await this.options.auth());
-		return codexSessions(await client.request('thread/list', { limit: 60 }));
+		const own = codexSessions(await client.request('thread/list', { limit: 60 }));
+		// Sub-agent threads are left out of the default list; they show under their parent thread.
+		const spawned = await client.request('thread/list', { limit: 60, sourceKinds: ['subAgentThreadSpawn'] }).then(codexSessions, () => [] as ExistingSession[]);
+		return mergeSessions(own, spawned);
 	}
 
 	/**
@@ -733,6 +771,19 @@ export function codexLimits(snapshot: any): { label: string; usedPercent: number
 		}
 	}
 	return out;
+}
+
+/** A POSIX script on this machine; resolves to its output. */
+function localShell(script: string, timeoutMs: number): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const child = nodeSpawn('sh', ['-c', script], { stdio: ['ignore', 'pipe', 'ignore'] });
+		let out = '';
+		const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('timeout')); }, timeoutMs);
+		child.stdout?.setEncoding('utf8');
+		child.stdout?.on('data', (c: string) => { out += c; });
+		child.on('error', e => { clearTimeout(timer); reject(e); });
+		child.on('close', code => { clearTimeout(timer); if (code === 0) { resolve(out); } else { reject(new Error(`exited with ${code}`)); } });
+	});
 }
 
 function windowLabel(minutes: number | null | undefined): string {

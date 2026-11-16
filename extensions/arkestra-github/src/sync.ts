@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, type RelayEvent, type RelayState } from './relayClient';
-import { MUTATIONS, itemsQuery, parseFields, parseItem, projectQuery, resolveInput, valueText, type FieldInput, type FieldValue, type IssueRef, type ProjectField, type ProjectItem, type ProjectSnapshot } from './project';
+import { MUTATIONS, itemsQuery, parseFields, parseItem, parseTableView, projectQuery, resolveInput, valueText, type FieldInput, type FieldValue, type IssueRef, type ProjectField, type ProjectItem, type ProjectSnapshot } from './project';
 
 export type GraphQL = (query: string, variables?: Record<string, unknown>) => Promise<any>;
 
@@ -217,7 +217,7 @@ export class ProjectSync {
 			if (!project) {
 				throw lastError instanceof Error ? lastError : new Error(String(lastError));
 			}
-			this.snap = { id: project.id, owner: this.o.owner, number: project.number ?? this.o.number, title: project.title, url: project.url, fields: parseFields(project.fields?.nodes), items, fetchedAt: this.now() };
+			this.snap = { id: project.id, owner: this.o.owner, number: project.number ?? this.o.number, title: project.title, url: project.url, fields: parseFields(project.fields?.nodes), items, fetchedAt: this.now(), ...(parseTableView(project.views?.nodes) ? { tableView: parseTableView(project.views?.nodes)! } : {}) };
 			this.emit();
 			this.synced();
 			return this.snap;

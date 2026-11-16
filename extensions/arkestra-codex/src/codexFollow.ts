@@ -7,6 +7,7 @@ import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 import { EntryAssembler, LineSplitter, type Piece } from './follow';
+import { stepToken } from './steps';
 import type { SessionEntry, SessionHistory, SessionMeta } from './rooms';
 import { dataUrlImage, folderStore, withImages, type ImageStore, type SessionImage } from './sessionImages';
 
@@ -77,6 +78,10 @@ export function codexPiece(line: string): Piece {
 	const at = typeof data.timestamp === 'string' ? { at: data.timestamp } : {};
 	if (p.type === 'item_completed') {
 		const item = p.item;
+		const step = codexStep(item);
+		if (step) {
+			return { kind: 'step', text: step, ...(typeof item.id === 'string' ? { id: item.id } : {}), ...at };
+		}
 		const kind = item?.type === 'UserMessage' ? 'user' : item?.type === 'AgentMessage' ? 'agent' : undefined;
 		const raw = kind ? textOf(item.content) : '';
 		if (kind === 'user' && CODEX_PREAMBLE.test(raw)) {
@@ -98,6 +103,37 @@ export function codexPiece(line: string): Piece {
 		return { kind: 'agent', text: p.message.trim(), ...at };
 	}
 	return undefined;
+}
+
+const fileName = (file: unknown) => typeof file === 'string' && file ? decodeURI(file.replace(/^file:\/\//, '')).split(/[\\/]/).filter(Boolean).pop() : undefined;
+
+/** The script a command ran (`bash -lc '…'`'s last part), on one line. */
+function commandText(command: unknown): string {
+	const parts = Array.isArray(command) ? command.map(String) : typeof command === 'string' ? [command] : [];
+	const script = parts.length >= 3 && /(^|\/)(ba|z)?sh$/.test(parts[0]) && /^-l?c$/.test(parts[1]) ? parts.slice(2).join(' ') : parts.join(' ');
+	return script.replace(/\s+/g, ' ').trim();
+}
+
+/** One completed Codex item as the Codex app names it in the thread; undefined: not a step. */
+export function codexStep(item: any): string | undefined {
+	switch (item?.type) {
+		case 'CommandExecution': {
+			const cmd = commandText(item.command);
+			return stepToken('command', cmd ? `Ran ${cmd.length > 90 ? `${cmd.slice(0, 89)}…` : cmd}` : 'Ran a command');
+		}
+		case 'FileChange': {
+			const files = Object.keys(item.changes && typeof item.changes === 'object' ? item.changes : {}).map(fileName).filter(Boolean);
+			return stepToken('edit', files.length ? `Edited ${files.slice(0, 3).join(', ')}${files.length > 3 ? ` and ${files.length - 3} more` : ''}` : 'Edited files');
+		}
+		case 'ImageView':
+			return stepToken('read', `Viewed ${fileName(item.path) ?? 'an image'}`);
+		case 'WebSearch':
+			return stepToken('web', typeof item.query === 'string' && item.query ? `Searched the web for ${item.query}` : 'Searched the web');
+		case 'McpToolCall':
+			return stepToken('other', `Used ${[item.server, item.tool].filter(Boolean).join(' ') || 'a tool'}`);
+		default:
+			return undefined;
+	}
 }
 
 /**
@@ -123,7 +159,32 @@ export function codexMeta(line: string): SessionMeta | undefined {
 		return undefined; // the thread's running total is not the context
 	}
 	const context = typeof last.total_tokens === 'number' ? last.total_tokens : (last.input_tokens ?? 0) + (last.output_tokens ?? 0);
-	return context > 0 ? { context } : undefined;
+	const window = p.info?.model_context_window;
+	return context > 0 ? { context, ...(typeof window === 'number' && window > 0 ? { window } : {}) } : undefined;
+}
+
+/** The account's quota windows in a rollout's `token_count` line (`rate_limits`), as Codex's own app shows them. */
+export function rolloutLimits(line: string, label: (minutes: number | null | undefined) => string): { label: string; usedPercent: number; resetsAt?: string }[] {
+	let data: any;
+	try {
+		data = JSON.parse(line);
+	} catch {
+		return [];
+	}
+	const limits = data?.type === 'event_msg' && data.payload?.type === 'token_count' ? data.payload.rate_limits : undefined;
+	const out: { label: string; usedPercent: number; resetsAt?: string }[] = [];
+	for (const w of [limits?.primary, limits?.secondary]) {
+		if (w && typeof w.used_percent === 'number') {
+			out.push({ label: label(w.window_minutes), usedPercent: Math.round(w.used_percent), ...(typeof w.resets_at === 'number' ? { resetsAt: new Date(w.resets_at * 1000).toISOString() } : {}) });
+		}
+	}
+	return out;
+}
+
+/** The script that prints the latest `token_count` line of the newest rollout on a POSIX machine (nothing: none yet). */
+export function latestTokenCountScript(homes: readonly string[]): string {
+	const globs = homes.map(h => `${remoteHome(h)}/sessions/*/*/*/rollout-*.jsonl`).join(' ');
+	return [`f=$(ls -t ${globs} 2>/dev/null | head -n 1)`, '[ -n "$f" ] || exit 0', `grep '"token_count"' "$f" | tail -n 1`, 'exit 0'].join('\n');
 }
 
 /**

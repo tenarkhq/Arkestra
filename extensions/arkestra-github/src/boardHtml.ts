@@ -358,6 +358,7 @@ function editableField(key) {
 }
 const colName = (c) => c.key.startsWith('f:') || c.key === 'num' ? c.name : t(c.name);
 function colWidth(c) {
+	if (c.key === 'subissues') return 110;
 	switch (c.type) {
 		case 'num': return 56;
 		case 'status': return 104;

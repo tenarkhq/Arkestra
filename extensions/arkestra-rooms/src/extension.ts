@@ -7,8 +7,8 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { ActivityBoard, type AgentActivity } from './activity';
-import { AgentRegistry, type Agent, type ExistingSession, type InviteEntry } from './agent';
-import { AgentNotReadyError, Room, RoomOpener, importedRoomState, newRoomState } from './room';
+import { AgentRegistry, type Agent, type CloudSession, type CloudSessions, type ExistingSession, type InviteEntry, type Usage } from './agent';
+import { AgentNotReadyError, Room, RoomOpener, followSessionName, importedRoomState, newRoomState, type Message, type RoomState } from './room';
 import { agentKind, cleanSessionMessages, continueOn, elsewhere, healAdopted, homeOf, isForeign, placeLocalSessions, type ListedSession } from './sessionHome';
 import { RoomStore } from './store';
 import { SessionFollow } from './sessionFollow';
@@ -30,16 +30,18 @@ import { SharedContext } from './sharedUi';
 import { extractMemories } from './shared';
 import { BestOfN } from './bestUi';
 import { ArtifactGallery } from './artifactsUi';
-import { SidebarView } from './sidebarView';
+import { SidebarView, machineNames } from './sidebarView';
 import { contextPercent, ringSvg, statusText, tightestLimit, usageLine, formatTokens } from './usage';
 import { GitTemplateIO, createWorkTrees } from './templates/gitio';
 import { TemplateRun } from './templates/run';
 import type { Role } from './templates/signals';
 import type { CodeState, ReviewState, TemplateState } from './templates/types';
 import { ROOM_ID_KEY, ROOM_SCHEME, historyTurns, projectName, roomIdFromHistory, roomIdFromSessionPath, summarize, titleFrom, type ProjectThreads, type ThreadSummary } from './threads';
+import { rowState, type RowState } from './leftBar';
 import { ThreadViews } from './threadView';
 import { DetailsView } from './detailsView';
-import { LiveTurns } from './threadModel';
+import { LiveTurns, machineOf as machineOfAgent } from './threadModel';
+import { absoluteReferences, movedReferences } from './images';
 import type { TurnSink } from './room';
 
 /** What adapter extensions (Claude Code, Codex, OpenAI, ACP) receive. */
@@ -126,12 +128,145 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	const sessionHome = async (agentId: string, session: { readonly id: string; readonly cwd?: string }) =>
 		isForeign(agentId, session.cwd, localFolder) ? homeOf(agentId, session, localFolder, await twins(agentId)) : undefined;
 	/** This machine's sessions without the copies an SSH machine has; a copy nobody has is marked. */
+	// The claude.ai account's view of the sessions (the desktop app's and the phone's list): their
+	// names and whether they are archived, the same in Arkestra. Asked through an SSH machine's
+	// agent first (no keychain question on this computer), at most every 30 s.
+	const cloudRows = new Map<string, CloudSession>();
+	/** The account's list was read again (its context fills too). */
+	const cloudReadDone = new vscode.EventEmitter<void>();
+	context.subscriptions.push(cloudReadDone);
+	// Read every 10 s while the window has the focus, as the Claude app's list changes.
+	const cloudTimer = setInterval(() => { if (vscode.window.state.focused) { void readCloud(); } }, 10_000);
+	context.subscriptions.push({ dispose: () => clearInterval(cloudTimer) });
+	const bridgeOf = new Map<string, string>();
+	let cloud: CloudSessions | undefined;
+	let cloudAt = 0;
+	let cloudRead: Promise<void> = Promise.resolve();
+	const roomBridges = (state: RoomState): string[] => Object.values(state.adopted ?? {}).map(link => link.bridge ?? bridgeOf.get(link.session)).filter((b): b is string => !!b);
+	const syncWithCloud = async (): Promise<void> => {
+		let changed = false;
+		for (const stored of await store.list()) {
+			const room = loaded.get(stored.id);
+			const state = room?.state ?? stored;
+			const row = roomBridges(state).map(b => cloudRows.get(b)).find(Boolean);
+			if (!row) {
+				continue;
+			}
+			let edit = false;
+			if (!!state.archived !== row.archived) {
+				if (row.archived) {
+					state.archived = true;
+					delete state.pinned;
+				} else {
+					delete state.archived;
+				}
+				edit = true;
+			}
+			if (row.title && row.title !== state.title) {
+				state.title = row.title;
+				edit = true;
+			}
+			if (edit) {
+				await store.save(state);
+				room?.touch();
+				changed = true;
+			}
+		}
+		if (changed) {
+			refreshThreadsLater();
+		}
+	};
+	let cloudSeen = '';
+	const readCloud = (): Promise<void> => {
+		if (Date.now() - cloudAt < 10_000) {
+			return cloudRead;
+		}
+		cloudAt = Date.now();
+		cloudRead = (async () => {
+			const agents = registry.all().filter(a => a.cloud);
+			for (const agent of [...agents.filter(a => a.id.includes('@')), ...agents.filter(a => !a.id.includes('@'))]) {
+				try {
+					const rows = await agent.cloud!.list();
+					cloudRows.clear();
+					for (const row of rows) {
+						cloudRows.set(row.id, row);
+					}
+					cloud = agent.cloud;
+					await syncWithCloud();
+					// The left bar's dots follow what the Claude app's sessions do now.
+					const seen = rows.map(r => `${r.id}:${r.worker ?? ''}:${r.unread ? 1 : 0}`).join(',');
+					if (seen !== cloudSeen) {
+						cloudSeen = seen;
+						refreshThreadsLater();
+					}
+					cloudReadDone.fire();
+					return;
+				} catch {
+					// the next machine's sign-in
+				}
+			}
+		})();
+		return cloudRead;
+	};
+	/** Archive, restore or rename a thread's sessions in the claude.ai account too; the error, if one failed. */
+	const tellCloud = async (state: RoomState, act: (c: CloudSessions, id: string) => Promise<void>, local: (row: CloudSession) => CloudSession): Promise<string | undefined> => {
+		const bridges = roomBridges(state);
+		if (!bridges.length) {
+			return undefined;
+		}
+		await readCloud();
+		if (!cloud) {
+			return vscode.l10n.t('no machine here has a claude.ai sign-in');
+		}
+		try {
+			for (const b of bridges) {
+				await act(cloud, b);
+				const row = cloudRows.get(b);
+				if (row) {
+					cloudRows.set(b, local(row));
+				}
+			}
+			return undefined;
+		} catch (error) {
+			return error instanceof Error ? error.message : String(error);
+		}
+	};
 	const listedSessions = async (agent: Agent, fresh = false): Promise<readonly ListedSession[]> => {
-		const sessions = await sessionsOf(agent, fresh);
+		const read = await sessionsOf(agent, fresh);
+		for (const session of read) {
+			if (session.bridge) {
+				bridgeOf.set(session.id, session.bridge);
+			}
+		}
+		if (read.some(session => session.bridge)) {
+			await readCloud();
+		}
+		// What the desktop app and the phone show: archived there is archived here, their name is the name.
+		const sessions = read.flatMap(session => {
+			const row = session.bridge ? cloudRows.get(session.bridge) : undefined;
+			return row?.archived ? [] : row?.title && row.title !== session.title ? [{ ...session, title: row.title }] : [session];
+		});
+		void followNames(sessions);
 		if (agent.id.includes('@') || !sessions.some(s => isForeign(agent.id, s.cwd, localFolder))) {
 			return sessions;
 		}
 		return placeLocalSessions(agent.id, sessions, localFolder, (await twins(agent.id)).map(t => t.sessions));
+	};
+	/** Threads that continue these sessions take their current names (renamed in the CLI or the apps). */
+	const followNames = async (sessions: readonly ListedSession[]): Promise<void> => {
+		let changed = false;
+		for (const stored of await store.list()) {
+			const room = loaded.get(stored.id);
+			const state = room?.state ?? stored;
+			if (followSessionName(state, sessions)) {
+				await store.save(state);
+				room?.touch();
+				changed = true;
+			}
+		}
+		if (changed) {
+			refreshThreadsLater();
+		}
 	};
 	/**
 	 * Once per open: a thread that follows a copy of an SSH machine's session moves to that
@@ -143,19 +278,53 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			room.touch();
 		}
 	};
-	// An SSH machine's agent comes after the thread opened: a copy's thread can move to it now.
+	// An SSH machine's agent comes after the thread opened: a copy's thread can move to it now, and
+	// a thread an older reader imported reads its session again with the agent's newer reader.
 	context.subscriptions.push(registry.onDidChange(() => {
 		for (const room of loaded.values()) {
-			if (Object.entries(room.state.adopted ?? {}).some(([id, link]) => isForeign(id, link.cwd, localFolder))) {
+			if (Object.entries(room.state.adopted ?? {}).some(([id, link]) => isForeign(id, link.cwd, localFolder) || (registry.get(id)?.historyVersion ?? 1) > (link.version ?? 1))) {
 				const next = (healing.get(room.id) ?? Promise.resolve()).then(() => heal(room)).catch(() => undefined).finally(() => follow.refresh(room));
 				healing.set(room.id, next);
 			}
 		}
 	}));
 
+	// Files attached in a thread live here; an agent on an SSH machine reads them there (uploaded once per file version).
+	const sentFiles = new Map<string, string>();
+	const sendFiles = async (roomId: string, agent: Agent, messages: readonly Message[]): Promise<readonly Message[]> => {
+		const machine = machineOfAgent(agent.id);
+		if (!machine) {
+			return messages;
+		}
+		const named = [...new Set(messages.filter(m => m.author.kind === 'user').flatMap(m => absoluteReferences(m.text)))];
+		const local: { file: string; key: string }[] = [];
+		for (const file of named) {
+			const info = await stat(file).catch(() => undefined);
+			if (info?.isFile() && info.size <= 25 * 1024 * 1024) {
+				local.push({ file, key: `${machine}\n${roomId}\n${file}\n${info.mtimeMs}` });
+			}
+		}
+		if (!local.length) {
+			return messages;
+		}
+		const todo = local.filter(f => !sentFiles.has(f.key));
+		if (todo.length) {
+			const r = await vscode.commands.executeCommand<{ dir?: string; error?: string } | undefined>('arkestra.connections.uploadFiles', machine, todo.map(f => f.file), `~/.arkestra/attachments/${roomId}`);
+			if (!r?.dir) {
+				throw new Error(vscode.l10n.t('The attached files could not be sent to {0}: {1}', machineNames().get(machine) ?? machine, r?.error ?? vscode.l10n.t('the machine is not connected')));
+			}
+			for (const f of todo) {
+				sentFiles.set(f.key, path.posix.join(r.dir, path.basename(f.file)));
+			}
+		}
+		const moved = new Map(local.map(f => [f.file, sentFiles.get(f.key)!]));
+		return messages.map(m => m.author.kind === 'user' && m.text.includes('@file:') ? { ...m, text: movedReferences(m.text, moved) } : m);
+	};
+
 	const track = (room: Room): Room => {
 		loaded.set(room.id, room);
 		room.shared = () => shared.block();
+		room.forAgent = (agent, messages) => sendFiles(room.id, agent, messages);
 		room.afterTurn = async (agent, reply) => {
 			await changesUi?.take(room.id, vscode.l10n.t('After {0}', agent.name));
 			const memories = extractMemories(reply);
@@ -691,6 +860,12 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 	// Threads open in Arkestra's own panel; the right panel follows the one used last.
 	const threads = new ThreadViews(context, {
 		registry, activity, live, onDidChangeThread: threadChanged.event, open, use,
+		sessionLive: room => Object.entries(room.state.adopted ?? {}).flatMap(([agentId, link]) => {
+			const l = liveSessions.get(link.session);
+			// A turn that runs, or one that ended with background tasks still going (the Claude app's spinner).
+			return l?.state === 'run' ? [{ agentId, ...(l.doing ? { doing: l.doing } : {}) }]
+				: l?.bg?.length ? [{ agentId, doing: vscode.l10n.t(l.bg.length === 1 ? '{0} background task running' : '{0} background tasks running', l.bg.length) }] : [];
+		}),
 		createRoom: async (agentIds, title, project) => {
 			const room = await createRoom(title, project);
 			for (const id of agentIds) {
@@ -730,9 +905,70 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			}
 		},
 	});
+	// Each agent's account quota, read from its vendor at most every minute while the panel shows it.
+	const quotas = new Map<string, { at: number; limits?: Usage['limits']; reading?: boolean }>();
+	const quotaOf = (agentId: string): Usage['limits'] | undefined => {
+		const known = quotas.get(agentId);
+		const agent = registry.get(agentId);
+		if (agent?.quota && !known?.reading && Date.now() - (known?.at ?? 0) > 60_000) {
+			quotas.set(agentId, { ...known, at: Date.now(), reading: true });
+			void agent.quota().then(
+				limits => {
+					quotas.set(agentId, { at: Date.now(), limits });
+					const roomId = threads.activeRoomId();
+					if (roomId) {
+						threadChanged.fire(roomId);
+					}
+				},
+				() => quotas.set(agentId, { ...quotas.get(agentId), at: Date.now(), reading: false }),
+			);
+		}
+		return known?.limits;
+	};
+	/** The adopted sessions' folders' git changes as last read, per set of folders. */
+	const worktrees = new Map<string, { at: number; changes: readonly { path: string; added?: number; removed?: number; status: 'M' | '?' }[] }>();
+	// The right panel shows the context fill the account reports as soon as the list is read.
+	context.subscriptions.push(cloudReadDone.event(() => {
+		const roomId = threads.activeRoomId();
+		if (roomId) {
+			threadChanged.fire(roomId);
+		}
+	}));
 	context.subscriptions.push(threads, new DetailsView({
 		registry, activity, onDidChangeThread: threadChanged.event, threads, open,
 		changes: async roomId => await changesUi?.checkpoints()?.changes(roomId) ?? [],
+		quota: quotaOf,
+		cloudContext: (room, agentId) => {
+			void readCloud();
+			const link = room.state.adopted?.[agentId];
+			const bridge = link ? link.bridge ?? bridgeOf.get(link.session) : undefined;
+			return bridge ? cloudRows.get(bridge)?.context : undefined;
+		},
+		liveRunning: (room, agentId) => {
+			const link = room.state.adopted?.[agentId];
+			return !!link && liveSessions.get(link.session)?.state === 'run';
+		},
+		worktreeChanges: async room => {
+			const links = Object.entries(room.state.adopted ?? {}).filter(([id, l]) => l.cwd && registry.get(id)?.worktreeChanges);
+			if (!links.length) {
+				return undefined;
+			}
+			const key = links.map(([id, l]) => `${id}:${l.cwd}`).join('|');
+			const known = worktrees.get(key);
+			if (known && Date.now() - known.at < 15_000) {
+				return known.changes;
+			}
+			const read = await Promise.all(links.map(([id, l]) => registry.get(id)!.worktreeChanges!(l.cwd!).catch(() => [])));
+			const seen = new Set<string>();
+			const changes = read.flat().filter(c => !seen.has(c.path) && seen.add(c.path));
+			worktrees.set(key, { at: Date.now(), changes });
+			return changes;
+		},
+		liveBackground: (room, agentId) => {
+			const link = room.state.adopted?.[agentId];
+			const l = link ? liveSessions.get(link.session) : undefined;
+			return l && (l.bg?.length || l.done) ? { tasks: l.bg ?? [], done: l.done ?? 0 } : undefined;
+		},
 	}));
 
 	// ---- Threads as native chat sessions: history, session list, the left column ----------
@@ -751,6 +987,104 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 
 	const allThreads = async (): Promise<ThreadSummary[]> => (await store.list()).map(state => summarize(loaded.get(state.id)?.state ?? state));
 	const busy = (roomId: string) => (loaded.get(roomId)?.roster ?? []).some(id => activity.get(roomId, id).state !== 'idle');
+
+	// The left bar's status dots: what each thread was last seen at here (a thread seen in the Claude
+	// app counts there; its account says). Answers from before the first run count as seen.
+	const VIEWED = 'arkestra.viewed';
+	const viewedStore = (): { since: string; threads: Record<string, string> } => {
+		const stored = context.globalState.get<{ since: string; threads: Record<string, string> }>(VIEWED);
+		if (stored?.since) {
+			return stored;
+		}
+		const fresh = { since: new Date().toISOString(), threads: {} };
+		void context.globalState.update(VIEWED, fresh);
+		return fresh;
+	};
+	const markViewed = async (roomId: string): Promise<void> => {
+		const v = viewedStore();
+		await context.globalState.update(VIEWED, { since: v.since, threads: { ...v.threads, [roomId]: new Date().toISOString() } });
+		const state = loaded.get(roomId)?.state ?? (await store.list()).find(s => s.id === roomId);
+		for (const b of state ? roomBridges(state) : []) {
+			const row = cloudRows.get(b);
+			if (row?.unread && cloud) {
+				cloudRows.set(b, { ...row, unread: false });
+				void cloud.markRead(b).catch(() => undefined);
+			}
+		}
+	};
+	let viewing: string | undefined;
+	context.subscriptions.push(currentChanged.event(() => {
+		// The thread left was seen up to now, and so is the one opened.
+		if (viewing && viewing !== current?.id) {
+			void markViewed(viewing);
+		}
+		viewing = current?.id;
+		if (viewing) {
+			void markViewed(viewing);
+		}
+	}));
+	// Live: each Claude session's and Codex thread's turn as its file is written, on every machine (the left bar's dots).
+	const liveSessions = new Map<string, { state: 'run' | 'idle'; at: number; doing?: string; bg?: readonly { id: string; name: string; since: string }[]; done?: number }>();
+	const liveWatches = new Map<string, { dispose(): void }>();
+	const syncLiveWatches = () => {
+		const agents = registry.all().filter(a => a.watchStates);
+		for (const [id, w] of liveWatches) {
+			if (!agents.some(a => a.id === id)) {
+				w.dispose();
+				liveWatches.delete(id);
+			}
+		}
+		for (const agent of agents) {
+			if (!liveWatches.has(agent.id)) {
+				liveWatches.set(agent.id, agent.watchStates!(s => {
+					const was = liveSessions.get(s.id);
+					liveSessions.set(s.id, { state: s.state, at: s.at, ...(s.doing ? { doing: s.doing } : {}), ...(s.bg?.length ? { bg: s.bg } : {}), ...(s.done ? { done: s.done } : {}) });
+					if (was?.state !== s.state) {
+						refreshThreadsLater();
+					}
+					const tasks = (l?: { bg?: readonly { id: string }[]; done?: number }) => `${(l?.bg ?? []).map(b => b.id).join(',')}/${l?.done ?? 0}`;
+					if (was?.state !== s.state || was?.doing !== s.doing || tasks(was) !== tasks(s)) {
+						// The open threads' live line and the right panel's agent line.
+						for (const room of loaded.values()) {
+							if (Object.values(room.state.adopted ?? {}).some(a => a.session === s.id)) {
+								threadChanged.fire(room.id);
+							}
+						}
+					}
+				}));
+			}
+		}
+	};
+	context.subscriptions.push(registry.onDidChange(syncLiveWatches), { dispose: () => liveWatches.forEach(w => w.dispose()) });
+	setTimeout(syncLiveWatches, 3000);
+	/** The cloud row as the dots read it: what the file shows live wins over the account's slower `running`. */
+	const withLive = (row: CloudSession | undefined, sessions: readonly string[]): { running: boolean; cloud?: CloudSession } => {
+		const known = sessions.map(id => liveSessions.get(id)).filter((l): l is { state: 'run' | 'idle'; at: number } => !!l);
+		const running = known.some(l => l.state === 'run');
+		if (!row) {
+			return { running };
+		}
+		return { running, cloud: known.length && row.worker === 'running' ? { ...row, worker: 'idle' } : row };
+	};
+	const threadState = (t: ThreadSummary, running: boolean, selected: boolean): RowState | undefined => {
+		const state = loaded.get(t.id)?.state;
+		const bridges = state ? roomBridges(state) : (t.adopted ?? []).map(a => bridgeOf.get(a.session)).filter((b): b is string => !!b);
+		const sessions = state ? Object.values(state.adopted ?? {}).map(a => a.session) : (t.adopted ?? []).map(a => a.session);
+		const seen = withLive(bridges.map(b => cloudRows.get(b)).find(Boolean), sessions);
+		const row = seen.cloud;
+		running ||= seen.running;
+		const roster = state?.roster ?? [];
+		const failed = t.failed || roster.some(id => !!activity.get(t.id, id).error && activity.get(t.id, id).state === 'idle');
+		// Mid-turn and asking (a question, a permission): it waits for the user.
+		const asking = roster.some(id => activity.get(t.id, id).state === 'answering' && !!activity.get(t.id, id).work?.waiting);
+		const v = viewedStore();
+		const viewedAt = v.threads[t.id] ?? v.since;
+		return rowState({ running, failed, ...(t.planWaiting || asking ? { planWaiting: true } : {}), ...(row ? { cloud: row } : {}), ...(t.answeredAt ? { answeredAt: t.answeredAt } : {}), viewedAt, selected });
+	};
+	const sessionState = (session: ListedSession, running: boolean): RowState | undefined => {
+		const seen = withLive(session.bridge ? cloudRows.get(session.bridge) : undefined, [session.id]);
+		return rowState({ running: running || seen.running, ...(seen.cloud ? { cloud: seen.cloud } : {}) });
+	};
 
 	const controller = vscode.chat.createChatSessionItemController(ROOM_SCHEME, async () => {
 		const threads = await allThreads();
@@ -938,6 +1272,8 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		new SidebarView(context, {
 			threads: allThreads,
 			busy,
+			threadState,
+			sessionState,
 			currentThread: () => current?.id,
 			boards: () => github?.boards() ?? [],
 			pinnedArtifacts: () => gallery.pinnedArtifacts(),
@@ -997,8 +1333,49 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 		}),
 		vscode.commands.registerCommand('arkestra.rooms.pin', arg => editRoom(arg, room => { room.state.pinned = true; })),
 		vscode.commands.registerCommand('arkestra.rooms.unpin', arg => editRoom(arg, room => { delete room.state.pinned; })),
-		vscode.commands.registerCommand('arkestra.rooms.archive', arg => editRoom(arg, room => { room.state.archived = true; delete room.state.pinned; })),
-		vscode.commands.registerCommand('arkestra.rooms.unarchive', arg => editRoom(arg, room => { delete room.state.archived; })),
+		vscode.commands.registerCommand('arkestra.rooms.archive', async arg => {
+			const room = await open(threadId(arg));
+			if (!room) {
+				return;
+			}
+			const failed = await tellCloud(room.state, (c, id) => c.archive(id), row => ({ ...row, archived: true }));
+			if (failed) {
+				void vscode.window.showWarningMessage(vscode.l10n.t('Archived here, but not in the Claude app: {0}', failed));
+			}
+			await editRoom(room.id, r => { r.state.archived = true; delete r.state.pinned; });
+		}),
+		vscode.commands.registerCommand('arkestra.rooms.unarchive', async arg => {
+			const room = await open(threadId(arg));
+			if (!room) {
+				return;
+			}
+			// Archived in the Claude app too: restored there first, else it would come back archived.
+			const failed = await tellCloud(room.state, (c, id) => c.unarchive(id), row => ({ ...row, archived: false }));
+			if (failed) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('The thread could not be restored in the Claude app ({0}). Restore it there; Arkestra follows.', failed));
+				return;
+			}
+			await editRoom(room.id, r => { delete r.state.archived; });
+		}),
+		// A session row no thread continues: archived in the Claude app, so it leaves every list.
+		vscode.commands.registerCommand('arkestra.rooms.archiveSession', async (bridge: unknown) => {
+			if (typeof bridge !== 'string') {
+				return;
+			}
+			await readCloud();
+			try {
+				if (!cloud) {
+					throw new Error(vscode.l10n.t('no machine here has a claude.ai sign-in'));
+				}
+				await cloud.archive(bridge);
+				const row = cloudRows.get(bridge);
+				cloudRows.set(bridge, { ...(row ?? { id: bridge, title: '' }), archived: true });
+				sessionLists.clear();
+				refreshThreads();
+			} catch (error) {
+				void vscode.window.showErrorMessage(vscode.l10n.t('The session could not be archived in the Claude app: {0}', error instanceof Error ? error.message : String(error)));
+			}
+		}),
 		vscode.commands.registerCommand('arkestra.rooms.delete', async (arg: unknown) => {
 			const room = await open(threadId(arg));
 			if (!room) {
@@ -1031,7 +1408,11 @@ export function activate(context: vscode.ExtensionContext): ArkestraRoomsApi {
 			const room = await open(threadId(arg));
 			const title = typeof name === 'string' ? name.trim() : '';
 			if (room && title) {
-				await editRoom(room.id, r => { r.state.title = title; });
+				const failed = await tellCloud(room.state, (c, id) => c.rename(id, title), row => ({ ...row, title }));
+				if (failed) {
+					void vscode.window.showWarningMessage(vscode.l10n.t('Renamed here, but not in the Claude app: {0}', failed));
+				}
+				await editRoom(room.id, r => { r.state.title = title; r.state.renamed = true; });
 			}
 		}),
 	);

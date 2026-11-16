@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { DetailsFollow, surfaceOf } from '../surface';
+import { DetailsFollow, SETTLE_MS, surfaceOf } from '../surface';
 
 test('the surface of the active tab: a thread, a page (board, artifacts, new chat), an editor', () => {
 	assert.equal(surfaceOf({ webview: 'mainThreadWebview-arkestra.thread' }, 'arkestra.thread', 'room1'), 'thread');
@@ -38,9 +38,11 @@ test('after a restart on a page the bar is closed: the first thread opens it', (
 });
 
 test('closed by the user on a thread: a page and back keep it closed until he opens it', () => {
-	const f = new DetailsFollow();
+	let now = 0;
+	const f = new DetailsFollow(() => now);
 	f.changed('thread');
 	f.visibility(true);
+	now = SETTLE_MS;
 	f.visibility(false); // the user closed it
 	assert.equal(f.changed('page'), undefined);
 	assert.equal(f.changed('thread'), undefined);
@@ -66,4 +68,21 @@ test('editors and terminals change nothing; a bar opened by hand on a page is no
 	f.visibility(false);
 	assert.equal(f.changed('editor'), undefined);
 	assert.equal(f.changed('thread'), 'open');
+});
+
+test('right after start the layout\'s own close is not the user\'s: once settled, a thread shows its details again', () => {
+	let now = 0;
+	const f = new DetailsFollow(() => now);
+	assert.equal(f.changed('thread'), 'open');
+	f.visibility(true);
+	now = 2000;
+	f.visibility(false); // the window restoring its layout closed the bar
+	assert.equal(f.settled(), 'open');
+	f.visibility(true);
+	assert.equal(f.settled(), undefined);
+	now = SETTLE_MS + 1;
+	f.visibility(false); // now it is the user
+	assert.equal(f.settled(), undefined);
+	assert.equal(f.changed('page'), undefined);
+	assert.equal(f.changed('thread'), undefined);
 });

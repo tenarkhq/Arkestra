@@ -6,7 +6,7 @@
 
 import { fontFaces, fontSrc, TYPE_CSS, type PageFonts } from './fonts';
 import { imageName, imageRefs, imageSource, userImages, type ImageResolver } from './images';
-import { agentLabel, foldLabel, providerOf, type FoldItem, type LivePart, type Row } from './threadModel';
+import { agentLabel, foldLabel, providerOf, stepParts, stepsLabel, withoutSteps, type FoldItem, type LivePart, type Row, type Step } from './threadModel';
 import type { MenuItem } from './choice';
 import { FORM_CLIENT, FORM_CSS, formHtml, type FormSpec } from './pageForm';
 
@@ -64,7 +64,8 @@ function inline(text: string): string {
 		links.push(`<a href="${escapeHtml(href)}">${inlineRest(escapeHtml(label))}</a>`);
 		return `\u0001${links.length - 1}\u0001`;
 	});
-	s = s.replace(/https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"]/g, url => {
+	// A bare URL ends before closing punctuation and markup around it (`**https://…**` is a bold link).
+	s = s.replace(/https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"*_~]/g, url => {
 		links.push(`<a href="${escapeHtml(url)}">${escapeHtml(url)}</a>`);
 		return `\u0001${links.length - 1}\u0001`;
 	});
@@ -251,10 +252,12 @@ export function rowHtml(row: Row, s: ThreadStrings, md: (text: string, opts?: Ma
 	switch (row.type) {
 		case 'user': {
 			const { text, images } = userImages(row.text);
-			return `<div class="ub">${escapeHtml(text).replace(/\n/g, '<br>')}${imagesHtml(images, image, true)}${row.attached ? `<div class="att">${escapeHtml(s.attached(row.attached))}</div>` : ''}</div>`;
+			const bubble = `<div class="ub">${escapeHtml(text).replace(/\n/g, '<br>')}${imagesHtml(images, image, true)}${row.attached ? `<div class="att">${escapeHtml(s.attached(row.attached))}</div>` : ''}</div>`;
+			const acts = row.id === 'pending' ? '' : `<div class="acts">${time ? `<span>${escapeHtml(time)}</span>` : ''}<button class="act" data-copy="${escapeHtml(row.id)}" title="${escapeHtml(s.copy)}" aria-label="${escapeHtml(s.copy)}">${COPY_ICON}</button></div>`;
+			return `<div class="um">${bubble}${acts}</div>`;
 		}
 		case 'agent':
-			return `<div class="msg"><div class="who">${letter(row.agentId, row.name)}${escapeHtml(agentLabel(row.name, row.agentId, s.local))}</div><div class="md">${md(row.text, { image })}${imagesHtml(imageRefs(row.text), image)}</div>`
+			return `<div class="msg"><div class="who">${letter(row.agentId, row.name)}${escapeHtml(agentLabel(row.name, row.agentId, s.local))}</div><div class="md">${answerHtml(row.text, md, image)}${imagesHtml(imageRefs(withoutSteps(row.text)), image)}</div>`
 				+ `<div class="acts"><button class="act" data-copy="${escapeHtml(row.id)}" title="${escapeHtml(s.copy)}" aria-label="${escapeHtml(s.copy)}">${COPY_ICON}</button>${time ? `<span>${escapeHtml(time)}</span>` : ''}</div></div>`;
 		case 'fold':
 			return foldHtml(row.items, s);
@@ -275,6 +278,18 @@ function errorHtml(row: Extract<Row, { type: 'error' }>, s: ThreadStrings): stri
 	return `<div class="notice error" role="alert"><div class="eh">${escapeHtml(agentLabel(row.name, row.agentId, s.local))}</div><div>${escapeHtml(text)}</div>${button}</div>`;
 }
 
+/** An answer's texts, with what the agent did between them as folded lines (the apps' "Checked …", "Ran 3 commands"). */
+function answerHtml(text: string, md: (text: string, opts?: MarkdownOptions) => string, image: ImageResolver): string {
+	return stepParts(text).map(p => 'md' in p ? (p.md ? md(p.md, { image }) : '') : stepsHtml(p.steps)).join('');
+}
+
+function stepsHtml(steps: readonly Step[]): string {
+	const items = steps.length > 1 ? `<div class="items">${steps.map(st => `<div class="fi">${escapeHtml(st.label)}</div>`).join('')}</div>` : '';
+	return steps.length > 1
+		? `<details class="fold steps"><summary>${escapeHtml(stepsLabel(steps))}${CHEVRON}</summary>${items}</details>`
+		: `<div class="fold steps one">${escapeHtml(steps[0].label)}</div>`;
+}
+
 function foldHtml(items: readonly FoldItem[], s: ThreadStrings): string {
 	const label = foldLabel(items, s);
 	return `<details class="fold"><summary>${escapeHtml(label)}${CHEVRON}</summary><div class="items">${items.map(i => `<div class="fi ${i.kind}">${escapeHtml(i.summary)}</div>`).join('')}</div></details>`;
@@ -283,7 +298,7 @@ function foldHtml(items: readonly FoldItem[], s: ThreadStrings): string {
 /** A running turn: what the agent wrote so far, and its last tool line under it. */
 export function liveHtml(part: LivePart, name: string, s: ThreadStrings, image: ImageResolver = webImages): string {
 	return `<div class="msg live"><div class="who">${letter(part.agentId, name)}${escapeHtml(agentLabel(name, part.agentId, s.local))}</div>`
-		+ (part.text ? `<div class="md">${renderMarkdown(part.text, { image })}</div>` : '')
+		+ (part.text ? `<div class="md">${answerHtml(part.text, renderMarkdown, image)}</div>` : '')
 		+ `<div class="status"><span class="pulse"></span>${escapeHtml(part.tool ?? s.working)}</div>`
 		+ (part.error ? `<div class="err">${escapeHtml(part.error)}</div>` : '')
 		+ '</div>';
@@ -301,6 +316,7 @@ export const ICONS = {
 	agent: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="6" r="2.5"/><path d="M3.5 13.5a4.5 4.5 0 0 1 9 0"/></svg>',
 	done: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="m3 8 3 3 7-7"/></svg>',
 	file: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/></svg>',
+	remote: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="4.5" y="1.5" width="7" height="13" rx="1.5"/><path d="M7 12.2h2"/></svg>',
 	machine: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="7" rx="1.5"/><path d="M5.5 13h5M8 10v3"/></svg>',
 	close: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m4.5 4.5 7 7M11.5 4.5l-7 7"/></svg>',
 	image: IMAGE_ICON,
@@ -351,7 +367,7 @@ svg { display: block; }
 `;
 
 /** The thread panel's page: rows, running turns, notices, and the composer or the new-chat cards. */
-export function threadPage(opts: { nonce: string; cspSource: string; mode: 'thread' | 'new'; roomId?: string; placeholder: string; heading: string; fonts?: PageFonts; close?: string; attach?: string }): string {
+export function threadPage(opts: { nonce: string; cspSource: string; mode: 'thread' | 'new'; roomId?: string; placeholder: string; heading: string; fonts?: PageFonts; close?: string; attach?: string; down?: string }): string {
 	const { nonce } = opts;
 	return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -369,6 +385,8 @@ body { background: var(--vscode-editor-background); height: 100vh; display: flex
 .fold[open] .chev { transform: rotate(90deg); }
 .fold .items { margin: 6px 0 0 2px; padding-left: 12px; border-left: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
 .fi { overflow-wrap: anywhere; }
+.md .steps { margin: 10px 0; }
+.md .steps.one { overflow-wrap: anywhere; }
 .msg { line-height: 1.6; font-size: 14px; }
 .who { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--mute); margin-bottom: 2px; }
 .av { width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font-style: normal; font-size: 10px; font-weight: 700; color: var(--vscode-editor-background); background: var(--vscode-charts-purple, #b392f0); flex: none; }
@@ -431,7 +449,9 @@ body { background: var(--vscode-editor-background); height: 100vh; display: flex
 .md .al-center { text-align: center; }
 .md .al-right { text-align: right; }
 #thread, #chips, #right { display: contents; }
-.ub { align-self: flex-end; background: var(--vscode-input-background); padding: 9px 14px; border-radius: 14px; font-size: 14px; line-height: 1.5; max-width: 70%; overflow-wrap: anywhere; }
+.um { align-self: flex-end; max-width: 88%; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.um:hover .acts { opacity: 1; }
+.ub { background: var(--vscode-input-background); padding: 9px 14px; border-radius: 14px; font-size: 14px; line-height: 1.5; max-width: 100%; overflow-wrap: anywhere; }
 .ub .att { color: var(--mute); font-size: 12px; margin-top: 4px; }
 .acts { display: flex; gap: 14px; color: var(--dim); font-size: 12px; align-items: center; margin-top: 2px; opacity: 0; transition: opacity .12s; }
 .msg:hover .acts { opacity: 1; }
@@ -506,7 +526,12 @@ button.chip:hover { background: var(--hover); }
 .hint { color: var(--mute); font-size: 12.5px; width: 100%; max-width: 740px; display: flex; gap: 16px; flex-wrap: wrap; }
 .hint b { color: var(--fg); font-weight: 500; }
 .empty { color: var(--mute); }
-@media (max-width: 520px) { .col, .compose { padding-left: 16px; padding-right: 16px; } .ub { max-width: 88%; } }
+.compose { position: relative; }
+.down { position: absolute; top: -42px; left: 50%; transform: translateX(-50%); width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: var(--fg); background: var(--vscode-editor-background); border: 1px solid var(--line2); box-shadow: 0 2px 8px rgba(0,0,0,.18); z-index: 5; }
+.down[hidden] { display: none; }
+.down:hover { background: var(--hover); }
+.down svg { width: 15px; height: 15px; }
+@media (max-width: 520px) { .col, .compose { padding-left: 16px; padding-right: 16px; } .um { max-width: 94%; } }
 </style></head><body data-mode="${opts.mode}" data-room="${escapeHtml(opts.roomId ?? '')}">
 <div id="thread">
 	<div id="conv"><div class="col"><div id="rows"></div><div id="live"></div><div id="notice"></div></div></div>
@@ -517,7 +542,7 @@ button.chip:hover { background: var(--hover); }
 	<div id="heroBox"></div>
 	<div class="hint" id="hint"></div>
 </div>
-<div class="compose" id="compose"><div class="box" id="box">
+<div class="compose" id="compose"><button class="down" id="down" hidden title="${escapeHtml(opts.down ?? 'Jump to the end')}" aria-label="${escapeHtml(opts.down ?? 'Jump to the end')}"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 3v10M3.5 8.5 8 13l4.5-4.5"/></svg></button><div class="box" id="box">
 	<div id="atts"></div>
 	<textarea id="input" rows="1" placeholder="${escapeHtml(opts.placeholder)}"></textarea>
 	<div class="brow">
@@ -541,6 +566,13 @@ const $ = id => document.getElementById(id);
 const conv = $('conv'), rowsEl = $('rows'), liveEl = $('live'), noticeEl = $('notice'), input = $('input'), send = $('send');
 let mode = document.body.dataset.mode, busy = false, selected = null, cards = [], strings = {};
 const nearBottom = () => conv.scrollHeight - conv.scrollTop - conv.clientHeight < 80;
+const down = $('down');
+let stuck = true;
+const showDown = () => { stuck = nearBottom(); down.hidden = stuck; };
+conv.addEventListener('scroll', showDown, { passive: true });
+// A picture that loads later makes the thread taller: one that sat at the end stays there.
+conv.addEventListener('load', e => { if (e.target.tagName === 'IMG' && stuck) { conv.scrollTop = conv.scrollHeight; } }, true);
+down.addEventListener('click', () => { conv.scrollTo({ top: conv.scrollHeight, behavior: 'smooth' }); });
 function keyed(el, list) {
 	const old = new Map([...el.children].map(c => [c.dataset.key, c]));
 	let prev = null;
@@ -843,6 +875,7 @@ window.addEventListener('message', e => {
 		renderChips(m.chips || [], m.right || []);
 		updateSend();
 		if (stick || m.scroll) { conv.scrollTop = conv.scrollHeight; }
+		showDown();
 	} else if (m.type === 'new') {
 		if (mode !== 'new') { setMode('new'); }
 		strings = m.strings || strings;
@@ -938,16 +971,35 @@ button.rr:hover { background: var(--hover); }
 .rr .n { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .rr .k { color: var(--dim); font-size: 12px; }
 .rr.mut { color: var(--mute); }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
-.dot.working { background: var(--accent); }
-.dot.waiting, .dot.queued { background: var(--warn); }
-.dot.error { background: var(--err); }
-.dot.done, .dot.idle { background: var(--ok); }
+.rr .add { color: var(--vscode-gitDecoration-addedResourceForeground, #2f9e5b); }
+/* The Remote Control switch (as the Claude app's): the row is the button. */
+.rr .sw { width: 30px; height: 18px; border-radius: 9px; background: var(--line2); position: relative; flex: none; transition: background .15s; }
+.rr .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--vscode-editor-background, #fff); box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+.rr[aria-checked="true"] .sw { background: var(--vscode-button-background, #2f6fdf); }
+.rr[aria-checked="true"] .sw::after { transform: translateX(12px); }
+.rr .del { color: var(--vscode-gitDecoration-deletedResourceForeground, #d64545); }
+/* The agents' dots, the same as the left bar's: runs (pulses), waits for you, stuck; idle and done are quiet. */
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; position: relative; opacity: .55; }
+.dot.working, .dot.waiting, .dot.error, .dot.queued { opacity: 1; }
+.dot.working { background: var(--vscode-charts-yellow, #d99a1e); }
+.dot.working::after { content: ""; position: absolute; inset: 0; border-radius: 50%; background: inherit; animation: dotpulse 1.6s ease-out infinite; }
+@keyframes dotpulse { from { transform: scale(1); opacity: .55; } to { transform: scale(2.4); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .dot.working::after { animation: none; } }
+.dot.queued { background: color-mix(in srgb, var(--vscode-charts-yellow, #d99a1e) 45%, transparent); }
+.dot.waiting { background: var(--vscode-charts-red, #d64545); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-charts-red, #d64545) 22%, transparent); }
+.dot.error { width: 11px; height: 11px; background: var(--vscode-charts-red, #d64545); }
+.dot.error::before { content: "!"; position: absolute; inset: 0; display: grid; place-items: center; font-size: 8.5px; font-weight: 700; color: var(--vscode-sideBar-background, #fff); line-height: 1; }
 .hr { height: 1px; background: var(--line); margin: 8px 0; }
 .bar { width: 44px; height: 5px; border-radius: 3px; background: var(--line2); overflow: hidden; flex: none; }
 .bar b { display: block; height: 100%; background: var(--accent); }
 .bar.warn b { background: var(--warn); }
 .bar.crit b { background: var(--err); }
+.meter { display: flex; flex-direction: column; gap: 5px; padding: 6px 4px; font-size: 13px; }
+.meter .top { display: flex; align-items: baseline; gap: 8px; }
+.meter .top .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meter .top b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.meter .bar { width: 100%; }
+.meter .sub { color: var(--dim); font-size: 11.5px; }
 .st { font-size: 12px; font-weight: 600; width: 14px; text-align: center; flex: none; }
 .st.A { color: var(--ok); } .st.M { color: var(--warn); } .st.D { color: var(--err); }
 .empty { color: var(--mute); padding: 4px; font-size: 12.5px; }
@@ -984,6 +1036,7 @@ window.addEventListener('message', e => {
 });
 document.addEventListener('click', e => {
 	const b = e.target.closest('[data-change]'); if (b) { vscode.postMessage({ type: 'change', index: Number(b.dataset.change) }); return; }
+	const rc = e.target.closest('[data-remote]'); if (rc) { const on = rc.getAttribute('aria-checked') !== 'true'; rc.setAttribute('aria-checked', String(on)); vscode.postMessage({ type: 'remote', on }); return; }
 	const s = e.target.closest('[data-shared]'); if (s) { vscode.postMessage({ type: 'shared', file: s.dataset.shared }); return; }
 	if (e.target.closest('[data-remember]')) { if (box.hidden) { openRemember(); } else { box.hidden = true; } }
 });

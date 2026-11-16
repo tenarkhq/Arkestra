@@ -8,7 +8,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { AgentRegistry, type Agent, type Readiness, type TurnInput } from '../agent';
-import { AgentNotReadyError, Room, RoomOpener, newRoomState, type Message, type RoomState } from '../room';
+import { AgentNotReadyError, Room, RoomOpener, followSessionName, newRoomState, sentHere, type Message, type RoomState } from '../room';
 import { RoomStore } from '../store';
 
 function fakeAgent(id: string, opts: { readiness?: Readiness; gate?: Promise<void>; seen?: Message[][] } = {}): Agent & { aborted: boolean } {
@@ -129,4 +129,30 @@ test('one Room per thread: overlapping opens share the load; a Room made meanwhi
 	loaded.set('t2', { id: 't2', n: 99 });
 	free();
 	assert.equal((await c)?.n, 99);
+});
+
+test('a thread that continues a session carries the session\'s name until the user names it here', () => {
+	const sid = '11111111-1111-4111-8111-111111111111';
+	const state = newRoomState('first words');
+	state.adopted = { claude: { session: sid, upTo: 'm1' } };
+	assert.equal(followSessionName(state, [{ id: 'other', title: 'Nope' }]), false);
+	assert.equal(followSessionName(state, [{ id: sid, title: '11111111' }]), false, 'the id\'s start is no name');
+	assert.equal(followSessionName(state, [{ id: sid, title: 'Arkestra' }]), true);
+	assert.equal(state.title, 'Arkestra');
+	assert.equal(followSessionName(state, [{ id: sid, title: 'Arkestra' }]), false, 'no change, no save');
+	state.renamed = true;
+	assert.equal(followSessionName(state, [{ id: sid, title: 'Renamed in the CLI' }]), false);
+	assert.equal(state.title, 'Arkestra');
+});
+
+test('a message sent into the session through the Claude app comes back once: tied to the one typed here', () => {
+	const at = '2026-11-15T14:00:00Z';
+	const msgs: Message[] = [
+		{ id: 'a', at, author: { kind: 'user', id: 'user', name: 'You' }, text: 'old' },
+		{ id: 'b', at, author: { kind: 'agent', id: 'claude', name: 'Claude' }, text: 'ok' },
+		{ id: 'c', at, author: { kind: 'user', id: 'user', name: 'You' }, text: 'mehet a build ' },
+	];
+	assert.equal(sentHere(msgs, 'mehet a build'), 2);
+	assert.equal(sentHere(msgs, 'something else'), -1);
+	assert.equal(sentHere([...msgs.slice(0, 2), { ...msgs[2], source: { agent: 'claude', entry: 'e1' } }], 'mehet a build'), -1, 'already tied');
 });

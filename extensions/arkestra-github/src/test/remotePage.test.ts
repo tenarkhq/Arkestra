@@ -16,7 +16,7 @@ const T: RemoteStrings = {
 	relayUrl: 'Relay address', relayToken: 'Client token', tokenKept: 'Saved; type a new one to change it', tokenHint: 'From the relay\'s clients file.', save: 'Save', disconnect: 'Forget the relay',
 	notConnected: 'Not connected yet.', connectedTo: 'Connected to {0}.', phone: 'Phone', off: 'Off', connecting: 'Connecting…', on: 'On · {0} phone(s)', error: 'The relay answered: {0}',
 	turnOn: 'Turn on', turnOff: 'Turn off', copyLink: 'Copy the phone link', newLink: 'New link…', newLinkAsk: 'Phones with the old link stop working.', newLinkYes: 'Make a new link', cancel: 'Cancel',
-	linkNote: 'Open the link on your phone.', threads: 'Threads on the phone', every: 'Every thread', chosen: 'Only the ones I tick ({0})', noThreads: 'No threads yet.',
+	linkNote: 'Open the link on your phone.', scan: 'Scan it', threads: 'Threads on the phone', every: 'Every thread', chosen: 'Only the ones I tick ({0})', noThreads: 'No threads yet.',
 };
 
 test('relayProblem: an http(s) address, and a token unless one is saved', () => {

@@ -192,7 +192,10 @@ test('markdown: code blocks, inline code, headings, lists, tables, quotes', () =
 const S: ThreadStrings = { local: 'this machine', attached: n => `+${n} attached`, tasksDone: n => `${n} finished`, tasks: n => `${n} tasks`, other: n => `${n} other`, working: 'working…', copy: 'Copy' };
 
 test('rows as HTML: the user bubble escaped, the answer with its agent and machine, the fold closed', () => {
-	assert.equal(rowHtml({ type: 'user', id: '1', at: '', text: '<b>hi</b>\nthere', attached: 0 }, S), '<div class="ub">&lt;b&gt;hi&lt;/b&gt;<br>there</div>');
+	const user = rowHtml({ type: 'user', id: '1', at: '', text: '<b>hi</b>\nthere', attached: 0 }, S);
+	assert.ok(user.startsWith('<div class="um"><div class="ub">&lt;b&gt;hi&lt;/b&gt;<br>there</div><div class="acts"><button class="act" data-copy="1" title="Copy" aria-label="Copy"><svg'), user);
+	// The message being sent has no copy button yet (it is not in the thread).
+	assert.equal(rowHtml({ type: 'user', id: 'pending', at: '', text: 'hi', attached: 0 }, S), '<div class="um"><div class="ub">hi</div></div>');
 	const agent = rowHtml({ type: 'agent', id: '2', at: '', agentId: 'claude@tenark-claude', name: 'Claude · tenark-claude', text: 'Itt vagyok.' }, S, renderMarkdown, '23:21');
 	assert.ok(agent.includes('<i class="av claude">C</i>Claude · tenark-claude'));
 	assert.ok(agent.includes('<p>Itt vagyok.</p>'));
@@ -288,4 +291,29 @@ test('new chat: only a chosen card shows its tick, and with nothing kept the fir
 	const page = threadPage({ nonce: 'n', cspSource: 'c', mode: 'new', placeholder: 'p', heading: 'h' });
 	assert.ok(page.includes('.chk svg { width: 11px; height: 11px; visibility: hidden; }') && page.includes('.card.on .chk svg { visibility: visible; }'));
 	assert.ok(page.includes('if (!selected.length) { const first = cards.find(c => c.ready); if (first) { selected = [first.id]; } }'));
+});
+
+test('a bold bare link stays a working link: the ** around it is bold, not part of the address', () => {
+	const html = renderMarkdown('Kész, a vásznon: **https://claude.ai/artifact/5UxaAw2bVtbp54yDBeeXjQ**');
+	assert.ok(html.includes('<strong><a href="https://claude.ai/artifact/5UxaAw2bVtbp54yDBeeXjQ">https://claude.ai/artifact/5UxaAw2bVtbp54yDBeeXjQ</a></strong>'), html);
+	assert.ok(renderMarkdown('see https://x.io/a_b.').includes('href="https://x.io/a_b"'));
+});
+
+test('the jump-to-end button really hides: its own display does not win over [hidden]', () => {
+	const page = threadPage({ nonce: 'n', cspSource: 'c', mode: 'thread', roomId: 'r', placeholder: 'p', heading: 'h', down: 'Jump to the end' });
+	assert.ok(page.includes('<button class="down" id="down" hidden title="Jump to the end"'));
+	assert.ok(page.includes('.down[hidden] { display: none; }'));
+});
+
+test('the Claude app\'s artifact view block beside the user\'s words is hidden: the bubble keeps the words, alone it folds', () => {
+	const block = '<artifact-view-context artifact="244be243">\n{"context":{"mode":"canvas"}}\n(The JSON line above is this viewer\'s live state.)\n<artifact-content-authored-by-others/>\n</artifact-view-context>';
+	assert.equal(userWords(`${block}\n\nna ez most sokkal jobb`), 'na ez most sokkal jobb');
+	assert.equal(backgroundNoise(`${block}\n\nna ez most sokkal jobb`), undefined);
+	assert.equal(backgroundNoise(block)?.kind, 'context');
+});
+
+test('pasted text keeps its words without the Claude app\'s wrapper', () => {
+	assert.equal(userWords('nézd:\n<pasted_content id="0ec0">\ncsorbar@tenarkprd:/opt$ ls\n</pasted_content>\nmi ez?'), 'nézd:\ncsorbar@tenarkprd:/opt$ ls\nmi ez?');
+	// The Claude app closes it with the id too.
+	assert.equal(userWords('\n\n<pasted_content id="0ec0">\n```\ngh auth status\n```\n</pasted_content id="0ec0">\n'), '```\ngh auth status\n```');
 });

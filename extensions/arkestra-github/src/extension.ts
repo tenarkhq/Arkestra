@@ -17,6 +17,20 @@ import { boardKey, cacheKey as boardCacheKey, seedBoards, type BoardEntry } from
 import { BoardsPage } from './boardsPage';
 import { RemoteControl } from './remoteUi';
 import { relayProblem } from './remotePage';
+import { RELAY_FILE, discoverRelay, readRelayFile } from './relayDiscovery';
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import * as path from 'node:path';
+import type { ChildProcess, SpawnOptions } from 'node:child_process';
+
+/** What this extension needs of arkestra-connections: the SSH machines and a way to run on them. */
+interface ConnectionsLike {
+	machines(): readonly { readonly id: string }[];
+	readonly onDidChangeMachines: vscode.Event<void>;
+	spawnFor(machineId: string): ((command: string, args: string[], options: SpawnOptions) => ChildProcess) | undefined;
+}
+/** Set when the user disconnected the relay by hand: it is then not found again by itself. */
+const NO_DISCOVERY = 'arkestra.github.relayDiscoveryOff';
 
 const TOKEN = 'arkestra.github.relayToken';
 const SCOPES = ['repo', 'read:org', 'project'];
@@ -495,10 +509,44 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 	);
 	// Remote Control (AR36): the threads on a phone, through the same relay.
 	const relayUrl = () => vscode.workspace.getConfiguration('arkestra.github').get<string>('relayUrl')?.trim() ?? '';
+	// The relay is found by itself: the server that runs it leaves its address and this
+	// client's token in ~/.config/arkestra/relay.json, read here and over the SSH machines.
+	let discovering: Promise<boolean> | undefined;
+	const discover = (): Promise<boolean> => discovering ??= (async () => {
+		if (relayUrl() && await context.secrets.get(TOKEN)) {
+			return true;
+		}
+		if (context.globalState.get<boolean>(NO_DISCOVERY)) {
+			return false;
+		}
+		const api = await Promise.resolve(vscode.extensions.getExtension<ConnectionsLike>('vscode.arkestra-connections')?.activate()).catch(() => undefined);
+		const readers = (api?.machines() ?? []).map(m => () => {
+			const spawn = api?.spawnFor(m.id);
+			return spawn ? readRelayFile(spawn) : Promise.resolve(undefined);
+		});
+		const found = await discoverRelay(() => readFile(path.join(homedir(), RELAY_FILE), 'utf8'), readers);
+		if (!found) {
+			return false;
+		}
+		await context.secrets.store(TOKEN, found.token);
+		await vscode.workspace.getConfiguration('arkestra.github').update('relayUrl', found.url, vscode.ConfigurationTarget.Global);
+		log.info(`relay found by itself: ${found.url}`);
+		await restartRelay();
+		return true;
+	})().finally(() => { discovering = undefined; });
+	void Promise.resolve(vscode.extensions.getExtension<ConnectionsLike>('vscode.arkestra-connections')?.activate()).then(api => {
+		if (api) {
+			context.subscriptions.push(api.onDidChangeMachines(() => void discover()));
+		}
+	}, () => undefined);
 	const remote = new RemoteControl(context, {
 		get: async () => {
-			const url = relayUrl();
-			const relayToken = await context.secrets.get(TOKEN);
+			let url = relayUrl();
+			let relayToken = await context.secrets.get(TOKEN);
+			if ((!url || !relayToken) && await discover()) {
+				url = relayUrl();
+				relayToken = await context.secrets.get(TOKEN);
+			}
 			return url && relayToken ? { url, token: relayToken } : undefined;
 		},
 		url: relayUrl,
@@ -514,17 +562,19 @@ export function activate(context: vscode.ExtensionContext): ArkestraGitHubApi {
 			if (relayToken.trim()) {
 				await context.secrets.store(TOKEN, relayToken.trim());
 			}
+			await context.globalState.update(NO_DISCOVERY, undefined);
 			await vscode.workspace.getConfiguration('arkestra.github').update('relayUrl', url.trim(), vscode.ConfigurationTarget.Global);
 			await restartRelay();
 			return undefined;
 		},
 		clear: async () => {
+			await context.globalState.update(NO_DISCOVERY, true);
 			await context.secrets.delete(TOKEN);
 			await restartRelay();
 		},
 	}, log);
 	context.subscriptions.push(remote);
-	void restartRelay().then(restartSync);
+	void restartRelay().then(restartSync).then(() => discover());
 
 	return {
 		onEvent: events.event,

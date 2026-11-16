@@ -91,6 +91,12 @@ export interface ThreadSummary {
 	readonly roster?: readonly string[];
 	/** The CLI sessions it continues (AR39): such a session shows as this thread's row. */
 	readonly adopted?: readonly { readonly agent: string; readonly session: string }[];
+	/** ISO time of the agents' latest message (what "unread" compares with). */
+	readonly answeredAt?: string;
+	/** Its last word is an agent's error: it is stuck until the user acts. */
+	readonly failed?: boolean;
+	/** Plan mode and the plan is in: it waits for the user to execute it. */
+	readonly planWaiting?: boolean;
 }
 
 export function summarize(state: RoomState): ThreadSummary {
@@ -105,6 +111,19 @@ export function summarize(state: RoomState): ThreadSummary {
 		agents: state.roster.length,
 		...(state.roster.length ? { roster: [...state.roster] } : {}),
 		...(state.adopted && Object.keys(state.adopted).length ? { adopted: Object.entries(state.adopted).map(([agent, a]) => ({ agent, session: a.session })) } : {}),
+		...threadState(state),
+	};
+}
+
+/** What the left bar's status dot needs from a thread: its latest answer, a stuck last turn, a plan waiting. */
+function threadState(state: RoomState): { answeredAt?: string; failed?: boolean; planWaiting?: boolean } {
+	const last = [...state.messages].reverse().find(m => m.author.kind !== 'system');
+	const answered = [...state.messages].reverse().find(m => m.author.kind === 'agent');
+	const byAgent = last?.author.kind === 'agent';
+	return {
+		...(answered ? { answeredAt: answered.at } : {}),
+		...(byAgent && /^\[error\]|\n\n\[error\] /.test(last!.text) ? { failed: true } : {}),
+		...(byAgent && state.mode === 'plan' ? { planWaiting: true } : {}),
 	};
 }
 

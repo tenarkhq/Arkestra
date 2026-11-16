@@ -17,12 +17,20 @@ export interface SidebarRow {
 	readonly title: string;
 	readonly tip?: string;
 	readonly running?: boolean;
+	/** Its status dot: runs, waits for the user, stuck, done and not seen yet; none: nothing. */
+	readonly state?: 'run' | 'wait' | 'err' | 'done';
 	readonly pinned?: boolean;
 	readonly archived?: boolean;
 	/** The section the thread is in. */
 	readonly section?: string;
 	/** The machine it runs on, only while rows of several machines show. */
 	readonly machine?: string;
+	/** Its agent, on rows outside the agent groups (sections, Pinned, Archived). */
+	readonly agent?: string;
+	/** That agent's kind (`claude`, `codex`): the colour of its letter badge. */
+	readonly agentKind?: string;
+	/** The threads it started (sub-threads), newest first, each with its own. */
+	readonly children?: readonly SidebarRow[];
 }
 
 /** One agent's group of the default listing; `older`: past the recent window, behind "Show older". */
@@ -64,12 +72,20 @@ export interface SidebarStrings {
 	readonly noMatch: string;
 	readonly more: string;
 	readonly running: string;
+	readonly waiting: string;
+	readonly stuck: string;
+	readonly done: string;
+	/** `{0} waiting for you, {1} running` in a folded section's header. */
+	readonly inside: string;
+	/** `{0} threads it started` beside a folded row with sub-threads. */
+	readonly subThreads: string;
 	readonly moveTo: string;
 	readonly noSection: string;
 	readonly newSectionMenu: string;
 	readonly sectionName: string;
 	readonly pin: string;
 	readonly unpin: string;
+	readonly openBeside: string;
 	readonly rename: string;
 	readonly archive: string;
 	readonly restore: string;
@@ -85,7 +101,7 @@ export type SidebarMessage =
 	| { type: 'ready' }
 	| { type: 'nav'; item: 'newChat' | 'boards' | 'artifacts' | 'machines' }
 	| { type: 'open'; key: string }
-	| { type: 'thread'; action: 'pin' | 'unpin' | 'rename' | 'archive' | 'unarchive' | 'delete'; id: string; name?: string }
+	| { type: 'thread'; action: 'pin' | 'unpin' | 'rename' | 'archive' | 'unarchive' | 'delete' | 'beside'; id: string; name?: string }
 	| { type: 'move'; id: string; section: string | null }
 	| { type: 'moveToNew'; id: string; name: string }
 	| { type: 'section'; action: 'new' | 'rename' | 'delete' | 'up' | 'down'; id?: string; name?: string }
@@ -98,6 +114,8 @@ const ICONS = {
 	board: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="3.5" height="10" rx="1"/><rect x="6.5" y="3" width="3.5" height="7" rx="1"/><rect x="11" y="3" width="3" height="5" rx="1"/></svg>',
 	artifact: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/></svg>',
 	machine: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="12" height="7" rx="1.5"/><path d="M5.5 13h5M8 10v3"/></svg>',
+	chev: '<svg class="chev" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m3 4.5 3 3 3-3"/></svg>',
+	folder: '<svg class="fold" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h3l1.5 1.5h4.5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/></svg>',
 };
 
 function esc(value: string): string {
@@ -116,23 +134,43 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		--mute: var(--vscode-descriptionForeground);
 		--dim: color-mix(in srgb, var(--vscode-descriptionForeground) 70%, transparent);
 		--hover: var(--vscode-list-hoverBackground);
-		--sel: var(--vscode-list-inactiveSelectionBackground);
+		/* The open thread's row stands out in every theme (the list's own selection colour is faint in many). */
+		--sel: color-mix(in srgb, var(--fg) 13%, transparent);
 		--accent: var(--vscode-progressBar-background);
+		--line: color-mix(in srgb, var(--fg) 13%, transparent);
+		--st-run: var(--vscode-charts-yellow, #d99a1e);
+		--st-wait: var(--vscode-charts-red, #d64545);
+		--st-done: var(--vscode-charts-green, #2f9e5b);
 	}
 	html, body { margin: 0; padding: 0; background: var(--vscode-sideBar-background); color: var(--fg); }
 	body { ${TYPE_CSS} font-size: 13px; font-weight: 400; padding: 10px 8px 16px; user-select: none; -webkit-user-select: none; }
 	#nav, #list { display: flex; flex-direction: column; gap: 2px; }
 	.it { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 10px; border-radius: 7px; color: var(--fg); white-space: nowrap; overflow: hidden; cursor: pointer; outline: none; flex: none; }
 	.it:hover, .it.menu-open { background: var(--hover); }
-	.it.sel { background: var(--sel); }
+	.it.sel, .it.sel:hover { background: var(--sel); }
+	.it.sel .n { font-weight: 600; }
+	.it.sel svg { color: var(--fg); }
 	.it:focus-visible, .proj:focus-visible, .sec.fold:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 	.it svg { width: 16px; height: 16px; flex: none; color: var(--mute); }
 	.it .n { overflow: hidden; text-overflow: ellipsis; flex: 1; }
 	.it .k { color: var(--dim); font-size: 11.5px; }
 	.it .m { flex: none; max-width: 36%; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
 	.it.new { font-weight: 500; }
-	.it .run, .it .gap { width: 7px; height: 7px; border-radius: 50%; flex: none; }
-	.it .run { background: var(--accent); }
+	/* The status dot: runs (pulses), waits for you, stuck, done and not seen; colours from the theme. */
+	.st { width: 12px; height: 12px; flex: none; display: grid; place-items: center; position: relative; }
+	.st i { width: 7px; height: 7px; border-radius: 50%; display: block; font-style: normal; }
+	.st.run i, .st.run::after { background: var(--st-run); }
+	.st.run::after { content: ""; position: absolute; width: 7px; height: 7px; border-radius: 50%; animation: pulse 1.6s ease-out infinite; }
+	@keyframes pulse { from { transform: scale(1); opacity: .55; } to { transform: scale(2.4); opacity: 0; } }
+	@media (prefers-reduced-motion: reduce) { .st.run::after { animation: none; } }
+	.st.wait i { background: var(--st-wait); box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-wait) 22%, transparent); }
+	.st.err i { width: 11px; height: 11px; background: var(--st-wait); color: var(--vscode-sideBar-background); font-size: 8.5px; font-weight: 700; display: grid; place-items: center; line-height: 1; }
+	.st.done i { background: var(--st-done); }
+	.it.unread .n { font-weight: 600; }
+	.av { width: 15px; height: 15px; border-radius: 4px; display: grid; place-items: center; font-style: normal; font-size: 9px; font-weight: 700; color: var(--vscode-sideBar-background); background: var(--vscode-charts-purple, #b392f0); flex: none; }
+	.av.claude { background: var(--vscode-charts-orange, #e0915a); }
+	.av.codex { background: var(--vscode-charts-blue, #6f9ad8); }
+	.it .ag { margin-left: -4px; }
 	.it .more { visibility: hidden; color: var(--dim); width: 18px; text-align: center; border-radius: 4px; flex: none; }
 	.it .more:hover { color: var(--fg); }
 	.it:hover .more, .it.menu-open .more, .it:focus-visible .more { visibility: visible; }
@@ -149,8 +187,33 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 	.sec { display: flex; align-items: center; justify-content: space-between; color: var(--dim); font-size: 12px; padding: 16px 10px 6px; border-radius: 6px; }
 	.sec.fold { cursor: pointer; outline: none; }
 	.sec.fold:hover { color: var(--mute); }
-	.proj { color: var(--mute); font-size: 12.5px; font-weight: 500; padding: 12px 10px 4px; display: flex; justify-content: space-between; align-items: center; gap: 8px; border-radius: 6px; outline: none; }
-	.proj .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	/* A section: folder header that folds (arrow, count, what waits inside), its threads on a guide line. */
+	.proj { color: var(--fg); font-size: 12.5px; font-weight: 600; margin-top: 10px; padding: 7px 10px 6px; display: flex; align-items: center; gap: 6px; border-radius: 7px; outline: none; cursor: pointer; }
+	.proj:hover { background: var(--hover); }
+	.proj .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+	.proj .chev { width: 12px; height: 12px; color: var(--mute); flex: none; transition: transform .15s; }
+	.proj.closed .chev { transform: rotate(-90deg); }
+	.proj .fold { width: 14px; height: 14px; color: var(--mute); flex: none; }
+	.proj .cnt { color: var(--dim); font-weight: 400; font-size: 11.5px; flex: none; }
+	.proj .sum { display: inline-flex; gap: 3px; flex: none; }
+	.proj .sum b { width: 6px; height: 6px; border-radius: 50%; display: block; }
+	.proj .sum .wait { background: var(--st-wait); }
+	.proj .sum .run { background: var(--st-run); }
+	.tree { margin-left: 23px; border-left: 1px solid var(--line); padding-left: 4px; display: flex; flex-direction: column; gap: 2px; }
+	/* Sub-threads: the threads a thread started, under it on a guide line; the row folds with its arrow. */
+	.it .tw { width: 12px; height: 12px; flex: none; display: grid; place-items: center; color: var(--mute); border-radius: 3px; cursor: pointer; }
+	.it .tw + .st { margin-left: -4px; }
+	.it .tw:hover { color: var(--fg); }
+	.it .tw svg { width: 12px; height: 12px; transition: transform .15s; }
+	.it.shut .tw svg { transform: rotate(-90deg); }
+	@media (prefers-reduced-motion: reduce) { .it .tw svg { transition: none; } }
+	.it .cnt { color: var(--dim); font-size: 11px; flex: none; }
+	.it .sum { display: inline-flex; gap: 3px; flex: none; }
+	.it .sum b { width: 6px; height: 6px; border-radius: 50%; display: block; }
+	.it .sum .wait { background: var(--st-wait); }
+	.it .sum .run { background: var(--st-run); }
+	.subs { margin-left: 16px; border-left: 1px solid var(--line); padding-left: 4px; display: flex; flex-direction: column; gap: 1px; }
+	.it.sub { height: 28px; font-size: 12.5px; }
 	.proj .more { color: var(--dim); cursor: pointer; padding: 0 2px; border-radius: 4px; }
 	.proj .more:hover { color: var(--fg); }
 	.drop { background: var(--vscode-list-dropBackground, var(--hover)); }
@@ -175,6 +238,8 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 <template id="i-board">${ICONS.board}</template>
 <template id="i-artifact">${ICONS.artifact}</template>
 <template id="i-plus">${ICONS.plus}</template>
+<template id="i-chev">${ICONS.chev}</template>
+<template id="i-folder">${ICONS.folder}</template>
 <script type="application/json" id="l10n" nonce="${nonce}">${strings}</script>
 <script nonce="${nonce}">
 (() => {
@@ -183,7 +248,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 	const list = document.getElementById('list');
 	const search = document.querySelector('[data-nav="search"]');
 	const input = search.querySelector('.q');
-	const ui = Object.assign({ archivedOpen: false, olderOpen: {} }, vscode.getState() || {});
+	const ui = Object.assign({ archivedOpen: false, olderOpen: {}, closed: {} }, vscode.getState() || {});
 	const T_THREAD = 'application/x-arkestra-thread';
 	const T_SECTION = 'application/x-arkestra-section';
 	let model;
@@ -209,16 +274,27 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		it.dataset.id = r.id;
 		const chat = r.kind === 'thread' || r.kind === 'session';
 		if (chat) {
-			const dot = el('span', r.running ? 'run' : 'gap');
-			if (r.running) { dot.title = S.running; }
+			const state = r.state || (r.running ? 'run' : '');
+			const dot = el('span', 'st' + (state ? ' ' + state : ''));
+			dot.append(el('i', '', state === 'err' ? '!' : ''));
+			const say = { run: S.running, wait: S.waiting, err: S.stuck, done: S.done }[state];
+			if (say) { dot.title = say; }
+			if (state === 'wait' || state === 'err' || state === 'done') { it.classList.add('unread'); }
 			it.append(dot);
+			if (r.agentKind) {
+				const badge = el('i', 'av ag ' + r.agentKind, (r.agent || r.agentKind).trim().charAt(0).toUpperCase());
+				badge.title = r.agent || r.agentKind;
+				it.append(badge);
+			}
 			it.draggable = true;
 			it.dataset.menu = '1';
 		} else {
 			it.append(icon(r.kind));
 		}
 		it.append(el('span', 'n', r.title));
-		if (r.machine) { it.append(el('span', 'k m', r.machine)); }
+		// The badge names the agent; text only when there is no badge.
+		const side = [r.agentKind ? '' : r.agent, r.machine].filter(Boolean).join(' · ');
+		if (side) { it.append(el('span', 'k m', side)); }
 		it.title = r.tip || r.title;
 		if (chat) {
 			const more = el('span', 'more', '⋯');
@@ -230,6 +306,61 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		return it;
 	}
 
+	// ---- sub-threads: a row with the threads it started folds them under it
+	const descendants = r => (r.children || []).flatMap(c => [c, ...descendants(c)]);
+	const isOpen = r => {
+		if (model.query) { return true; }
+		const set = (ui.subOpen || {})[r.key];
+		if (set !== undefined) { return set; }
+		// Unset: open while the selected thread is it or one of its own.
+		return !!model.selected && (r.key === model.selected || descendants(r).some(d => d.key === model.selected));
+	};
+	function tree(r, muted, sub) {
+		const it = row(r, muted);
+		if (sub) { it.classList.add('sub'); }
+		const kids = r.children || [];
+		if (!kids.length) { return [it]; }
+		const open = isOpen(r);
+		it.dataset.sub = '1';
+		it.setAttribute('aria-expanded', String(open));
+		const tw = el('span', 'tw');
+		tw.append(icon('chev'));
+		tw.dataset.twist = '1';
+		// The arrow takes the dot's place when the row has no state of its own: titles stay aligned.
+		const dot = it.querySelector('.st');
+		if (dot && !dot.className.replace('st', '').trim()) { dot.remove(); }
+		it.prepend(tw);
+		if (!open) {
+			it.classList.add('shut');
+			// Folded: how many it started, and what of those waits for you or runs.
+			const all = descendants(r);
+			const wait = all.filter(d => d.state === 'wait' || d.state === 'err').length;
+			const run = all.filter(d => d.state === 'run' || (!d.state && d.running)).length;
+			const at = it.querySelector('.k.m') || it.querySelector('.more');
+			if (wait || run) {
+				const sum = el('span', 'sum');
+				for (let i = 0; i < Math.min(wait, 3); i++) { sum.append(el('b', 'wait')); }
+				for (let i = 0; i < Math.min(run, 3); i++) { sum.append(el('b', 'run')); }
+				sum.title = S.inside.replace('{0}', String(wait)).replace('{1}', String(run));
+				at ? at.before(sum) : it.append(sum);
+			}
+			const cnt = el('span', 'cnt', String(all.length));
+			cnt.title = S.subThreads.replace('{0}', String(all.length));
+			at ? at.before(cnt) : it.append(cnt);
+			return [it];
+		}
+		const box = el('div', 'subs');
+		kids.forEach(c => box.append(...tree(c, muted, true)));
+		return [it, box];
+	}
+	const toggleSub = it => {
+		const r = rows.get(it.dataset.key);
+		if (!r) { return; }
+		ui.subOpen = Object.assign({}, ui.subOpen, { [r.key]: !isOpen(r) });
+		vscode.setState(ui);
+		render();
+	};
+
 	function header(text, drop) {
 		const h = el('div', 'sec');
 		h.append(el('span', '', text));
@@ -237,13 +368,26 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		return h;
 	}
 
-	function sectionHeader(s) {
-		const h = el('div', 'proj');
+	function sectionHeader(s, closed) {
+		const h = el('div', 'proj' + (closed ? ' closed' : ''));
 		h.tabIndex = -1;
 		h.draggable = true;
 		h.dataset.section = s.id;
 		h.dataset.drop = s.id;
-		h.append(el('span', 'n', s.name));
+		h.setAttribute('role', 'button');
+		h.setAttribute('aria-expanded', String(!closed));
+		h.append(icon('chev'), icon('folder'), el('span', 'n', s.name));
+		// Folded: what waits for you or runs inside shows beside the count.
+		const wait = s.rows.filter(r => r.state === 'wait' || r.state === 'err').length;
+		const run = s.rows.filter(r => r.state === 'run' || (!r.state && r.running)).length;
+		if (closed && (wait || run)) {
+			const sum = el('span', 'sum');
+			for (let i = 0; i < Math.min(wait, 3); i++) { sum.append(el('b', 'wait')); }
+			for (let i = 0; i < Math.min(run, 3); i++) { sum.append(el('b', 'run')); }
+			sum.title = S.inside.replace('{0}', String(wait)).replace('{1}', String(run));
+			h.append(sum);
+		}
+		h.append(el('span', 'cnt', String(s.rows.length)));
 		const more = el('span', 'more', '⋯');
 		more.setAttribute('role', 'button');
 		more.setAttribute('aria-label', S.more);
@@ -296,12 +440,17 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		const out = document.createDocumentFragment();
 		if (model.pinned.length) {
 			out.append(header(S.pinned));
-			model.pinned.forEach(r => out.append(row(r)));
+			model.pinned.forEach(r => out.append(...tree(r)));
 		}
 		for (const s of model.sections) {
 			if (q && !s.rows.length) { continue; }
-			out.append(sectionHeader(s));
-			s.rows.forEach(r => out.append(row(r)));
+			const closed = !q && !!(ui.closed || {})[s.id];
+			out.append(sectionHeader(s, closed));
+			if (!closed && s.rows.length) {
+				const box = el('div', 'tree');
+				s.rows.forEach(r => box.append(...tree(r)));
+				out.append(box);
+			}
 		}
 		if (!q) {
 			const add = el('div', 'it add');
@@ -314,10 +463,10 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		// The default listing, by agent; a header takes a row dragged out of its section back here.
 		for (const g of model.groups) {
 			out.append(header(g.name, ''));
-			g.rows.forEach(r => out.append(row(r)));
+			g.rows.forEach(r => out.append(...tree(r)));
 			if (g.older.length) {
 				const open = !!ui.olderOpen[g.id];
-				if (open) { g.older.forEach(r => out.append(row(r))); }
+				if (open) { g.older.forEach(r => out.append(...tree(r))); }
 				const more = el('div', 'it older', open ? S.showFewer : S.showOlder.replace('{0}', String(g.older.length)));
 				more.tabIndex = -1;
 				more.setAttribute('role', 'button');
@@ -336,7 +485,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 			h.dataset.action = 'archived';
 			h.append(el('span', 'k', String(model.archived.length)));
 			out.append(h);
-			if (open) { model.archived.forEach(r => out.append(row(r, true))); }
+			if (open) { model.archived.forEach(r => out.append(...tree(r, true))); }
 		}
 		const any = model.pinned.length || model.groups.length || model.archived.length || model.sections.some(s => s.rows.length);
 		if (q && !any) {
@@ -441,6 +590,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		if (!r || (r.kind !== 'thread' && r.kind !== 'session')) { return; }
 		const act = action => () => post({ type: 'thread', action, id: r.id });
 		const main = () => [
+			{ label: S.openBeside, run: act('beside') },
 			{ label: S.moveTo, sub: moveTo },
 			...(r.archived ? [] : [{ label: r.pinned ? S.unpin : S.pin, run: act(r.pinned ? 'unpin' : 'pin') }]),
 			{ label: S.rename, run: () => editName(it, r.title, name => post({ type: 'thread', action: 'rename', id: r.id, name })) },
@@ -488,11 +638,19 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		const more = t.closest('.more');
 		const it = t.closest('.it[data-key]');
 		const head = t.closest('.proj');
+		if (it && t.closest('[data-twist]')) { toggleSub(it); return; }
 		if (more) {
 			const owner = it || head;
 			if (wasOpen && before === keyOf(owner)) { return; }
 			const at = more.getBoundingClientRect();
 			if (it) { rowMenu(it, at); } else if (head) { sectionMenu(head, at); }
+			return;
+		}
+		if (head && !it) {
+			const id = head.dataset.section;
+			ui.closed = Object.assign({}, ui.closed, { [id]: !(ui.closed || {})[id] });
+			vscode.setState(ui);
+			render();
 			return;
 		}
 		const action = t.closest('[data-action]');
@@ -528,6 +686,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		const cur = document.activeElement && document.activeElement.closest && document.activeElement.closest('.it, .proj, .sec.fold');
 		if (!cur) { return; }
 		if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cur.click(); }
+		else if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && cur.dataset.sub && (e.key === 'ArrowRight') !== (cur.getAttribute('aria-expanded') === 'true')) { e.preventDefault(); toggleSub(cur); }
 		else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
 			e.preventDefault();
 			const all = focusables();

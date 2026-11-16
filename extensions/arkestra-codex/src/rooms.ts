@@ -105,6 +105,12 @@ export interface Agent {
 	 * `lines`: the session file's raw lines behind them that hold tool uses, for the artifacts (AR26).
 	 */
 	watchSession?(sessionId: string, onEntries: (entries: readonly SessionEntry[], cursor: string, meta?: SessionMeta, lines?: readonly string[]) => void, cursor?: string): { dispose(): void };
+	/** The account's quota windows now (the share used of a week, of five hours), as its vendor's app shows them; none: not known. */
+	quota?(): Promise<readonly { readonly label: string; readonly usedPercent: number; readonly resetsAt?: string }[]>;
+	/** What a session's folder on the agent's machine has changed in git (files, added and removed lines; `?`: new), as the apps count it. */
+	worktreeChanges?(cwd: string): Promise<readonly { readonly path: string; readonly added?: number; readonly removed?: number; readonly status: 'M' | '?' }[]>;
+	/** Each session's turn on the agent's machine as it changes, live (whoever drives it); `at`: epoch seconds of its last write. */
+	watchStates?(onState: (s: { readonly id: string; readonly state: 'run' | 'idle'; readonly at: number; readonly doing?: string; readonly bg?: readonly { readonly id: string; readonly name: string; readonly since: string }[]; readonly done?: number }) => void): { dispose(): void };
 }
 
 /** What an agent can run with: its models, each with the reasoning efforts it knows (none: no effort choice). */
@@ -116,6 +122,8 @@ export interface ExistingSession {
 	readonly cwd?: string;
 	/** ISO time of its last activity. */
 	readonly updatedAt: string;
+	/** The thread that started this one (a sub-agent thread's parent thread). */
+	readonly parent?: string;
 }
 
 /** A session's messages as read, and where the live follow goes on from. */
@@ -132,8 +140,10 @@ export interface SessionHistory {
 export interface SessionMeta {
 	/** The model id of the latest answer, for example `claude-opus-5-5`. */
 	readonly model?: string;
-	/** Tokens in the context at the latest model call (its window is not in the file). */
+	/** Tokens in the context at the latest model call. */
 	readonly context?: number;
+	/** The size of that context window, when the file tells it (Codex does). */
+	readonly window?: number;
 }
 
 /** One message of an existing session, as the thread shows it. */

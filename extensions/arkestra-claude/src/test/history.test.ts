@@ -115,7 +115,7 @@ test('history here and over a shell: the same entries, model and fill, and a cur
 	const remote = new ClaudeCodeAgent({ command: 'claude', permissionMode: 'acceptEdits', cwd: () => undefined, apiKey: async () => undefined, spawn: fakeSpawn, identity: { id: 'claude@prd', name: 'Claude · prd', where: 'prd' } });
 	assert.deepEqual(await remote.sessionHistory(SESSION), here);
 	await assert.rejects(remote.sessionHistory('00000009-aaaa-bbbb-cccc-dddddddddddd'), /gone/);
-	assert.equal(remote.historyVersion, 3);
+	assert.equal(remote.historyVersion, 5);
 });
 
 test('the live follow hands over the model and context fill when they change', async () => {
@@ -137,4 +137,13 @@ test('the live follow hands over the model and context fill when they change', a
 	} finally {
 		follow.dispose();
 	}
+});
+
+test('a message another sender put in the session: from Arkestra the user\'s own words in their place, from another session a line as the Claude app shows it', () => {
+	const peer = (from: string, name: string, body: string) => JSON.stringify({ type: 'user', isMeta: true, uuid: 'p1', timestamp: '2026-11-15T18:57:03.872Z', origin: { kind: 'peer', from, name, body }, message: { role: 'user', content: `Another Claude session sent a message: <cross-session-message from="${from}">\n${body}\n</cross-session-message>` } });
+	assert.deepEqual(claudePiece(peer('arkestra', 'Arkestra', '%?')), { kind: 'user', text: '%?', id: 'p1', at: '2026-11-15T18:57:03.872Z' });
+	assert.deepEqual(claudePiece(peer('arkestra-app', 'The user, writing in the Arkestra app', 'telepítve')), { kind: 'user', text: 'telepítve', id: 'p1', at: '2026-11-15T18:57:03.872Z' });
+	assert.deepEqual(claudePiece(peer('uds:/run/x.sock', 'Tenark X', 'kész a\nT108')), { kind: 'notice', text: 'Message from Tenark X: kész a T108', id: 'p1', at: '2026-11-15T18:57:03.872Z' });
+	// Other meta lines stay out.
+	assert.equal(claudePiece(JSON.stringify({ type: 'user', isMeta: true, message: { content: 'x' } })), undefined);
 });

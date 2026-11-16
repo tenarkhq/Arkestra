@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { ClaudeCodeAgent, ROOM_PREAMBLE } from '../claudeCode';
-import { LIST_SCRIPT, localListing, localSessionFile, parseHistory, parseListing, readScript } from '../sessions';
+import { LIST_SCRIPT, claudeStep, localListing, localSessionFile, parseHistory, parseListing, readScript } from '../sessions';
 import type { Message } from '../rooms';
 
 const ID = (n: number) => `0000000${n}-aaaa-bbbb-cccc-dddddddddddd`;
@@ -34,7 +34,21 @@ test('listing: title from a custom title, a summary or the first thing the user 
 	assert.throws(() => readScript('x; rm -rf ~'), /not a Claude session id/);
 });
 
-test('history: what the user wrote and Claude\'s answers, one answer per request; tool steps and side chains left out', () => {
+test('listing: the latest name wins (Claude Code writes it again near the end); the apps\' name before the first message', () => {
+	const ID = (n: number) => `${n}${n}${n}${n}${n}${n}${n}${n}-1111-4111-8111-111111111111`;
+	const user = (content: string) => JSON.stringify({ type: 'user', cwd: '/srv', message: { role: 'user', content } });
+	const out = [
+		`\u001eFILE 1700000300 -srv/${ID(1)}.jsonl`, user('first words'), JSON.stringify({ type: 'custom-title', customTitle: 'Old name' }),
+		JSON.stringify({ type: 'custom-title', customTitle: 'Old name' }), JSON.stringify({ type: 'agent-name', agentName: 'Arkestra' }), JSON.stringify({ type: 'custom-title', customTitle: 'Arkestra' }),
+		`\u001eFILE 1700000200 -srv/${ID(2)}.jsonl`, user('hello there'), JSON.stringify({ type: 'agent-name', agentName: 'Átadó beolvasása' }),
+		'"bridgeSessionId":"cse_019UZiid5kkFdWcwMSXfYYca"',
+		`\u001eFILE 1700000100 -srv/${ID(3)}.jsonl`, user('just a chat'),
+	].join('\n');
+	assert.deepEqual(parseListing(out).map(s => s.title), ['Arkestra', 'Átadó beolvasása', 'just a chat']);
+	assert.deepEqual(parseListing(out).map(s => s.bridge ?? ''), ['', 'cse_019UZiid5kkFdWcwMSXfYYca', '']);
+});
+
+test('history: what the user wrote and Claude\'s answers, one answer per request with its tool steps as lines; side chains left out', () => {
 	const lines = [
 		user('fix the stop', { timestamp: '2026-11-14T10:00:00Z' }),
 		JSON.stringify({ type: 'assistant', timestamp: '2026-11-14T10:00:05Z', message: { content: [{ type: 'text', text: 'Looking.' }, { type: 'tool_use', name: 'Read', input: {} }] } }),
@@ -49,7 +63,7 @@ test('history: what the user wrote and Claude\'s answers, one answer per request
 	].join('\n');
 	assert.deepEqual(parseHistory(lines), [
 		{ role: 'user', text: 'fix the stop', at: '2026-11-14T10:00:00Z' },
-		{ role: 'agent', text: 'Looking.\n\nFixed in state.py.', at: '2026-11-14T10:00:05Z' },
+		{ role: 'agent', text: 'Looking.\n\n<arkestra-step kind="read">Read a file</arkestra-step>\n\n<arkestra-step kind="edit">Edited a file</arkestra-step>\n\nFixed in state.py.', at: '2026-11-14T10:00:05Z' },
 		{ role: 'user', text: 'and the test?' },
 		{ role: 'agent', text: 'Added.' },
 	]);
@@ -110,6 +124,51 @@ test('the listing skips scripts\' and pipelines\' sessions (claude -p, the Agent
 	const here = parseListing(await localListing(home));
 	assert.deepEqual(here.map(s => s.title), ['ArkadeOS', 'Tenark X']);
 	// The folders are named after paths (-home-...): the shell listing must not read them as options.
+	const shell = parseListing(execFileSync('sh', ['-c', LIST_SCRIPT], { env: { ...process.env, HOME: home } }).toString());
+	assert.deepEqual(shell, here);
+});
+
+test('tool steps as the Claude app names them: a command by its description in the past, files by name, own bookkeeping left out', () => {
+	const t = (name: string, input: object) => claudeStep({ name, input });
+	assert.equal(t('Bash', { description: 'Check the hand-started VM test progress' }), '<arkestra-step kind="command">Checked the hand-started VM test progress</arkestra-step>');
+	assert.equal(t('Bash', { description: 'Run the tests' }), '<arkestra-step kind="command">Ran the tests</arkestra-step>');
+	assert.equal(t('Bash', { description: 'Copy <x> files' }), '<arkestra-step kind="command">Copied ‹x› files</arkestra-step>');
+	assert.equal(t('Edit', { file_path: '/a/b/state.py' }), '<arkestra-step kind="edit">Edited state.py</arkestra-step>');
+	assert.equal(t('WebFetch', { url: 'https://docs.example.com/x' }), '<arkestra-step kind="web">Fetched docs.example.com</arkestra-step>');
+	assert.equal(t('mcp__github__get_file_contents', {}), '<arkestra-step kind="other">Used get file contents</arkestra-step>');
+	assert.equal(t('TodoWrite', {}), undefined);
+	assert.equal(t('mcp__ccd_turn__update_plan', {}), undefined);
+});
+
+test('a linked session names the session that started it (its desktop-app id); running sessions their own; the same over SSH as here', { skip: process.platform === 'win32' }, async () => {
+	const home = await mkdtemp(path.join(tmpdir(), 'arkestra-home-'));
+	const chats = path.join(home, '.claude', 'projects', '-home-r-tenark');
+	const running = path.join(home, '.claude', 'sessions');
+	await mkdir(chats, { recursive: true });
+	await mkdir(running, { recursive: true });
+	const PARENT = 'local_82ba8fe2-938d-4cca-ac4e-6ca2e6cfca4b';
+	const CHILD_HOST = 'local_11111111-2222-4333-8444-555555555555';
+	await writeFile(path.join(chats, `${ID(1)}.jsonl`), [user('Tenark X konzol', { entrypoint: 'claude-desktop' }), JSON.stringify({ type: 'custom-title', customTitle: 'Tenark X' })].join('\n'));
+	// The child: its first message says another session started it; its instructions name that session.
+	await writeFile(path.join(chats, `${ID(2)}.jsonl`), [
+		JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content: 'Task (from the session that started this one):\nFix the strategies page' }),
+		JSON.stringify({ type: 'attachment', attachment: { type: 'prompt_snapshot', systemPrompt: [`Blocked? Send ONE short question with \`SendMessage\` (\`to\`: \`${PARENT}\`) and end your turn.`] } }),
+		user('Task (from the session that started this one):\nFix the strategies page', { entrypoint: 'claude-desktop' }),
+		JSON.stringify({ type: 'agent-name', agentName: 'Stratégiák javítás' }),
+	].join('\n'));
+	// A plain session that only talks about such a line is not a linked one.
+	await writeFile(path.join(chats, `${ID(3)}.jsonl`), [user('look at this: `SendMessage` (`to`: `local_99999999-2222-4333-8444-555555555555`)', { entrypoint: 'claude-desktop' })].join('\n'));
+	await writeFile(path.join(running, '123.json'), JSON.stringify({ pid: 123, sessionId: ID(1), hostSessionId: PARENT, name: 'Tenark X' }));
+	await writeFile(path.join(running, '124.json'), JSON.stringify({ pid: 124, sessionId: ID(2), hostSessionId: CHILD_HOST }));
+	await writeFile(path.join(running, '125.json'), JSON.stringify({ pid: 125, sessionId: ID(9) }));
+	const here = parseListing(await localListing(home));
+	const byId = new Map(here.map(s => [s.id, s]));
+	assert.equal(byId.get(ID(1))?.host, PARENT);
+	assert.equal(byId.get(ID(1))?.parentHost, undefined);
+	assert.equal(byId.get(ID(2))?.parentHost, PARENT);
+	assert.equal(byId.get(ID(2))?.host, CHILD_HOST);
+	assert.equal(byId.get(ID(2))?.title, 'Stratégiák javítás');
+	assert.equal(byId.get(ID(3))?.parentHost, undefined);
 	const shell = parseListing(execFileSync('sh', ['-c', LIST_SCRIPT], { env: { ...process.env, HOME: home } }).toString());
 	assert.deepEqual(shell, here);
 });
