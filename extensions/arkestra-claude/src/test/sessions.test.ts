@@ -139,3 +139,36 @@ test('tool steps as the Claude app names them: a command by its description in t
 	assert.equal(t('TodoWrite', {}), undefined);
 	assert.equal(t('mcp__ccd_turn__update_plan', {}), undefined);
 });
+
+test('a linked session names the session that started it (its desktop-app id); running sessions their own; the same over SSH as here', { skip: process.platform === 'win32' }, async () => {
+	const home = await mkdtemp(path.join(tmpdir(), 'arkestra-home-'));
+	const chats = path.join(home, '.claude', 'projects', '-home-r-tenark');
+	const running = path.join(home, '.claude', 'sessions');
+	await mkdir(chats, { recursive: true });
+	await mkdir(running, { recursive: true });
+	const PARENT = 'local_82ba8fe2-938d-4cca-ac4e-6ca2e6cfca4b';
+	const CHILD_HOST = 'local_11111111-2222-4333-8444-555555555555';
+	await writeFile(path.join(chats, `${ID(1)}.jsonl`), [user('Tenark X konzol', { entrypoint: 'claude-desktop' }), JSON.stringify({ type: 'custom-title', customTitle: 'Tenark X' })].join('\n'));
+	// The child: its first message says another session started it; its instructions name that session.
+	await writeFile(path.join(chats, `${ID(2)}.jsonl`), [
+		JSON.stringify({ type: 'queue-operation', operation: 'enqueue', content: 'Task (from the session that started this one):\nFix the strategies page' }),
+		JSON.stringify({ type: 'attachment', attachment: { type: 'prompt_snapshot', systemPrompt: [`Blocked? Send ONE short question with \`SendMessage\` (\`to\`: \`${PARENT}\`) and end your turn.`] } }),
+		user('Task (from the session that started this one):\nFix the strategies page', { entrypoint: 'claude-desktop' }),
+		JSON.stringify({ type: 'agent-name', agentName: 'Stratégiák javítás' }),
+	].join('\n'));
+	// A plain session that only talks about such a line is not a linked one.
+	await writeFile(path.join(chats, `${ID(3)}.jsonl`), [user('look at this: `SendMessage` (`to`: `local_99999999-2222-4333-8444-555555555555`)', { entrypoint: 'claude-desktop' })].join('\n'));
+	await writeFile(path.join(running, '123.json'), JSON.stringify({ pid: 123, sessionId: ID(1), hostSessionId: PARENT, name: 'Tenark X' }));
+	await writeFile(path.join(running, '124.json'), JSON.stringify({ pid: 124, sessionId: ID(2), hostSessionId: CHILD_HOST }));
+	await writeFile(path.join(running, '125.json'), JSON.stringify({ pid: 125, sessionId: ID(9) }));
+	const here = parseListing(await localListing(home));
+	const byId = new Map(here.map(s => [s.id, s]));
+	assert.equal(byId.get(ID(1))?.host, PARENT);
+	assert.equal(byId.get(ID(1))?.parentHost, undefined);
+	assert.equal(byId.get(ID(2))?.parentHost, PARENT);
+	assert.equal(byId.get(ID(2))?.host, CHILD_HOST);
+	assert.equal(byId.get(ID(2))?.title, 'Stratégiák javítás');
+	assert.equal(byId.get(ID(3))?.parentHost, undefined);
+	const shell = parseListing(execFileSync('sh', ['-c', LIST_SCRIPT], { env: { ...process.env, HOME: home } }).toString());
+	assert.deepEqual(shell, here);
+});

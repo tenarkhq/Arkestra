@@ -122,6 +122,8 @@ export interface ExistingSession {
 	readonly cwd?: string;
 	/** ISO time of its last activity. */
 	readonly updatedAt: string;
+	/** The thread that started this one (a sub-agent thread's parent thread). */
+	readonly parent?: string;
 }
 
 /** A session's messages as read, and where the live follow goes on from. */

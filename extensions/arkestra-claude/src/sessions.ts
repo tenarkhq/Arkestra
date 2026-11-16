@@ -37,6 +37,15 @@ const NAMES = /"type":"(custom-title|agent-name)"/;
 /** The session's id in the claude.ai account, on its `bridge-session` lines. */
 const BRIDGE = /"bridgeSessionId":"cse_[A-Za-z0-9]+"/g;
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** A linked session's first message: the Claude app started it from another session. */
+export const STARTED_BY_SESSION = /^(Task|Background) \(from the session that started this one\)/;
+/** What the file's start says of that: the first lines carry the starting session's words. */
+const STARTED_MARK = 'from the session that started this one';
+/** How much of a linked session's start holds its instructions, which name the starting session. */
+export const PARENT_BYTES = 1_048_576;
+/** The starting session's desktop-app id in a linked session's instructions (`SendMessage` (`to`: `local_…`)). */
+const PARENT_HOST = /SendMessage. \(.to.: .(local_[0-9a-f-]{36})/;
+const HOST_MARK = '\u001eHOST ';
 
 /**
  * The listing on a POSIX machine: per session its time, file, and the lines that name it. One
@@ -58,7 +67,17 @@ export const LIST_SCRIPT = [
 	`  head -c ${HEAD_BYTES} "$f" | grep -E '"type":"(summary|user|custom-title)"' | head -n 8`,
 	`  tail -c ${TAIL_BYTES} "$f" | grep -E '"type":"(custom-title|agent-name)"' | tail -n 4`,
 	`  tail -c ${TAIL_BYTES} "$f" | grep -o -E '"bridgeSessionId":"cse_[A-Za-z0-9]+"' | tail -n 1`,
+	// A linked session: the desktop-app id of the session that started it.
+	`  if head -c ${KIND_BYTES} "$f" | grep -q '${STARTED_MARK}'; then head -c ${PARENT_BYTES} "$f" | grep -o -m 1 -E 'SendMessage. \\(.to.: .local_[0-9a-f-]{36}' | grep -o -E 'local_[0-9a-f-]{36}' | head -n 1 | sed 's/^/"parentHost":"/; s/$/"/'; fi`,
 	'done',
+	// The desktop app's running sessions: their desktop-app ids (`local_…`), for the linked sessions.
+	'for d in "$HOME"/.claude/sessions/*.json; do',
+	'  [ -f "$d" ] || continue',
+	`  s=$(grep -o -E '"sessionId":"[0-9a-f-]{36}"' "$d" | head -n 1 | cut -d '"' -f 4)`,
+	`  h=$(grep -o -E '"hostSessionId":"local_[0-9a-f-]{36}"' "$d" | head -n 1 | cut -d '"' -f 4)`,
+	`  [ -n "$s" ] && [ -n "$h" ] && printf '\\036HOST %s %s\\n' "$s" "$h"`,
+	'done',
+	'exit 0',
 ].join('\n');
 
 /** How much of a session file the history reads: its end, where the latest messages are. */
@@ -129,12 +148,37 @@ export async function localListing(home: string): Promise<string> {
 			if (bridge) {
 				lines.push(bridge);
 			}
+			if (kind.subarray(0, start.bytesRead).toString('utf8').includes(STARTED_MARK)) {
+				const head = Buffer.alloc(Math.min(PARENT_BYTES, size));
+				const got = await handle.read(head, 0, head.length, 0);
+				const starter = PARENT_HOST.exec(head.subarray(0, got.bytesRead).toString('utf8'))?.[1];
+				if (starter) {
+					lines.push(`"parentHost":"${starter}"`);
+				}
+			}
 			parts.push(`${MARK}${f.mtime} ${f.rel}\n${lines.join('\n')}`);
 		} finally {
 			await handle.close();
 		}
 	}
+	parts.push(...await localHosts(home));
 	return parts.join('\n');
+}
+
+/** The desktop app's running sessions on this machine, as the shell listing prints them. */
+async function localHosts(home: string): Promise<string[]> {
+	const dir = path.join(home, '.claude', 'sessions');
+	const names = await fs.readdir(dir).catch(() => [] as string[]);
+	const out: string[] = [];
+	for (const name of names.filter(n => n.endsWith('.json'))) {
+		try {
+			const d = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8'));
+			if (typeof d?.sessionId === 'string' && SESSION_ID.test(d.sessionId) && typeof d.hostSessionId === 'string' && /^local_[0-9a-f-]{36}$/.test(d.hostSessionId)) {
+				out.push(`${HOST_MARK}${d.sessionId} ${d.hostSessionId}`);
+			}
+		} catch { /* a file being written: next time */ }
+	}
+	return out;
 }
 
 /** Where a session file is on this machine, if anywhere. */
@@ -218,6 +262,15 @@ const ARKESTRA_ROOM = 'You are Claude in an Arkestra room';
 /** The sessions of a listing, newest first; those Arkestra's own rooms started are left out. */
 export function parseListing(out: string): ExistingSession[] {
 	const sessions: ExistingSession[] = [];
+	// The running sessions' desktop-app ids come last, one line each.
+	const hosts = new Map<string, string>();
+	out = out.split('\n').filter(line => {
+		const m = line.startsWith(HOST_MARK) ? /^(\S+) (local_[0-9a-f-]{36})$/.exec(line.slice(HOST_MARK.length).trim()) : undefined;
+		if (m && SESSION_ID.test(m[1])) {
+			hosts.set(m[1], m[2]);
+		}
+		return !line.startsWith(HOST_MARK);
+	}).join('\n');
 	for (const record of out.split(MARK).slice(1)) {
 		const [head, ...lines] = record.split('\n');
 		const m = /^(\d+) (.+\.jsonl)$/.exec(head.trim());
@@ -231,10 +284,16 @@ export function parseListing(out: string): ExistingSession[] {
 		let summary: string | undefined;
 		let first: string | undefined;
 		let cwd: string | undefined;
+		let parentHost: string | undefined;
 		for (const line of lines) {
 			const id = /^"bridgeSessionId":"(cse_[A-Za-z0-9]+)"$/.exec(line.trim())?.[1];
 			if (id) {
 				bridge = id;
+				continue;
+			}
+			const starter = /^"parentHost":"(local_[0-9a-f-]{36})"$/.exec(line.trim())?.[1];
+			if (starter) {
+				parentHost = starter;
 				continue;
 			}
 			const data = line.trim() ? readLine(line) : undefined;
@@ -254,7 +313,13 @@ export function parseListing(out: string): ExistingSession[] {
 			continue;
 		}
 		const line = (s: string) => { const l = s.split('\n')[0].trim(); return l.length > 80 ? l.slice(0, 79).trimEnd() + '…' : l; };
-		sessions.push({ id, title: line(title || named || summary || first || id.slice(0, 8)), ...(cwd ? { cwd } : {}), ...(bridge ? { bridge } : {}), updatedAt: new Date(Number(m[1]) * 1000).toISOString() });
+		const host = hosts.get(id);
+		// Only a session the Claude app started from another names its starter.
+		const started = parentHost && first && STARTED_BY_SESSION.test(first) ? parentHost : undefined;
+		sessions.push({
+			id, title: line(title || named || summary || first || id.slice(0, 8)), ...(cwd ? { cwd } : {}), ...(bridge ? { bridge } : {}), updatedAt: new Date(Number(m[1]) * 1000).toISOString(),
+			...(host ? { host } : {}), ...(started && started !== host ? { parentHost: started } : {}),
+		});
 	}
 	return sessions.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }

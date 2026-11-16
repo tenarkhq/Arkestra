@@ -146,6 +146,12 @@ export interface ExistingSession {
 	readonly updatedAt: string;
 	/** Its id in the claude.ai account (`cse_…`) when the desktop app or the phone has it too. */
 	readonly bridge?: string;
+	/** The session that started this one (a Codex sub-agent thread's parent thread), same CLI. */
+	readonly parent?: string;
+	/** Its id in the Claude desktop app (`local_…`), read while the session runs. */
+	readonly host?: string;
+	/** The desktop-app id (`local_…`) of the session that started this one (a linked session). */
+	readonly parentHost?: string;
 }
 
 /** A session's messages as read, and where the live follow goes on from. */

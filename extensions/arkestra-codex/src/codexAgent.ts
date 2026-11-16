@@ -83,9 +83,24 @@ export function codexSessions(data: unknown): ExistingSession[] {
 	const list = Array.isArray((data as any)?.data) ? (data as any).data : [];
 	return list.filter((t: any) => typeof t?.id === 'string' && !(typeof t.preview === 'string' && ARKESTRA_FIRST.test(t.preview))).map((t: any) => {
 		const first = typeof t.preview === 'string' ? t.preview.trim().split('\n')[0].trim() : '';
-		const title = first ? (first.length > 80 ? first.slice(0, 79).trimEnd() + '…' : first) : t.id.slice(0, 8);
-		return { id: t.id, title, ...(typeof t.cwd === 'string' && t.cwd ? { cwd: t.cwd } : {}), updatedAt: isoTime(t.updatedAt) ?? isoTime(t.createdAt) ?? new Date(0).toISOString() };
+		const parent = typeof t.parentThreadId === 'string' && t.parentThreadId ? t.parentThreadId : undefined;
+		// A sub-agent thread is named as Codex names it (its name, else its nickname and role), else by its task.
+		const nick = typeof t.agentNickname === 'string' && t.agentNickname.trim() ? `${t.agentNickname.trim()}${typeof t.agentRole === 'string' && t.agentRole.trim() ? ` (${t.agentRole.trim()})` : ''}` : '';
+		const named = parent ? (typeof t.name === 'string' && t.name.trim() ? t.name.trim() : nick) : '';
+		const line = named || first;
+		const title = line ? (line.length > 80 ? line.slice(0, 79).trimEnd() + '…' : line) : t.id.slice(0, 8);
+		return { id: t.id, title, ...(typeof t.cwd === 'string' && t.cwd ? { cwd: t.cwd } : {}), updatedAt: isoTime(t.updatedAt) ?? isoTime(t.createdAt) ?? new Date(0).toISOString(), ...(parent ? { parent } : {}) };
 	}).sort((a: ExistingSession, b: ExistingSession) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/** Both lists as one, each thread once, newest first (a Codex that ignores the filter lists them twice). */
+export function mergeSessions(a: readonly ExistingSession[], b: readonly ExistingSession[]): ExistingSession[] {
+	const byId = new Map<string, ExistingSession>();
+	for (const s of [...a, ...b]) {
+		const had = byId.get(s.id);
+		byId.set(s.id, had && !s.parent ? had : s);
+	}
+	return [...byId.values()].sort((x, y) => y.updatedAt.localeCompare(x.updatedAt));
 }
 
 /** A Codex thread's turns as thread messages: what the user wrote and Codex's answers. */
@@ -324,7 +339,10 @@ export class CodexAgent implements Agent {
 	/** The threads Codex has on this agent's machine (AR39). */
 	async existingSessions(): Promise<readonly ExistingSession[]> {
 		const client = await this.ensureServer(await this.options.auth());
-		return codexSessions(await client.request('thread/list', { limit: 60 }));
+		const own = codexSessions(await client.request('thread/list', { limit: 60 }));
+		// Sub-agent threads are left out of the default list; they show under their parent thread.
+		const spawned = await client.request('thread/list', { limit: 60, sourceKinds: ['subAgentThreadSpawn'] }).then(codexSessions, () => [] as ExistingSession[]);
+		return mergeSessions(own, spawned);
 	}
 
 	/**

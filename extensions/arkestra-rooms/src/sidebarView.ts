@@ -8,7 +8,7 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import type { ListedSession } from './sessionHome';
-import { agentGroups, machineCount as rowMachines, sessionRowId, threadGroup, threadMachine, type AgentListing, type GroupItem, type RowState, type SessionEntry } from './leftBar';
+import { agentGroups, learnHosts, machineCount as rowMachines, nestRows, sessionFamily, sessionRowId, starters, threadFamily, threadGroup, threadMachine, type AgentListing, type Family, type GroupItem, type HostMap, type RowState, type SessionEntry } from './leftBar';
 import { LOCAL, readMachineEntries, relativeTime } from './machinesModel';
 import { addSection, deleteSection, keepThreads, layoutThreads, matches, moveSection, moveThread, parseSections, renameSection, sectionOf, sectionsFromCategories, shiftSection, type Section } from './sections';
 import { MachinesPage } from './machinesPage';
@@ -22,6 +22,8 @@ export /** A non-empty string from the page. */
 const text = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 const SECTIONS_KEY = 'arkestra.rooms.sections';
 const NEW_CHAT = 'arkestra.rooms.newChat';
+/** The Claude desktop app's session ids (`local_…`) learned so far: a linked session names its starter by one. */
+const HOSTS_KEY = 'arkestra.rooms.claudeHosts';
 /** While the bar is visible its machines' sessions are read again this often. */
 const POLL_MS = 30_000;
 /** A machine whose listing failed is asked again only after this long (it may be off). */
@@ -165,6 +167,11 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			agent.sessions(fresh).then(sessions => {
 				this.failedAt.delete(agent.id);
 				this.listings.set(agent.id, sessions);
+				const known = this.hosts();
+				const learned = learnHosts(known, [{ agentId: agent.id, sessions }]);
+				if (learned !== known) {
+					void this.context.globalState.update(HOSTS_KEY, learned);
+				}
 				this.schedule();
 			}, () => {
 				this.failedAt.set(agent.id, Date.now());
@@ -188,6 +195,11 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 	}
 
 	// ---- state -----------------------------------------------------------------------------
+	private hosts(): HostMap {
+		const v = this.context.globalState.get<HostMap>(HOSTS_KEY);
+		return v && typeof v === 'object' ? v : {};
+	}
+
 	private sections(): Section[] {
 		return parseSections(this.context.globalState.get(SECTIONS_KEY));
 	}
@@ -240,6 +252,9 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 		});
 		const groups = agentGroups({ threads: layout.unsectioned, all: threads, listings, query: q, now, busy: id => this.source.busy(id), label: groupName });
 		const several = rowMachines(groups) > 1;
+		// Who started whom: each row's sessions and its starter, so started threads nest under it.
+		const started = starters(listings, this.hosts());
+		const families = new Map<string, Family>();
 		const machineLabel = (id: string | undefined) => several && id ? machines.get(id) ?? id : undefined;
 		const thread = (t: ThreadSummary, item?: GroupItem): SidebarRow => {
 			const section = sectionOf(sections, t.id);
@@ -249,6 +264,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			const machine = item ? machineLabel(item.machine) : own && machineCount() > 1 ? machines.get(own) ?? own : undefined;
 			const agent = item ? undefined : groupName(threadGroup(t));
 			const agentKind = item ? undefined : threadGroup(t);
+			families.set(`thread:${t.id}`, threadFamily(t, started));
 			return {
 				key: `thread:${t.id}`, kind: 'thread', id: t.id, title: t.title,
 				tip: [t.title, [projectName(t.project), item?.machine ? machines.get(item.machine) ?? item.machine : '', when(item?.at ?? t.lastAt)].filter(Boolean).join(' · ')].filter(Boolean).join('\n'),
@@ -272,6 +288,7 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			sessionRows.set(id, item.entry);
 			const folder = session.cwd?.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? '';
 			const machine = machineLabel(item.machine);
+			families.set(`session:${id}`, sessionFamily(agentId, session.id, started));
 			return {
 				key: `session:${id}`, kind: 'session', id, title: session.title,
 				tip: [session.title, [folder, machines.get(item.machine) ?? item.machine, when(session.updatedAt)].filter(Boolean).join(' · '), vscode.l10n.t('Opening it continues the session here.')].join('\n'),
@@ -284,16 +301,30 @@ export class SidebarView implements vscode.WebviewViewProvider, vscode.Disposabl
 			.map((b): SidebarRow => ({ key: `board:${b.key}`, kind: 'board', id: b.key, title: b.title, tip: b.key }));
 		const artifacts = (await this.source.pinnedArtifacts()).filter(a => matches(a.title, q))
 			.map((a): SidebarRow => ({ key: `artifact:${a.key}`, kind: 'artifact', id: a.key, title: a.title, tip: `${a.title}\n${a.kind}` }));
-		const sidebarGroups = groups.map((g): SidebarGroup => ({ id: g.id, name: groupName(g.id), rows: g.items.map(row), older: g.older.map(row) }));
+		const pinned = [...boards, ...artifacts, ...layout.pinned.map(t => thread(t))];
+		const sectionRows = layout.sections.map(s => s.threads.map(t => thread(t)));
+		const groupRows = groups.map(g => ({ rows: g.items.map(row), older: g.older.map(row) }));
+		const archived = layout.archived.map(t => thread(t));
 		this.sessionRows = sessionRows;
+		// A thread another thread started shows under it, in a section, Pinned, the agent lists or Archived alike.
+		const nested = nestRows<SidebarRow>([
+			{ rows: pinned },
+			...sectionRows.map(rows => ({ rows })),
+			...groupRows.flatMap((g, i) => [{ rows: g.rows }, { rows: g.older, recent: 1 + sectionRows.length + 2 * i }]),
+			{ rows: archived },
+		], r => families.get(r.key));
+		const sectionsAt = 1;
+		const groupsAt = 1 + sectionRows.length;
+		const sidebarGroups = groups.map((g, i): SidebarGroup => ({ id: g.id, name: groupName(g.id), rows: nested[groupsAt + 2 * i], older: nested[groupsAt + 2 * i + 1] }))
+			.filter(g => g.rows.length || g.older.length);
 		const model: SidebarModel = {
 			machines: machineCount(),
 			query: q,
 			...(this.selected() ? { selected: this.selected() } : {}),
-			pinned: [...boards, ...artifacts, ...layout.pinned.map(t => thread(t))],
-			sections: layout.sections.map(s => ({ id: s.section.id, name: s.section.name, rows: s.threads.map(t => thread(t)) })),
+			pinned: nested[0],
+			sections: layout.sections.map((s, i) => ({ id: s.section.id, name: s.section.name, rows: nested[sectionsAt + i] })),
 			groups: sidebarGroups,
-			archived: layout.archived.map(t => thread(t)),
+			archived: nested[nested.length - 1],
 			empty: !threads.length && !listings.some(l => l.sessions.length),
 		};
 		await view.webview.postMessage({ type: 'model', model, ...(quiet ? { quiet: true } : {}) });
@@ -518,6 +549,7 @@ function strings(): SidebarStrings {
 		stuck: vscode.l10n.t('Stuck: the last turn failed'),
 		done: vscode.l10n.t('Done: an answer you have not seen yet'),
 		inside: vscode.l10n.t('Inside: {0} waiting for you, {1} running'),
+		subThreads: vscode.l10n.t('{0} threads it started'),
 		moveTo: vscode.l10n.t('Move to section'),
 		noSection: vscode.l10n.t('Remove from section'),
 		newSectionMenu: vscode.l10n.t('New section…'),

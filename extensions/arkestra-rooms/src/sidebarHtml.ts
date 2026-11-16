@@ -29,6 +29,8 @@ export interface SidebarRow {
 	readonly agent?: string;
 	/** That agent's kind (`claude`, `codex`): the colour of its letter badge. */
 	readonly agentKind?: string;
+	/** The threads it started (sub-threads), newest first, each with its own. */
+	readonly children?: readonly SidebarRow[];
 }
 
 /** One agent's group of the default listing; `older`: past the recent window, behind "Show older". */
@@ -75,6 +77,8 @@ export interface SidebarStrings {
 	readonly done: string;
 	/** `{0} waiting for you, {1} running` in a folded section's header. */
 	readonly inside: string;
+	/** `{0} threads it started` beside a folded row with sub-threads. */
+	readonly subThreads: string;
 	readonly moveTo: string;
 	readonly noSection: string;
 	readonly newSectionMenu: string;
@@ -196,6 +200,20 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 	.proj .sum .wait { background: var(--st-wait); }
 	.proj .sum .run { background: var(--st-run); }
 	.tree { margin-left: 23px; border-left: 1px solid var(--line); padding-left: 4px; display: flex; flex-direction: column; gap: 2px; }
+	/* Sub-threads: the threads a thread started, under it on a guide line; the row folds with its arrow. */
+	.it .tw { width: 12px; height: 12px; flex: none; display: grid; place-items: center; color: var(--mute); border-radius: 3px; cursor: pointer; }
+	.it .tw + .st { margin-left: -4px; }
+	.it .tw:hover { color: var(--fg); }
+	.it .tw svg { width: 12px; height: 12px; transition: transform .15s; }
+	.it.shut .tw svg { transform: rotate(-90deg); }
+	@media (prefers-reduced-motion: reduce) { .it .tw svg { transition: none; } }
+	.it .cnt { color: var(--dim); font-size: 11px; flex: none; }
+	.it .sum { display: inline-flex; gap: 3px; flex: none; }
+	.it .sum b { width: 6px; height: 6px; border-radius: 50%; display: block; }
+	.it .sum .wait { background: var(--st-wait); }
+	.it .sum .run { background: var(--st-run); }
+	.subs { margin-left: 16px; border-left: 1px solid var(--line); padding-left: 4px; display: flex; flex-direction: column; gap: 1px; }
+	.it.sub { height: 28px; font-size: 12.5px; }
 	.proj .more { color: var(--dim); cursor: pointer; padding: 0 2px; border-radius: 4px; }
 	.proj .more:hover { color: var(--fg); }
 	.drop { background: var(--vscode-list-dropBackground, var(--hover)); }
@@ -288,6 +306,61 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		return it;
 	}
 
+	// ---- sub-threads: a row with the threads it started folds them under it
+	const descendants = r => (r.children || []).flatMap(c => [c, ...descendants(c)]);
+	const isOpen = r => {
+		if (model.query) { return true; }
+		const set = (ui.subOpen || {})[r.key];
+		if (set !== undefined) { return set; }
+		// Unset: open while the selected thread is it or one of its own.
+		return !!model.selected && (r.key === model.selected || descendants(r).some(d => d.key === model.selected));
+	};
+	function tree(r, muted, sub) {
+		const it = row(r, muted);
+		if (sub) { it.classList.add('sub'); }
+		const kids = r.children || [];
+		if (!kids.length) { return [it]; }
+		const open = isOpen(r);
+		it.dataset.sub = '1';
+		it.setAttribute('aria-expanded', String(open));
+		const tw = el('span', 'tw');
+		tw.append(icon('chev'));
+		tw.dataset.twist = '1';
+		// The arrow takes the dot's place when the row has no state of its own: titles stay aligned.
+		const dot = it.querySelector('.st');
+		if (dot && !dot.className.replace('st', '').trim()) { dot.remove(); }
+		it.prepend(tw);
+		if (!open) {
+			it.classList.add('shut');
+			// Folded: how many it started, and what of those waits for you or runs.
+			const all = descendants(r);
+			const wait = all.filter(d => d.state === 'wait' || d.state === 'err').length;
+			const run = all.filter(d => d.state === 'run' || (!d.state && d.running)).length;
+			const at = it.querySelector('.k.m') || it.querySelector('.more');
+			if (wait || run) {
+				const sum = el('span', 'sum');
+				for (let i = 0; i < Math.min(wait, 3); i++) { sum.append(el('b', 'wait')); }
+				for (let i = 0; i < Math.min(run, 3); i++) { sum.append(el('b', 'run')); }
+				sum.title = S.inside.replace('{0}', String(wait)).replace('{1}', String(run));
+				at ? at.before(sum) : it.append(sum);
+			}
+			const cnt = el('span', 'cnt', String(all.length));
+			cnt.title = S.subThreads.replace('{0}', String(all.length));
+			at ? at.before(cnt) : it.append(cnt);
+			return [it];
+		}
+		const box = el('div', 'subs');
+		kids.forEach(c => box.append(...tree(c, muted, true)));
+		return [it, box];
+	}
+	const toggleSub = it => {
+		const r = rows.get(it.dataset.key);
+		if (!r) { return; }
+		ui.subOpen = Object.assign({}, ui.subOpen, { [r.key]: !isOpen(r) });
+		vscode.setState(ui);
+		render();
+	};
+
 	function header(text, drop) {
 		const h = el('div', 'sec');
 		h.append(el('span', '', text));
@@ -367,16 +440,16 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		const out = document.createDocumentFragment();
 		if (model.pinned.length) {
 			out.append(header(S.pinned));
-			model.pinned.forEach(r => out.append(row(r)));
+			model.pinned.forEach(r => out.append(...tree(r)));
 		}
 		for (const s of model.sections) {
 			if (q && !s.rows.length) { continue; }
 			const closed = !q && !!(ui.closed || {})[s.id];
 			out.append(sectionHeader(s, closed));
 			if (!closed && s.rows.length) {
-				const tree = el('div', 'tree');
-				s.rows.forEach(r => tree.append(row(r)));
-				out.append(tree);
+				const box = el('div', 'tree');
+				s.rows.forEach(r => box.append(...tree(r)));
+				out.append(box);
 			}
 		}
 		if (!q) {
@@ -390,10 +463,10 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		// The default listing, by agent; a header takes a row dragged out of its section back here.
 		for (const g of model.groups) {
 			out.append(header(g.name, ''));
-			g.rows.forEach(r => out.append(row(r)));
+			g.rows.forEach(r => out.append(...tree(r)));
 			if (g.older.length) {
 				const open = !!ui.olderOpen[g.id];
-				if (open) { g.older.forEach(r => out.append(row(r))); }
+				if (open) { g.older.forEach(r => out.append(...tree(r))); }
 				const more = el('div', 'it older', open ? S.showFewer : S.showOlder.replace('{0}', String(g.older.length)));
 				more.tabIndex = -1;
 				more.setAttribute('role', 'button');
@@ -412,7 +485,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 			h.dataset.action = 'archived';
 			h.append(el('span', 'k', String(model.archived.length)));
 			out.append(h);
-			if (open) { model.archived.forEach(r => out.append(row(r, true))); }
+			if (open) { model.archived.forEach(r => out.append(...tree(r, true))); }
 		}
 		const any = model.pinned.length || model.groups.length || model.archived.length || model.sections.some(s => s.rows.length);
 		if (q && !any) {
@@ -565,6 +638,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		const more = t.closest('.more');
 		const it = t.closest('.it[data-key]');
 		const head = t.closest('.proj');
+		if (it && t.closest('[data-twist]')) { toggleSub(it); return; }
 		if (more) {
 			const owner = it || head;
 			if (wasOpen && before === keyOf(owner)) { return; }
@@ -612,6 +686,7 @@ export function sidebarHtml(nonce: string, s: SidebarStrings, fonts?: PageFonts)
 		const cur = document.activeElement && document.activeElement.closest && document.activeElement.closest('.it, .proj, .sec.fold');
 		if (!cur) { return; }
 		if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cur.click(); }
+		else if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && cur.dataset.sub && (e.key === 'ArrowRight') !== (cur.getAttribute('aria-expanded') === 'true')) { e.preventDefault(); toggleSub(cur); }
 		else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
 			e.preventDefault();
 			const all = focusables();
