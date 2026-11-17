@@ -1,9 +1,9 @@
 {
-  "url": "https://github.com/tenarkhq/Arkestra/releases/download/1.143.17668/Arkestra-linux-x64-1.143.17668.tar.gz",
-  "name": "1.143.17668",
-  "version": "b309254472975a15c7fe27f9ac41c1dea03235c2",
-  "productVersion": "1.143.17668.0",
-  "hash": "5bd00a93eae19543db6588ebc7e2497d32de6c45",
-  "timestamp": "1794747261000",
-  "sha256hash": "8a7f4211608e945062079480b67edb6275d2501e6aae1829596278c2522aea10"
+  "url": "https://github.com/tenarkhq/Arkestra/releases/download/1.143.17713/Arkestra-linux-x64-1.143.17713.tar.gz",
+  "name": "1.143.17713",
+  "version": "463b34b27f37fdc770b84665cb8c74671ec55add",
+  "productVersion": "1.143.17713.0",
+  "hash": "f1f88411483519297aa114b5c04d12864f7cd3c3",
+  "timestamp": "1794909622000",
+  "sha256hash": "f8e58335617730e22e838ac064cbff73e990013da636fd1919b87b515942079b"
 }

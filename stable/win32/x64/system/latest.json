@@ -1,9 +1,9 @@
 {
-  "url": "https://github.com/tenarkhq/Arkestra/releases/download/1.143.17668/ArkestraSetup-x64-1.143.17668.exe",
-  "name": "1.143.17668",
-  "version": "b309254472975a15c7fe27f9ac41c1dea03235c2",
-  "productVersion": "1.143.17668.0",
-  "hash": "33a9cf73f46b430bbc3a253e89f17eb43501e6bb",
-  "timestamp": "1794747261000",
-  "sha256hash": "e0799f68a3a989656b0a53dcf82ce8f6c1081c16f8e44e85ebab46cd63fd436a"
+  "url": "https://github.com/tenarkhq/Arkestra/releases/download/1.143.17713/ArkestraSetup-x64-1.143.17713.exe",
+  "name": "1.143.17713",
+  "version": "463b34b27f37fdc770b84665cb8c74671ec55add",
+  "productVersion": "1.143.17713.0",
+  "hash": "55af6559499aec7f727aeda3300c96b095fec499",
+  "timestamp": "1794909622000",
+  "sha256hash": "cf157e4f929883d3449973c487d5e555d9c10a4045ebc0aa29c3ec49d953ca2e"
 }
