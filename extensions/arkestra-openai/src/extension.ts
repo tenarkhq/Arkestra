@@ -47,7 +47,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	const config = () => vscode.workspace.getConfiguration('arkestra.openai');
 
 	const agent = new OpenAIAgent({
-		get model() { return config().get<string>('model') || 'gpt-6-astra'; },
+		get model() { return config().get<string>('model') || 'gpt-6.2-astra'; },
 		get baseUrl() { return config().get<string>('baseUrl') || 'https://api.openai.com/v1'; },
 		get reasoningEffort() {
 			const effort = config().get<string>('reasoningEffort');

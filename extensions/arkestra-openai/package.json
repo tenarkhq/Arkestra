@@ -30,7 +30,7 @@
       "properties": {
         "arkestra.openai.model": {
           "type": "string",
-          "default": "gpt-6-astra",
+          "default": "gpt-6.2-astra",
           "description": "%model%"
         },
         "arkestra.openai.baseUrl": {
