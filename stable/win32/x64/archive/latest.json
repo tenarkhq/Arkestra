@@ -1,9 +1,9 @@
 {
-  "url": "https://github.com/tenarkhq/Arkestra/releases/download/1.143.17713/Arkestra-win32-x64-1.143.17713.zip",
-  "name": "1.143.17713",
-  "version": "463b34b27f37fdc770b84665cb8c74671ec55add",
-  "productVersion": "1.143.17713.0",
-  "hash": "fb22df9898e6e53769cd6bda2c8b145fcd71f2ab",
-  "timestamp": "1794909622000",
-  "sha256hash": "1da2717a8f1c3543ac6e20c8b770463eab325ff7bdf030f546a215148a7e91ad"
+  "url": "https://github.com/tenarkhq/Arkestra/releases/download/1.143.17808/Arkestra-win32-x64-1.143.17808.zip",
+  "name": "1.143.17808",
+  "version": "0eb4b5c64f5600efcd28bbc1453c602cf43556dd",
+  "productVersion": "1.143.17808.0",
+  "hash": "abd2c9af111293bcec5f264cd05c29b5f55705f3",
+  "timestamp": "1795251718000",
+  "sha256hash": "f0301af1301f28672e55e6e28a8c55ecc50e8a69de38d7a805530bb8ecb775b9"
 }
